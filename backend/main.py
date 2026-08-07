@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
 from backend.api.routes.health import router as health_router
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
@@ -41,6 +42,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestIDMiddleware)
 
     app.include_router(health_router, prefix="/api")
 

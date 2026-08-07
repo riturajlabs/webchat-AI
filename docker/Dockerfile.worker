@@ -21,4 +21,4 @@ RUN uv sync --no-dev --frozen
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["arq", "backend.workers.app.WorkerSettings"]
+CMD ["python", "-m", "backend.workers"]

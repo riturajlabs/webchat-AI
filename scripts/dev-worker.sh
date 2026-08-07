@@ -3,4 +3,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-uv run arq backend.workers.app.WorkerSettings
+uv run python -m backend.workers

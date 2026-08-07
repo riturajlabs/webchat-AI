@@ -1,6 +1,7 @@
 """ARQ worker configuration.
 
-Run with:  arq backend.workers.app.WorkerSettings
+Run with:  python -m backend.workers   (ADR-002 entrypoint)
+Direct:    arq backend.workers.app.WorkerSettings
 
 Job functions are registered in `backend.workers.tasks` and land in Phase 2
 (email) and Phase 4/5 (crawler). See docs/07-Architecture-Decisions.md ADR-002.

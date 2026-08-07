@@ -43,6 +43,28 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
 
 4. Backend (local, without Docker) — see `scripts/setup.sh` and `scripts/dev-api.sh`.
 
+> MongoDB Atlas and managed Redis are used for production (Phase 13/14). Local
+> development uses the Docker `mongo`/`redis` services or a native local
+> instance; `docker/compose.dev.yml` overrides the URIs to the service names.
+
+## Development scripts
+
+| Script                     | Purpose                                                      |
+| -------------------------- | ------------------------------------------------------------ |
+| `scripts/setup.sh`         | One-time setup (`.env`, pnpm install, uv sync)               |
+| `scripts/dev-api.sh`       | FastAPI dev server (hot reload, `:8000`)                     |
+| `scripts/dev-worker.sh`    | ARQ background worker (`python -m backend.workers`)          |
+| `scripts/docker-up.sh`     | Start full Docker stack (Mongo, Redis, Mailpit, API, worker) |
+| `scripts/check-backend.sh` | ruff + mypy + pytest                                         |
+
+## Verification
+
+```bash
+pnpm lint && pnpm typecheck && pnpm build && pnpm test   # frontend
+./scripts/check-backend.sh                                # backend
+curl http://localhost:8000/api/health                     # expect database:true, redis:true
+```
+
 ## Documentation
 
 | Doc                                 | Purpose                                        |
