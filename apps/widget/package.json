@@ -1,0 +1,40 @@
+{
+  "name": "@webchat/widget",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Framework-independent embeddable WebChat AI widget SDK",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/webchat-widget.umd.cjs",
+  "module": "./dist/webchat-widget.js",
+  "exports": {
+    ".": {
+      "import": "./dist/webchat-widget.js",
+      "require": "./dist/webchat-widget.umd.cjs"
+    }
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "dompurify": "^3.2.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "@types/node": "^20",
+    "@typescript-eslint/eslint-plugin": "^8",
+    "@typescript-eslint/parser": "^8",
+    "eslint": "^9",
+    "eslint-config-prettier": "^9",
+    "globals": "^17.9.0",
+    "typescript": "^5",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}

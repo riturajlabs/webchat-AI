@@ -1,0 +1,102 @@
+# WebChat AI - local development stack
+# Usage: docker compose -f docker/compose.dev.yml up --build
+# See docs/07-Architecture-Decisions.md ADR-002 (ARQ + Redis) and ADR-001 (Mailpit).
+
+name: webchat-ai
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: webchat-mongo
+    restart: unless-stopped
+    # No host port: api/worker reach it via the compose network as "mongo".
+    # A native MongoDB (or other container) on 27017 does not collide.
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: webchat-redis
+    restart: unless-stopped
+    # No host port: see mongo note above (native redis often occupies 6379).
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: webchat-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8025/api/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      network: host
+    container_name: webchat-api
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: development
+      DEBUG: "true"
+      MONGODB_URI: mongodb://mongo:27017
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      JWT_SECRET: dev-only-jwt-secret-change-me
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+      network: host
+    container_name: webchat-worker
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: development
+      MONGODB_URI: mongodb://mongo:27017
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+  redis_data:

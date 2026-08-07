@@ -1,0 +1,22 @@
+# Build context is the repo root. Exclude heavy/local-only paths.
+node_modules
+**/node_modules
+.venv
+apps/dashboard/.next
+apps/dashboard/out
+apps/widget/dist
+__pycache__
+*.pyc
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+docs
+tests
+coverage
+.pytest_cache
+.ruff_cache
+.mypy_cache
+playwright-report
+test-results

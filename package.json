@@ -1,0 +1,27 @@
+{
+  "name": "webchat-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-tenant AI SaaS platform - website chatbots powered by RAG",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev:dashboard": "pnpm --filter @webchat/dashboard dev",
+    "dev:widget": "pnpm --filter @webchat/widget dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,css}\"",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.3.3"
+  }
+}
