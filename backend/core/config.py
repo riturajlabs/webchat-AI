@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,11 +31,26 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 15
     jwt_refresh_token_expire_days: int = 30
 
+    # Reverse-proxy trust. When True, `X-Forwarded-For` is honored for client
+    # IP extraction (rate limiting); must only be enabled behind a trusted proxy.
+    trust_proxy: bool = False
+
+    # Auth cookies (ADR-003)
+    refresh_cookie_name: str = "refresh_token"
+    csrf_cookie_name: str = "csrf_token"
+    cookie_secure: bool = True
+    email_verify_token_expire_minutes: int = 60 * 24
+    password_reset_token_expire_minutes: int = 30
+
+    # Rate limiting
+    rate_limit_enabled: bool = True
+
     # MongoDB (Motor)
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_db: str = "webchat_ai"
     mongodb_min_pool_size: int = 10
     mongodb_max_pool_size: int = 100
+    mongodb_server_selection_timeout_ms: int = 30000
 
     # Redis
     redis_url: str = "redis://localhost:6379"
@@ -43,15 +59,42 @@ class Settings(BaseSettings):
     # CORS / public URLs
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
     public_base_url: str = "http://localhost:3000"
+    # Where the built widget SDK bundle is served from (embed-script generation).
+    widget_script_url: str = "http://localhost:8080/webchat-widget.iife.min.js"
 
     # Email (Phase 2 - ADR-001)
     resend_api_key: str | None = None
     email_from: str = "WebChat AI <no-reply@webchatai.example>"
+    mailpit_api_url: str = "http://localhost:8025"
 
     # AI (Phase 4-6)
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
     embedding_model: str = "text-embedding-004"
+
+    # Ingestion engine (Phase 4, docs/06 implementation plan).
+    crawl_max_pages: int = 50
+    crawl_max_depth: int = 3
+    crawl_navigation_timeout_ms: int = 30000
+    # Cap on a single page's rendered HTML (response size limit); the browser
+    # truncates at this ceiling and the crawler skips anything still over it.
+    crawl_max_html_bytes: int = 5_000_000
+    # Cap on the cleaned text stored per page (docs/05, Phase 5 chunking input).
+    crawl_max_content_bytes: int = 200_000
+    crawl_max_concurrent: int = 2
+    crawl_browser_user_agent: str = "WebChatAI-Crawler/1.0"
+    # Chrome's sandbox needs a non-root runtime; the dev/worker image runs as
+    # root so `--no-sandbox` is the default. Keep `false` behind a non-root
+    # production image (00-AI-Development-Rules §11).
+    crawl_no_sandbox: bool = True
+
+    @model_validator(mode="after")
+    def _validate_production_security(self) -> "Settings":
+        """Fail fast on weak production secrets (00-AI-Development-Rules §20)."""
+        if self.environment.lower() == "production":
+            if len(self.jwt_secret.encode("utf-8")) < 32:
+                raise ValueError("JWT_SECRET must be at least 32 bytes in production.")
+        return self
 
 
 @lru_cache

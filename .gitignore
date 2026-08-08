@@ -42,3 +42,4 @@ npm-debug.log*
 # Test / tooling artifacts
 playwright-report/
 test-results/
+.coverage

@@ -1,21 +1,34 @@
 """FastAPI application factory for WebChat AI."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
+from backend.api.routes.auth import router as auth_router
+from backend.api.routes.crawl_jobs import router as crawl_jobs_router
 from backend.api.routes.health import router as health_router
+from backend.api.routes.websites import router as websites_router
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
+from backend.core.errors import AppError
+from backend.core.logging import configure_logging, get_request_id
 from backend.core.redis import close_redis
+
+logger = logging.getLogger("webchat_ai")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Manage application-level resources on startup/shutdown."""
+    try:
+        await MongoDB.init_indexes()
+    except Exception:
+        logger.warning("MongoDB unavailable at startup; skipping index creation.")
     yield
     await MongoDB.close()
     await close_redis()
@@ -24,6 +37,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build the application with all routers and middleware registered."""
     settings = get_settings()
+    configure_logging()
 
     app = FastAPI(
         title="WebChat AI API",
@@ -45,7 +59,36 @@ def create_app() -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
+    @app.exception_handler(AppError)
+    async def app_error_handler(_: FastAPI, exc: AppError) -> JSONResponse:
+        logger.warning(
+            "%s (%s): %s",
+            exc.code,
+            exc.status_code,
+            exc.message,
+            extra={"error_code": exc.code, "status": exc.status_code},
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"code": exc.code, "message": exc.message, **exc.extra}},
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(_: FastAPI, exc: Exception) -> JSONResponse:
+        logger.exception(
+            "Unhandled error",
+            exc_info=exc,
+            extra={"request_id": get_request_id()},
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error."}},
+        )
+
     app.include_router(health_router, prefix="/api")
+    app.include_router(auth_router, prefix="/api")
+    app.include_router(websites_router, prefix="/api")
+    app.include_router(crawl_jobs_router, prefix="/api")
 
     return app
 

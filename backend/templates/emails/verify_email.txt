@@ -1,0 +1,10 @@
+Hi {{ name }},
+
+Thanks for signing up for WebChat AI. Please confirm your email address to activate your account.
+
+Confirm your email:
+{{ verification_url }}
+
+This link expires in 24 hours. If you did not create an account, you can safely ignore this email.
+
+- The WebChat AI Team

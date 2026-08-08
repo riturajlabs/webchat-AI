@@ -541,4 +541,16 @@ This ADR must be kept in sync with `05` and `06` as the codebase evolves.
 
 ---
 
+# 11. Phase 4 Completion Notes (August 2026)
+
+Phase 4 (Data Ingestion Engine) is implemented and verified end-to-end. Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
+
+- **Execution model:** the crawler runs inside the ARQ worker (ADR-002) using a shared Playwright/Chromium browser process, serialized by a process-wide semaphore (`CRAWL_MAX_CONCURRENT=2`) for memory safety.
+- **SSRF mitigation (TRD §10):** a per-request validator re-resolves DNS for every navigation and redirect (DNS-rebinding defense) and blocks private/loopback/link-local/CGNAT/metadata ranges plus internal hostnames; seeds blocked this way fail the job permanently instead of retrying.
+- **Incremental ingestion:** `documents` are idempotently upserted on the unique `(tenant_id, website_id, url)` key with a SHA-256 content checksum, so Phase 5 can re-embed only changed content.
+- **Retention (ADR-005):** `crawl_jobs` carry a 30-day TTL; crawl audit entries a 1-year TTL.
+- **Deferred to Phase 5:** semantic chunking, embedding generation, vector storage, duplicate detection across embeddings.
+
+---
+
 # End of Architecture Decision Record

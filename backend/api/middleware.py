@@ -10,6 +10,8 @@ from typing import Any
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from backend.core.logging import request_id_var
+
 # Baseline security headers applied to every HTTP response. Headers already
 # set by an inner handler are preserved.
 _SAFE_HEADERS: dict[str, str] = {
@@ -39,15 +41,21 @@ class RequestIDMiddleware:
             return
 
         request_id = _extract_request_id(scope.get("headers", []))
+        token = request_id_var.set(request_id)
 
         async def send_with_id(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                headers.append((_HEADER_NAME.lower().encode("latin1"), request_id.encode("latin1")))
+                headers.append(
+                    (_HEADER_NAME.lower().encode("latin1"), request_id.encode("latin1"))
+                )
                 message["headers"] = headers
             await send(message)
 
-        await self.app(scope, receive, send_with_id)
+        try:
+            await self.app(scope, receive, send_with_id)
+        finally:
+            request_id_var.reset(token)
 
 
 class SecurityHeadersMiddleware:

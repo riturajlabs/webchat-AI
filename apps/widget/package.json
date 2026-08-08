@@ -9,6 +9,8 @@
   ],
   "main": "./dist/webchat-widget.umd.cjs",
   "module": "./dist/webchat-widget.js",
+  "unpkg": "./dist/webchat-widget.iife.min.js",
+  "jsdelivr": "./dist/webchat-widget.iife.min.js",
   "exports": {
     ".": {
       "import": "./dist/webchat-widget.js",

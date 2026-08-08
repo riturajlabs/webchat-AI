@@ -194,6 +194,22 @@ Prevent
 
 - Reliable crawler
 
+### Status — COMPLETE (August 2026)
+
+The Phase 4 ingestion engine is implemented, tested, and verified end-to-end:
+
+- Playwright/Chromium crawler with dynamic rendering (`backend/services/ingestion/crawler.py`, `browser.py`).
+- Readability-style extraction and HTML cleaning (`extractor.py`, `cleaner.py`); per-page metadata (title, language, checksum).
+- Internal-link BFS crawl with configurable depth (default 3) and per-job page cap (default 50).
+- ARQ crawl job (`backend/workers/jobs/crawl.py`) with retry/backoff, permanent failure on invalid seeds, and a process-wide concurrency semaphore.
+- SSRF protection with per-request DNS re-validation and private/internal range blocking (`ssrf_guard.py`); robots.txt compliance (`utils/robots.py`); URL normalization (`utils/url_validator.py`).
+- Incremental, idempotent writes: `documents` upserted on the unique `(tenant_id, website_id, url)` key with a SHA-256 content checksum (Phase 5 input).
+- `crawl_jobs` + `documents` models, tenant-scoped repositories, `POST /api/websites/{id}/crawl` and `GET /api/crawl-jobs/{id}` endpoints.
+- Dashboard crawl controls (start, status, progress, error, retry) on the websites list.
+- 229 backend + 30 frontend tests passing; verified live against real sites (single-page, multi-page, SSRF block, tenant isolation, incremental re-crawl).
+
+Out of scope (deferred to Phase 5): semantic chunking, embedding generation, vector storage, duplicate detection across embeddings.
+
 ---
 
 # Phase 5 — Knowledge Processing

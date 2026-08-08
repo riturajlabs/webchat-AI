@@ -12,10 +12,10 @@ from typing import Any
 from arq.connections import RedisSettings
 
 from backend.core.config import get_settings
+from backend.services.ingestion.browser import close_browser
 from backend.workers import tasks
 
 _settings = get_settings()
-
 
 async def startup(ctx: dict[str, Any]) -> None:
     """Runs once when the worker starts."""
@@ -25,12 +25,13 @@ async def startup(ctx: dict[str, Any]) -> None:
 async def shutdown(ctx: dict[str, Any]) -> None:
     """Runs once when the worker stops."""
     _ = ctx
+    await close_browser()
 
 
 class WorkerSettings:
     """ARQ worker settings consumed via `arq backend.workers.app.WorkerSettings`."""
 
-    functions = [tasks.ping]
+    functions = tasks.TASKS
     redis_settings = RedisSettings.from_dsn(_settings.redis_url)
     on_startup = startup
     on_shutdown = shutdown

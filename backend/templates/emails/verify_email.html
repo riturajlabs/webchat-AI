@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+  <body style="margin: 0; padding: 24px; font-family: Arial, sans-serif; color: #1a202c;">
+    <h2 style="margin-top: 0;">Confirm your email address</h2>
+    <p>Hi {{ name }},</p>
+    <p>Thanks for signing up for WebChat AI. Please confirm your email address to activate your account.</p>
+    <p><a href="{{ verification_url }}" style="background: #2563eb; color: #ffffff; padding: 10px 18px; border-radius: 6px; text-decoration: none;">Confirm email</a></p>
+    <p>Or open this link: <a href="{{ verification_url }}">{{ verification_url }}</a></p>
+    <p style="color: #6b7280; font-size: 13px;">
+      This link expires in 24 hours. If you did not create an account, you can safely ignore this email.
+    </p>
+    <p style="color: #6b7280; font-size: 13px;">- The WebChat AI Team</p>
+  </body>
+</html>

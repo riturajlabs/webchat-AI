@@ -6,8 +6,12 @@ export default defineConfig({
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
       name: 'WebChatWidget',
-      formats: ['es', 'umd'],
-      fileName: (format) => (format === 'es' ? 'webchat-widget.js' : 'webchat-widget.umd.cjs'),
+      formats: ['es', 'umd', 'iife'],
+      fileName: (format) => {
+        if (format === 'es') return 'webchat-widget.js';
+        if (format === 'umd') return 'webchat-widget.umd.cjs';
+        return 'webchat-widget.iife.min.js';
+      },
     },
     target: 'es2019',
     minify: 'esbuild',

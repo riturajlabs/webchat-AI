@@ -12,6 +12,9 @@ own file under `backend/workers/jobs/`) will be added as their phases land:
 import time
 from typing import Any
 
+from backend.workers.jobs.crawl import crawl_website
+from backend.workers.jobs.email import send_email
+
 
 async def ping(ctx: dict[str, Any]) -> dict[str, str]:
     """Health-check task: returns worker identity and current time."""
@@ -19,3 +22,8 @@ async def ping(ctx: dict[str, Any]) -> dict[str, str]:
         "app": str(ctx.get("app_name", "webchat-ai")),
         "ts": str(time.time()),
     }
+
+
+# Tasks registered in the ARQ worker (ADR-002 task registry). More land with
+# their phases: reindex_website (Phase 5).
+TASKS = [ping, send_email, crawl_website]

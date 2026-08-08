@@ -1,0 +1,9 @@
+Hi {{ name }},
+
+We detected unusual activity on your WebChat AI account: a previously used session token was presented again, which can indicate that your credentials have been compromised.
+
+To protect your account, we signed you out of every device.
+
+If this was you, simply log in again with your password. If you did not do this, we strongly recommend changing your password immediately.
+
+- The WebChat AI Team

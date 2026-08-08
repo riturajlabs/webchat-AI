@@ -1,0 +1,215 @@
+"""Shared FastAPI dependencies: database, auth service, rate limiting, CSRF.
+
+Layering per 00-AI-Development-Rules.md: routes depend on services and the
+repository Protocol implementations bound here. ADR-004 (rate limiting) and
+ADR-003 (double-submit CSRF) are enforced as dependencies.
+"""
+
+from collections.abc import Callable, Mapping
+from typing import Annotated, Any
+
+from fastapi import Depends, Header, Request
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from redis.asyncio import Redis
+
+from backend.core.config import get_settings
+from backend.core.database import MongoDB
+from backend.core.errors import (
+    CsrfError,
+    ForbiddenError,
+    InvalidCredentialsError,
+    RateLimitExceededError,
+    ServiceUnavailableError,
+)
+from backend.core.rate_limit import SlidingWindowRateLimiter
+from backend.core.redis import get_redis
+from backend.core.security import csrf_tokens_match
+from backend.repositories import (
+    MongoAuditLogRepository,
+    MongoCrawlJobRepository,
+    MongoMemberRepository,
+    MongoRefreshTokenRepository,
+    MongoTenantRepository,
+    MongoUserRepository,
+    MongoWebsiteRepository,
+    MongoWidgetRepository,
+)
+from backend.services.auth import AuthService, Principal
+from backend.services.crawl import CrawlService
+from backend.services.website import WebsiteService
+from backend.workers.jobs.crawl import enqueue_crawl_website
+from backend.workers.jobs.email import enqueue_email
+
+
+def get_db() -> AsyncIOMotorDatabase[Any]:
+    """Provide the shared application database handle."""
+    return MongoDB.db()
+
+
+def get_auth_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> AuthService:
+    """Build the auth service with MongoDB-backed repositories.
+
+    Emails are enqueued to the ARQ worker (`send_email` job) so API requests
+    never block on mail delivery (ADR-001).
+    """
+    return AuthService(
+        users=MongoUserRepository(db),
+        tenants=MongoTenantRepository(db),
+        members=MongoMemberRepository(db),
+        refresh_tokens=MongoRefreshTokenRepository(db),
+        audit=MongoAuditLogRepository(db),
+        mail_dispatcher=enqueue_email,
+    )
+
+
+def get_website_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> WebsiteService:
+    """Build the website service with MongoDB-backed repositories."""
+    return WebsiteService(
+        websites=MongoWebsiteRepository(db),
+        widgets=MongoWidgetRepository(db),
+        audit=MongoAuditLogRepository(db),
+    )
+
+
+def get_crawl_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> CrawlService:
+    """Build the crawl service with MongoDB-backed repositories.
+
+    The ARQ `crawl_website` task is enqueued so `start_crawl` never blocks on
+    worker execution (ADR-002).
+    """
+    return CrawlService(
+        crawl_jobs=MongoCrawlJobRepository(db),
+        websites=MongoWebsiteRepository(db),
+        audit=MongoAuditLogRepository(db),
+        enqueue=enqueue_crawl_website,
+    )
+
+
+def get_access_token(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> str:
+    """Extract and validate the `Authorization: Bearer <token>` header."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise InvalidCredentialsError("Missing or malformed Authorization header.")
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        raise InvalidCredentialsError("Missing or malformed Authorization header.")
+    return token
+
+
+async def current_user(
+    access_token: Annotated[str, Depends(get_access_token)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+) -> Principal:
+    """Resolve the authenticated principal for a bearer-token request."""
+    return await auth.authenticate(access_token)
+
+
+def require_role(*roles: str) -> Callable[[Principal], None]:
+    """Return a FastAPI dependency guarding a route for one of `roles`.
+
+    Usage: `Depends(require_role("admin"))` or `Depends(require_role("owner", "admin"))`.
+    The authenticated principal's resolved tenant role must be in `roles`;
+    otherwise a 403 `FORBIDDEN` error is raised (tenant isolation is enforced
+    by `current_user`/`authenticate`, which always re-checks the live tenant).
+    """
+
+    def _require(principal: Annotated[Principal, Depends(current_user)]) -> None:
+        if principal.role not in roles:
+            raise ForbiddenError("Insufficient permissions for this action.")
+
+    return _require
+
+
+def client_ip(request: Request) -> str:
+    """Best-effort client IP.
+
+    `X-Forwarded-For` is honored only when `TRUST_PROXY=true` (i.e. behind a
+    trusted reverse proxy). Otherwise the direct connection IP is used so the
+    header cannot be spoofed to bypass rate limits.
+    """
+    if get_settings().trust_proxy:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+class _RedisRateLimitStore:
+    """Adapter exposing Redis's minimal ZSET surface to the rate limiter.
+
+    The adapter pins the loosely-typed `redis.asyncio` overloads to the exact
+    `RateLimitStore` protocol surface (ADR-004).
+    """
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def zadd(self, name: str, mapping: Mapping[str, float]) -> int:
+        return int(await self._redis.zadd(name, mapping))
+
+    async def zremrangebyscore(self, name: str, min: int, max: float) -> int:
+        return int(await self._redis.zremrangebyscore(name, min, max))
+
+    async def zcard(self, name: str) -> int:
+        return int(await self._redis.zcard(name))
+
+    async def expire(self, name: str, time: int) -> bool:
+        return bool(await self._redis.expire(name, time))
+
+
+class RateLimitDependency:
+    """Sliding-window rate limiter bound to a route via FastAPI dependency.
+
+    Fails closed: if Redis is unreachable the request is rejected with 503
+    rather than served without protection (ADR-004).
+    """
+
+    def __init__(self, *, limit: int, window_seconds: int) -> None:
+        self.limit = limit
+        self.window_seconds = window_seconds
+
+    async def __call__(self, request: Request) -> None:
+        settings = get_settings()
+        if not settings.rate_limit_enabled:
+            return
+        limiter = SlidingWindowRateLimiter(
+            _RedisRateLimitStore(get_redis()), limit=self.limit, window_seconds=self.window_seconds
+        )
+        key = f"rl:{request.url.path}:{client_ip(request)}"
+        try:
+            allowed = await limiter.consume(key)
+        except Exception as exc:
+            raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
+        if not allowed:
+            raise RateLimitExceededError("Too many requests. Please try again later.")
+
+
+# Per-endpoint limits (Phase 2 auth abuse protection, ADR-004).
+register_limiter = RateLimitDependency(limit=10, window_seconds=3600)
+login_limiter = RateLimitDependency(limit=20, window_seconds=900)
+verify_email_limiter = RateLimitDependency(limit=10, window_seconds=3600)
+forgot_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
+reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
+# Phase 3 website-management abuse protection (create/update/delete/list/get).
+website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
+# Phase 4 ingestion abuse protection (crawl kick-off + job status polling).
+crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
+
+
+async def verify_csrf(request: Request) -> None:
+    """Double-submit CSRF check for cookie-authenticated routes (ADR-003).
+
+    The non-httpOnly `csrf_token` cookie must match the `X-CSRF-Token` header.
+    """
+    settings = get_settings()
+    cookie = request.cookies.get(settings.csrf_cookie_name, "")
+    header = request.headers.get("X-CSRF-Token", "")
+    if not cookie or not header or not csrf_tokens_match(cookie, header):
+        raise CsrfError("CSRF token missing or invalid.")
