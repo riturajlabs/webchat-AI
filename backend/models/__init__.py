@@ -3,6 +3,8 @@
 from backend.models.audit_log import (
     AUDIT_EMAIL_VERIFIED,
     AUDIT_FORGOT_PASSWORD,
+    AUDIT_KNOWLEDGE_FAILED,
+    AUDIT_KNOWLEDGE_PROCESSED,
     AUDIT_LOGIN,
     AUDIT_LOGIN_FAILED,
     AUDIT_LOGOUT,
@@ -15,6 +17,16 @@ from backend.models.audit_log import (
     AUDIT_WEBSITE_UPDATED,
     AuditLog,
 )
+from backend.models.chat_message import (
+    CHAT_ROLE_ASSISTANT,
+    CHAT_ROLE_SYSTEM,
+    CHAT_ROLE_USER,
+    CHAT_ROLES,
+    CHAT_SCHEMA_VERSION,
+    ChatMessage,
+)
+from backend.models.chat_session import CHAT_SCHEMA_VERSION as CHAT_SESSION_SCHEMA_VERSION
+from backend.models.chat_session import ChatSession
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
     CRAWL_STATUS_COMPLETED,
@@ -31,9 +43,31 @@ from backend.models.document import (
     DOCUMENT_STATUSES,
     Document,
 )
+from backend.models.knowledge_chunk import (
+    KNOWLEDGE_SCHEMA_VERSION,
+    KNOWLEDGE_STATUS_FAILED,
+    KNOWLEDGE_STATUS_NONE,
+    KNOWLEDGE_STATUS_PROCESSING,
+    KNOWLEDGE_STATUS_READY,
+    KNOWLEDGE_STATUSES,
+    KnowledgeChunk,
+)
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
 from backend.models.tenant import Tenant
+from backend.models.usage_record import (
+    USAGE_COUNTER_CHATS,
+    USAGE_COUNTER_CRAWL_PAGES,
+    USAGE_COUNTER_EMBEDDINGS_CREATED,
+    USAGE_COUNTER_INPUT_TOKENS,
+    USAGE_COUNTER_MESSAGES,
+    USAGE_COUNTER_OUTPUT_TOKENS,
+    USAGE_COUNTER_VECTOR_QUERIES,
+    USAGE_COUNTERS,
+    USAGE_SCHEMA_VERSION,
+    UsageRecord,
+    usage_date_key,
+)
 from backend.models.user import User
 from backend.models.website import (
     WEBSITE_STATUS_CRAWLING,
@@ -54,6 +88,8 @@ from backend.models.widget import (
 __all__ = [
     "AUDIT_EMAIL_VERIFIED",
     "AUDIT_FORGOT_PASSWORD",
+    "AUDIT_KNOWLEDGE_FAILED",
+    "AUDIT_KNOWLEDGE_PROCESSED",
     "AUDIT_LOGIN",
     "AUDIT_LOGIN_FAILED",
     "AUDIT_LOGOUT",
@@ -68,6 +104,14 @@ __all__ = [
     "AUDIT_CRAWL_COMPLETED",
     "AUDIT_CRAWL_FAILED",
     "AuditLog",
+    "CHAT_ROLE_ASSISTANT",
+    "CHAT_ROLE_SYSTEM",
+    "CHAT_ROLE_USER",
+    "CHAT_ROLES",
+    "CHAT_SCHEMA_VERSION",
+    "CHAT_SESSION_SCHEMA_VERSION",
+    "ChatMessage",
+    "ChatSession",
     "CRAWL_ACTIVE_STATUSES",
     "CRAWL_STATUS_COMPLETED",
     "CRAWL_STATUS_FAILED",
@@ -80,6 +124,13 @@ __all__ = [
     "DOCUMENT_STATUS_READY",
     "DOCUMENT_STATUSES",
     "Document",
+    "KNOWLEDGE_SCHEMA_VERSION",
+    "KNOWLEDGE_STATUSES",
+    "KNOWLEDGE_STATUS_FAILED",
+    "KNOWLEDGE_STATUS_NONE",
+    "KNOWLEDGE_STATUS_PROCESSING",
+    "KNOWLEDGE_STATUS_READY",
+    "KnowledgeChunk",
     "Member",
     "RefreshToken",
     "Tenant",
@@ -95,4 +146,15 @@ __all__ = [
     "WIDGET_THEMES",
     "Website",
     "Widget",
+    "USAGE_COUNTERS",
+    "USAGE_COUNTER_CHATS",
+    "USAGE_COUNTER_EMBEDDINGS_CREATED",
+    "USAGE_COUNTER_CRAWL_PAGES",
+    "USAGE_COUNTER_INPUT_TOKENS",
+    "USAGE_COUNTER_MESSAGES",
+    "USAGE_COUNTER_OUTPUT_TOKENS",
+    "USAGE_COUNTER_VECTOR_QUERIES",
+    "USAGE_SCHEMA_VERSION",
+    "UsageRecord",
+    "usage_date_key",
 ]

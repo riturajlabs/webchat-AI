@@ -37,6 +37,10 @@ const SITE: Website = {
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
   widget_id: 'widget-1',
+  knowledge_status: 'processing',
+  knowledge_documents: 3,
+  knowledge_chunks: 27,
+  last_knowledge_at: '2026-08-02T00:00:00Z',
 };
 
 const COMPLETED_JOB: CrawlJob = {
@@ -127,6 +131,16 @@ describe('WebsiteList', () => {
     expect(screen.getByText('Acme Inc')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /acme.example.com/ })).toBeInTheDocument();
     expect(screen.getByText('ready')).toBeInTheDocument();
+  });
+
+  it('shows the knowledge base statistics on the website card', () => {
+    renderList();
+    expect(screen.getByText('Knowledge status')).toBeInTheDocument();
+    expect(screen.getByText('processing')).toBeInTheDocument();
+    expect(screen.getByText('Chunks created')).toBeInTheDocument();
+    expect(screen.getByText('27')).toBeInTheDocument();
+    expect(screen.getByText('Documents embedded')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
   });
 
   it('opens the dialog when clicking Add website', () => {

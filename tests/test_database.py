@@ -14,6 +14,12 @@ from backend.core.database import MongoDB
 REFRESH_TOKEN_TTL = 40 * 24 * 60 * 60
 AUDIT_LOG_TTL = 365 * 24 * 60 * 60
 CRAWL_JOB_TTL = 30 * 24 * 60 * 60
+CHAT_TTL = 90 * 24 * 60 * 60
+USAGE_TTL = 3 * 365 * 24 * 60 * 60
+# chat_sessions use the Mongo "deadline" TTL: delete exactly at `expires_at`
+# (the field already encodes now + CHAT_RETENTION_DAYS), so expireAfterSeconds
+# is 0 - never double-counting retention.
+CHAT_SESSION_TTL = 0
 
 
 class _FakeCollection:
@@ -159,3 +165,59 @@ async def test_init_indexes_declares_document_indexes(monkeypatch) -> None:
     assert ("tenant_id", False) in indexes
     assert ("website_id", False) in indexes
     assert ("url", False) in indexes
+
+
+async def test_init_indexes_declares_chat_session_indexes(monkeypatch) -> None:
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["chat_sessions"])
+    assert ("session_id", True) in indexes       # conversation key (docs/05 §9)
+    assert ("tenant_id", False) in indexes        # tenant-scoped queries
+    assert any(
+        keys == (("tenant_id", 1), ("website_id", 1)) and not unique
+        for (keys, unique) in indexes
+    )
+    ttl = [kwargs for keys, kwargs in db["chat_sessions"].indexes
+           if "expireAfterSeconds" in kwargs]
+    assert ttl == [{"expireAfterSeconds": CHAT_SESSION_TTL}]
+
+
+async def test_init_indexes_declares_message_indexes(monkeypatch) -> None:
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["messages"])
+    assert ("tenant_id", False) in indexes
+    assert ("session_id", False) in indexes
+    # Conversation-memory query: (tenant, session, created_at).
+    assert any(
+        keys == (("tenant_id", 1), ("session_id", 1), ("created_at", 1)) and not unique
+        for (keys, unique) in indexes
+    )
+    ttl = [kwargs for keys, kwargs in db["messages"].indexes
+           if kwargs.get("expireAfterSeconds")]
+    assert ttl == [{"expireAfterSeconds": CHAT_TTL}]
+
+
+async def test_init_indexes_declares_usage_record_indexes(monkeypatch) -> None:
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["usage_records"])
+    # The unique (tenant, website, date) triple makes daily rollups idempotent.
+    assert any(
+        keys == (("tenant_id", 1), ("website_id", 1), ("date", 1)) and unique
+        for (keys, unique) in indexes
+    )
+    assert ("tenant_id", False) in indexes
+    assert ("date", False) in indexes
+    ttl = [kwargs for keys, kwargs in db["usage_records"].indexes
+           if kwargs.get("expireAfterSeconds")]
+    assert ttl == [{"expireAfterSeconds": USAGE_TTL}]

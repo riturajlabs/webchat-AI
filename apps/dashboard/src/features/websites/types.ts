@@ -4,6 +4,8 @@
 
 export type WebsiteStatus = 'pending' | 'crawling' | 'processing' | 'ready' | 'failed';
 
+export type KnowledgeStatus = 'none' | 'processing' | 'ready' | 'failed';
+
 export interface Website {
   id: string;
   tenant_id: string;
@@ -16,6 +18,11 @@ export interface Website {
   created_at: string;
   updated_at: string;
   widget_id: string;
+  /** Phase 5 knowledge base statistics (docs/06, ADR-008). */
+  knowledge_status: KnowledgeStatus;
+  knowledge_documents: number;
+  knowledge_chunks: number;
+  last_knowledge_at: string | null;
 }
 
 export interface Widget {

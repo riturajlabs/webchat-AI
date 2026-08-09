@@ -72,6 +72,19 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     embedding_model: str = "text-embedding-004"
 
+    # Knowledge processing (Phase 5, docs/06 implementation plan).
+    # Approximate-token chunk sizing (docs/02-TRD.md §6: 500-800 tokens/chunk,
+    # 100-token overlap).
+    knowledge_chunk_size_tokens: int = 700
+    knowledge_chunk_overlap_tokens: int = 100
+    # Embedding client (Google text-embedding-004 via the Gemini API, ADR-008).
+    # The API key is never logged and never exposed through any API (00 rules §12).
+    embedding_batch_size: int = 32
+    embedding_max_retries: int = 5
+    embedding_retry_base_delay_ms: int = 500
+    # Fail a document's embedding pass when a single batch error exceeds this.
+    embedding_request_timeout_seconds: float = 60.0
+
     # Ingestion engine (Phase 4, docs/06 implementation plan).
     crawl_max_pages: int = 50
     crawl_max_depth: int = 3
@@ -87,6 +100,26 @@ class Settings(BaseSettings):
     # root so `--no-sandbox` is the default. Keep `false` behind a non-root
     # production image (00-AI-Development-Rules §11).
     crawl_no_sandbox: bool = True
+
+    # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
+    # Versioned answer prompt selected from backend/prompts/rag.py.
+    rag_prompt_version: int = 1
+    # Retrieval depth: tenant-filtered Top-5 vector search (ADR-008 Phase 6).
+    chat_top_k: int = 5
+    # Conversation turns fed to the model as memory (most recent N).
+    chat_memory_turns: int = 8
+    # Character cap per retrieved chunk when building the model context.
+    chat_context_chunk_chars: int = 4000
+    # Question sanitization cap (prompt-injection defense, TRD §8).
+    chat_question_max_chars: int = 2000
+    # Generation settings for the Gemini answer stream.
+    chat_max_output_tokens: int = 1024
+    chat_temperature: float = 0.2
+    generation_timeout_seconds: float = 60.0
+    # Conversation/session retention (ADR-005 §5.7; TTL safety net is 90 days).
+    chat_retention_days: int = 90
+    # Daily usage rollup retention (ADR-005 §5.7: 3 years).
+    usage_retention_days: int = 365 * 3
 
     @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":

@@ -79,6 +79,18 @@ export function WebsiteCard({
           <dt className="text-muted-foreground">Widget id</dt>
           <dd className="truncate font-mono text-[11px]">{website.widget_id}</dd>
         </div>
+        <div>
+          <dt className="text-muted-foreground">Knowledge status</dt>
+          <dd className="font-medium capitalize">{website.knowledge_status}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Chunks created</dt>
+          <dd className="font-medium">{website.knowledge_chunks}</dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-muted-foreground">Documents embedded</dt>
+          <dd className="font-medium">{website.knowledge_documents}</dd>
+        </div>
       </dl>
 
       {crawling && crawlJob ? (

@@ -25,6 +25,10 @@ const SITE: Website = {
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
   widget_id: 'widget-1',
+  knowledge_status: 'none',
+  knowledge_documents: 0,
+  knowledge_chunks: 0,
+  last_knowledge_at: null,
 };
 
 const CREATE_RESPONSE: CreateWebsiteResponse = {

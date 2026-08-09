@@ -23,6 +23,10 @@ class WebsiteRepository(Protocol):
 
     async def find_by_url(self, tenant_id: str, url: str) -> Website | None: ...
 
+    # Worker-side lookup: `process_website_documents(website_id)` runs with only
+    # the id; the record itself carries the tenant, which scopes all writes.
+    async def find_by_id_any(self, website_id: str) -> Website | None: ...
+
     async def list_by_tenant(
         self,
         tenant_id: str,
@@ -75,6 +79,10 @@ class MongoWebsiteRepository:
         # Includes soft-deleted documents: the record persists, so the URL is
         # still considered registered (consistent with the unique index).
         doc = await self._collection.find_one({"tenant_id": tenant_id, "url": url})
+        return Website.from_doc(doc) if doc else None
+
+    async def find_by_id_any(self, website_id: str) -> Website | None:
+        doc = await self._collection.find_one({"_id": website_id})
         return Website.from_doc(doc) if doc else None
 
     async def list_by_tenant(

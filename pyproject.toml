@@ -19,6 +19,7 @@ dependencies = [
     "redis>=5.2",
     "resend>=0.9",
     "uvicorn[standard]>=0.32",
+    "google-genai>=1.0",
 ]
 
 [dependency-groups]

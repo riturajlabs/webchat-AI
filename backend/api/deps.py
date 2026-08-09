@@ -12,6 +12,7 @@ from fastapi import Depends, Header, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
+from backend.ai.gemini import GoogleGeminiClient
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import (
@@ -26,16 +27,22 @@ from backend.core.redis import get_redis
 from backend.core.security import csrf_tokens_match
 from backend.repositories import (
     MongoAuditLogRepository,
+    MongoChatMessageRepository,
+    MongoChatSessionRepository,
     MongoCrawlJobRepository,
     MongoMemberRepository,
     MongoRefreshTokenRepository,
     MongoTenantRepository,
+    MongoUsageRecordRepository,
     MongoUserRepository,
     MongoWebsiteRepository,
     MongoWidgetRepository,
+    get_vector_repository,
 )
 from backend.services.auth import AuthService, Principal
+from backend.services.chat.rag_service import RagService
 from backend.services.crawl import CrawlService
+from backend.services.knowledge.embedding import GoogleEmbeddingClient
 from backend.services.website import WebsiteService
 from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
@@ -88,6 +95,26 @@ def get_crawl_service(
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         enqueue=enqueue_crawl_website,
+    )
+
+
+def get_rag_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> RagService:
+    """Build the RAG service with MongoDB-backed repositories (Phase 6).
+
+    Both the embedding and the generation clients lazily build the Google
+    GenAI SDK from `GEMINI_API_KEY` (never logged or exposed). Retrieval goes
+    through the vector repository, which is always tenant-scoped (ADR-008).
+    """
+    return RagService(
+        websites=MongoWebsiteRepository(db),
+        vector=get_vector_repository(db),
+        embedder=GoogleEmbeddingClient(),
+        generation=GoogleGeminiClient(),
+        sessions=MongoChatSessionRepository(db),
+        messages=MongoChatMessageRepository(db),
+        usage=MongoUsageRecordRepository(db),
     )
 
 
@@ -201,6 +228,9 @@ reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).
 crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
+# Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
+# chat uses the same budget until the widget API lands in Phase 8).
+chat_limiter = RateLimitDependency(limit=60, window_seconds=60)
 
 
 async def verify_csrf(request: Request) -> None:

@@ -6,7 +6,7 @@ own file under `backend/workers/jobs/`) will be added as their phases land:
 
 - Phase 2: `send_email` (transactional email, see ADR-001)
 - Phase 4: `crawl_website`, `finalize_crawl` (ingestion engine)
-- Phase 5: `reindex_website` (knowledge processing)
+- Phase 5: `process_document`, `process_website_documents` (knowledge processing)
 """
 
 import time
@@ -14,6 +14,7 @@ from typing import Any
 
 from backend.workers.jobs.crawl import crawl_website
 from backend.workers.jobs.email import send_email
+from backend.workers.jobs.knowledge import process_document, process_website_documents
 
 
 async def ping(ctx: dict[str, Any]) -> dict[str, str]:
@@ -24,6 +25,5 @@ async def ping(ctx: dict[str, Any]) -> dict[str, str]:
     }
 
 
-# Tasks registered in the ARQ worker (ADR-002 task registry). More land with
-# their phases: reindex_website (Phase 5).
-TASKS = [ping, send_email, crawl_website]
+# Tasks registered in the ARQ worker (ADR-002 task registry).
+TASKS = [ping, send_email, crawl_website, process_document, process_website_documents]

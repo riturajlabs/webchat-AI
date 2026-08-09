@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.core.security import new_id, utcnow
+from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_NONE
 
 # Website statuses (docs/05-Backend-Schema.md §5 + soft delete).
 WEBSITE_STATUS_PENDING = "pending"
@@ -43,6 +44,11 @@ class Website(BaseModel):
     created_at: datetime
     updated_at: datetime
     schema_version: int = 1
+    # Phase 5 knowledge base statistics (dashboard "knowledge status").
+    knowledge_status: str = KNOWLEDGE_STATUS_NONE
+    knowledge_documents: int = 0
+    knowledge_chunks: int = 0
+    last_knowledge_at: datetime | None = None
 
     @classmethod
     def new(cls, *, tenant_id: str, name: str, url: str) -> "Website":

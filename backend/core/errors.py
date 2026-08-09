@@ -92,3 +92,43 @@ class RateLimitExceededError(AppError):
 class ServiceUnavailableError(AppError):
     status_code = 503
     code = "SERVICE_UNAVAILABLE"
+
+
+class EmbeddingError(AppError):
+    """Embedding generation failed after retries (Phase 5)."""
+
+    status_code = 502
+    code = "EMBEDDING_FAILED"
+
+
+class EmbeddingUnavailableError(EmbeddingError):
+    """Embedding service cannot run (e.g. missing API key)."""
+
+    code = "EMBEDDING_UNAVAILABLE"
+
+
+class InvalidQuestionError(AppError):
+    """Chat question rejected after sanitization (Phase 6)."""
+
+    status_code = 400
+    code = "INVALID_QUESTION"
+
+
+class SessionNotFoundError(AppError):
+    """Chat session does not exist for this tenant (Phase 6)."""
+
+    status_code = 404
+    code = "SESSION_NOT_FOUND"
+
+
+class GenerationError(AppError):
+    """LLM answer generation failed (Phase 6, ADR-008)."""
+
+    status_code = 502
+    code = "GENERATION_FAILED"
+
+
+class GenerationUnavailableError(GenerationError):
+    """Generation service cannot run (e.g. missing API key)."""
+
+    code = "GENERATION_UNAVAILABLE"

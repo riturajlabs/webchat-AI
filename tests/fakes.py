@@ -2,19 +2,25 @@
 
 from datetime import datetime
 
+from backend.ai.gemini import GenerationUsage
 from backend.core.security import utcnow
 from backend.models.audit_log import AuditLog
+from backend.models.chat_message import ChatMessage
+from backend.models.chat_session import ChatSession
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
     CrawlJob,
 )
 from backend.models.document import Document
+from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
 from backend.models.tenant import Tenant
+from backend.models.usage_record import UsageRecord
 from backend.models.user import User
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.models.widget import Widget
+from backend.repositories.vector.base import VectorSearchResult
 from backend.services.mail.base import EmailMessage
 
 
@@ -151,6 +157,9 @@ class FakeWebsiteRepository:
             ),
             None,
         )
+
+    async def find_by_id_any(self, website_id: str) -> Website | None:
+        return self._websites.get(website_id)
 
     async def list_by_tenant(
         self,
@@ -315,3 +324,312 @@ class FakeDocumentRepository:
             for document in self._documents.values()
             if document.tenant_id == tenant_id and document.website_id == website_id
         ]
+
+    async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None:
+        document = self._documents.get(document_id)
+        if document is not None and document.tenant_id == tenant_id:
+            return document
+        return None
+
+    async def find_by_id_any(self, document_id: str) -> Document | None:
+        return self._documents.get(document_id)
+
+    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]:
+        return [
+            document
+            for document in self._documents.values()
+            if document.tenant_id == tenant_id and document.website_id == website_id
+        ]
+
+
+class FakeEmbeddingClient:
+    """Deterministic embedding client: vector i is derived from text[i]."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    @property
+    def embeddings(self) -> dict[str, list[float]]:
+        return {
+            text: self._vector(text)
+            for batch in self.calls
+            for text in batch
+        }
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(texts)
+        return [self._vector(text) for text in texts]
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        # Stable hash-based 4-d vector so identical text embeds identically.
+        return [hash(text) % 1000 / 1000.0, len(text), float(len(text.split())), 1.0]
+
+
+class FakeVectorRepository:
+    """In-memory VectorRepository keyed by (tenant, website, document, index)."""
+
+    def __init__(self) -> None:
+        self._chunks: dict[tuple[str, str, str, int], KnowledgeChunk] = {}
+
+    @property
+    def chunks(self) -> list[KnowledgeChunk]:
+        return list(self._chunks.values())
+
+    def by_document(self, tenant_id: str, document_id: str) -> list[KnowledgeChunk]:
+        return [
+            chunk
+            for chunk in self._chunks.values()
+            if chunk.tenant_id == tenant_id and chunk.document_id == document_id
+        ]
+
+    async def insert_chunks(self, chunks: list[KnowledgeChunk]) -> int:
+        inserted = 0
+        for chunk in chunks:
+            key = (chunk.tenant_id, chunk.website_id, chunk.document_id, chunk.chunk_index)
+            if key not in self._chunks:
+                inserted += 1
+            self._chunks[key] = chunk
+        return inserted
+
+    async def delete_by_document(self, tenant_id: str, document_id: str) -> int:
+        deleted = len(self.by_document(tenant_id, document_id))
+        for key in list(self._chunks):
+            if key[0] == tenant_id and key[2] == document_id:
+                del self._chunks[key]
+        return deleted
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        deleted = 0
+        for key in list(self._chunks):
+            if key[0] == tenant_id and key[1] == website_id:
+                del self._chunks[key]
+                deleted += 1
+        return deleted
+
+    async def similarity_search(
+        self,
+        tenant_id: str,
+        website_id: str,
+        query_embedding: list[float],
+        *,
+        top_k: int = 5,
+    ) -> list[VectorSearchResult]:
+        candidates = [
+            chunk
+            for chunk in self._chunks.values()
+            if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+        ]
+        results = [
+            VectorSearchResult(chunk=chunk, score=0.9 - chunk.chunk_index / 100.0)
+            for chunk in candidates
+        ]
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results[:top_k]
+
+
+class FakeKnowledgeChunkRepository:
+    """In-memory read-side knowledge chunk statistics.
+
+    In production both `MongoVectorRepository` and `MongoKnowledgeChunkRepository`
+    read the same `knowledge_chunks` collection. To mirror that, this fake can be
+    constructed around a `FakeVectorRepository` so counts reflect inserted chunks.
+    """
+
+    def __init__(self, vector: FakeVectorRepository | None = None) -> None:
+        self._chunks: dict[str, KnowledgeChunk] = {}
+        self._vector = vector
+
+    def seed(self, chunks: list[KnowledgeChunk]) -> None:
+        for chunk in chunks:
+            self._chunks[chunk.id] = chunk
+
+    def _all(self) -> list[KnowledgeChunk]:
+        return self._vector.chunks if self._vector is not None else list(self._chunks.values())
+
+    async def count_by_website(self, tenant_id: str, website_id: str) -> int:
+        return len(
+            [
+                chunk
+                for chunk in self._all()
+                if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+            ]
+        )
+
+    async def count_by_document(self, tenant_id: str, document_id: str) -> int:
+        return len(
+            [
+                chunk
+                for chunk in self._all()
+                if chunk.tenant_id == tenant_id and chunk.document_id == document_id
+            ]
+        )
+
+    async def count_documents_by_website(self, tenant_id: str, website_id: str) -> int:
+        return len(
+            {
+                chunk.document_id
+                for chunk in self._all()
+                if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+            }
+        )
+
+
+class FakeChatSessionRepository:
+    """In-memory chat session repository (tenant-scoped like the Mongo impl)."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, ChatSession] = {}
+
+    @property
+    def sessions(self) -> dict[str, ChatSession]:
+        return self._sessions
+
+    async def create(self, session: ChatSession) -> None:
+        self._sessions[session.session_id] = session
+
+    async def find_by_session_id(self, tenant_id: str, session_id: str) -> ChatSession | None:
+        session = self._sessions.get(session_id)
+        if session is not None and session.tenant_id == tenant_id:
+            return session
+        return None
+
+    async def touch(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session.last_activity = utcnow()
+
+    async def list_by_website(
+        self,
+        tenant_id: str,
+        website_id: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ChatSession]:
+        candidates = sorted(
+            (
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id and session.website_id == website_id
+            ),
+            key=lambda session: session.last_activity,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_by_website(self, tenant_id: str, website_id: str) -> int:
+        return len(
+            [
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id and session.website_id == website_id
+            ]
+        )
+
+
+class FakeChatMessageRepository:
+    """In-memory chat message repository (tenant-scoped like the Mongo impl)."""
+
+    def __init__(self) -> None:
+        self._messages: list[ChatMessage] = []
+
+    @property
+    def messages(self) -> list[ChatMessage]:
+        return self._messages
+
+    async def create(self, message: ChatMessage) -> None:
+        self._messages.append(message)
+
+    async def list_recent(
+        self,
+        tenant_id: str,
+        session_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[ChatMessage]:
+        recent = [
+            message
+            for message in self._messages
+            if message.tenant_id == tenant_id and message.session_id == session_id
+        ]
+        return recent[-limit:]
+
+    async def count_by_session(self, tenant_id: str, session_id: str) -> int:
+        return len(
+            [
+                message
+                for message in self._messages
+                if message.tenant_id == tenant_id and message.session_id == session_id
+            ]
+        )
+
+
+class FakeUsageRecordRepository:
+    """In-memory usage rollup repository (ADR-005 §5.5)."""
+
+    def __init__(self) -> None:
+        self._records: dict[tuple[str, str, str], UsageRecord] = {}
+
+    @property
+    def records(self) -> list[UsageRecord]:
+        return list(self._records.values())
+
+    def get_record(self, tenant_id: str, website_id: str, date: str) -> UsageRecord | None:
+        return self._records.get((tenant_id, website_id, date))
+
+    async def increment(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        date: str,
+        counters: dict[str, int],
+    ) -> None:
+        key = (tenant_id, website_id, date)
+        record = self._records.get(key)
+        if record is None:
+            record = UsageRecord.new(tenant_id=tenant_id, website_id=website_id, date=date)
+            self._records[key] = record
+        for name, value in counters.items():
+            record.counters[name] = record.counters.get(name, 0) + value
+        record.updated_at = utcnow()
+
+    async def get(self, tenant_id: str, website_id: str, date: str) -> UsageRecord | None:
+        return self._records.get((tenant_id, website_id, date))
+
+
+class FakeGenerationClient:
+    """Fake `GenerationClient`: records the prompt and streams canned deltas.
+
+    `usage` defaults to 10/20 tokens but can be configured; `failures` lets
+    tests exercise the error path.
+    """
+
+    def __init__(self, deltas: list[str] | None = None) -> None:
+        self.calls: list[dict] = []
+        self.deltas = deltas if deltas is not None else ["Hello", " world!"]
+        self.failures: list[Exception] = []
+        self.input_tokens = 10
+        self.output_tokens = 20
+
+    @property
+    def usage(self) -> GenerationUsage:
+        return GenerationUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+        )
+
+    def stream_generate(
+        self,
+        *,
+        system: str,
+        messages: list[tuple[str, str]],
+    ):
+        self.calls.append({"system": system, "messages": messages})
+        if self.failures:
+            raise self.failures.pop(0)
+        async def _stream():
+            for delta in self.deltas:
+                yield delta
+        return _stream()

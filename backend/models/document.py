@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from backend.core.security import new_id, utcnow
+from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_NONE
 
 DOCUMENT_STATUS_READY = "ready"
 
@@ -34,6 +35,12 @@ class Document(BaseModel):
     created_at: datetime
     updated_at: datetime
     schema_version: int = 1
+    # Phase 5 knowledge processing (docs/06): last embedded state. When
+    # `knowledge_checksum` equals `checksum` the content is already embedded.
+    knowledge_status: str = KNOWLEDGE_STATUS_NONE
+    knowledge_checksum: str | None = None
+    knowledge_chunks: int = 0
+    knowledge_processed_at: datetime | None = None
 
     @classmethod
     def new(

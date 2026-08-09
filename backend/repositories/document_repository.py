@@ -22,6 +22,14 @@ class DocumentRepository(Protocol):
 
     async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]: ...
 
+    async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None: ...
+
+    # Worker-side lookups: the document carries its tenant, so reads resolve
+    # ownership from stored data (never from untrusted input).
+    async def find_by_id_any(self, document_id: str) -> Document | None: ...
+
+    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]: ...
+
 
 class MongoDocumentRepository:
     """MongoDB-backed document repository (docs/05, Phase 4 ingestion)."""
@@ -62,6 +70,24 @@ class MongoDocumentRepository:
             projection={"checksum": 1, "_id": 0},
         )
         return [str(doc["checksum"]) async for doc in cursor]
+
+    async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None:
+        doc = await self._collection.find_one(
+            {"_id": document_id, "tenant_id": tenant_id}
+        )
+        return Document.from_doc(doc) if doc is not None else None
+
+    async def find_by_id_any(self, document_id: str) -> Document | None:
+        doc = await self._collection.find_one({"_id": document_id})
+        return Document.from_doc(doc) if doc is not None else None
+
+    async def list_by_website(
+        self, tenant_id: str, website_id: str
+    ) -> list[Document]:
+        cursor = self._collection.find(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return [Document.from_doc(doc) async for doc in cursor]
 
 
 def update_payload(document: Document) -> dict[str, Any]:

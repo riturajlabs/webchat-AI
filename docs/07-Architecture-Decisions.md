@@ -569,4 +569,18 @@ Phase 5 (Knowledge Processing) is implemented and verified end-to-end. Notes bel
 
 ---
 
+# 13. Phase 6 Completion Notes (August 2026)
+
+Phase 6 (RAG Pipeline) is implemented and verified (`docs/Phase-6-Verification-Report.md`). Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
+
+- **Answer pipeline (ADR-008 Phase 6):** `backend/services/chat/rag_service.py::stream_answer` implements the full retrieve-before-generate flow: validate website ownership → sanitize the question → persist the user turn → embed the question (reuses the Phase 5 `GoogleEmbeddingClient`) → tenant-filtered Top-5 `$vectorSearch` → deduplicate context + load conversation memory → build the versioned prompt → stream Gemini 2.5 Flash → persist the answer with sources/tokens/latency → touch the session → atomic `$inc` rollup into `usage_records` (ADR-005 §5.5/§5.8).
+- **Hallucination guard:** the model is never called without retrieved context. Empty knowledge base or zero search hits return the fixed TRD §8 fallback (`UNKNOWN_ANSWER_FALLBACK`, `docs/02-TRD.md §8`); internal errors surface only as generic SSE `error` events.
+- **Conversation memory (docs/05 §9-10):** `chat_sessions` (unique `session_id`, `expires_at` TTL) + `messages` (tenant/session/created_at index + `created_at` TTL). `list_recent` returns the latest `CHAT_MEMORY_TURNS` turns in chronological order (sort DESC, limit, reverse).
+- **Versioned prompts:** `backend/prompts/rag.py` catalog keyed by `RAG_PROMPT_VERSION` (config/env); `sanitize_question` strips control characters and caps length; reference material is delimited and labelled untrusted (prompt-injection defense, TRD §8).
+- **Token usage capture (ADR-005 §5.8):** per-message `input_tokens`/`output_tokens` on `messages`; daily atomic rollups (`chats`, `messages`, `input_tokens`, `output_tokens`, `vector_queries`) in `usage_records`. `embeddings_created`/`crawl_pages` counters remain reserved for the Phase 5/9 worker rollups.
+- **TTL alignment (ADR-005 §5.7):** `chat_sessions` uses the Mongo deadline pattern (`expires_at` with `expireAfterSeconds=0`, matching `CHAT_RETENTION_DAYS`); `messages` and `usage_records` TTLs are derived from `CHAT_RETENTION_DAYS` / `USAGE_RETENTION_DAYS` config.
+- **Deferred to Phase 7:** dashboard chat UI/conversations surface; widget SDK chat (public endpoints + scoped session tokens, ADR-004) is Phase 8. Cross-embedding duplicate detection remains open for the analytics phase.
+
+---
+
 # End of Architecture Decision Record

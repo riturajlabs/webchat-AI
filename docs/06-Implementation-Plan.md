@@ -302,6 +302,27 @@ Generate accurate AI responses.
 
 - Working chatbot
 
+### Completion notes (Phase 6)
+
+- **Answer pipeline**: `POST /api/chat/stream` (SSE) answers with tenant-filtered
+  Top-5 retrieval -> versioned prompt -> Gemini 2.5 Flash streaming
+  (docs/07 ADR-008). Question embedding reuses the Phase 5 embedding client.
+- **Hallucination guard**: the model is never called without retrieved context;
+  empty knowledge base or zero search hits return the fixed TRD §8 fallback.
+- **Conversation memory**: `chat_sessions` + `messages` collections; the last
+  `CHAT_MEMORY_TURNS` turns are fed into the prompt.
+- **Token usage capture** (ADR-005 §5.8): per-message `input_tokens`/`output_tokens`
+  on `messages` plus atomic `$inc` rollups into `usage_records` (chats, messages,
+  input/output tokens, vector queries); TTLs 90 days (sessions/messages) and
+  3 years (usage_records).
+- **Versioned prompts**: `backend/prompts/rag.py` catalog keyed by
+  `RAG_PROMPT_VERSION` (env), with `sanitize_question` control-char stripping and
+  delimited, marked-untrusted context (prompt-injection defense).
+- **Tests**: prompts, Gemini client, RAG service (retrieval, fallbacks, tenant
+  isolation, session scoping, memory, failures), chat API (auth, RBAC, SSE
+  streaming, isolation, blank input), database index/TTL migrations; full backend
+  suite green (302 tests).
+
 ---
 
 # Phase 7 — Dashboard

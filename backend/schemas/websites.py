@@ -35,6 +35,11 @@ class WebsiteOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     widget_id: str
+    # Phase 5 knowledge base statistics (dashboard "knowledge status").
+    knowledge_status: str
+    knowledge_documents: int
+    knowledge_chunks: int
+    last_knowledge_at: datetime | None
 
     @classmethod
     def from_website(cls, website: Any, *, widget_id: str) -> "WebsiteOut":
@@ -50,6 +55,10 @@ class WebsiteOut(BaseModel):
             created_at=website.created_at,
             updated_at=website.updated_at,
             widget_id=widget_id,
+            knowledge_status=website.knowledge_status,
+            knowledge_documents=website.knowledge_documents,
+            knowledge_chunks=website.knowledge_chunks,
+            last_knowledge_at=website.last_knowledge_at,
         )
 
 
