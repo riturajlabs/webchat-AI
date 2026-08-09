@@ -82,21 +82,22 @@ EMAIL_BASE_URL=https://app.webchatai.example
 
 ## Configuration
 
-| Concern                           | Value                                                                      |
-| --------------------------------- | -------------------------------------------------------------------------- |
-| Broker / cache / rate-limit store | Redis 7+ (single instance; Docker `redis:7` in dev; managed Redis in prod) |
-| Worker entrypoint                 | `python -m backend.workers` (separate Docker image/process from the API)   |
-| Retry policy                      | Max 3 attempts, exponential backoff (`2^n × 30s`), timeouts per job        |
-| Job timeouts                      | Crawl 10 min · Embed 5 min · Email 30 s · Re-index 30 min                  |
+| Concern                           | Value                                                                                                                                    |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Broker / cache / rate-limit store | Redis 7+ (single instance; Docker `redis:7` in dev; managed Redis in prod)                                                               |
+| Worker entrypoint                 | `python -m backend.workers` (separate Docker image/process from the API)                                                                 |
+| Retry policy                      | Max 3 attempts (`max_tries = 3`); ARQ default retry behaviour (no custom backoff configured — `retry_backoff` 1 s, `retry_jitter` 0.5 s) |
+| Job timeouts                      | Unified ARQ `job_timeout = 600` (10 min) for all jobs (`backend/workers/app.py`)                                                         |
 
 ## Task Registry (`backend/workers/tasks.py`)
 
-| Task                                | Queue / Purpose                                               |
-| ----------------------------------- | ------------------------------------------------------------- |
-| `crawl_website(crawl_job_id)`       | Playwright crawl → extract → clean → chunk → embed → store    |
-| `reindex_website(website_id, mode)` | Incremental re-index (detects changed pages via content hash) |
-| `send_email(payload)`               | All transactional email                                       |
-| `finalize_crawl(crawl_job_id)`      | Post-job status, analytics, notification                      |
+| Task                                    | Queue / Purpose                                                |
+| --------------------------------------- | -------------------------------------------------------------- |
+| `ping()`                                | Worker health-check                                            |
+| `send_email(payload)`                   | All transactional email (Phase 2)                              |
+| `crawl_website(crawl_job_id)`           | Playwright crawl → extract → clean → store documents (Phase 4) |
+| `process_document(document_id)`         | Embed one document: chunk → embed → store (Phase 5)            |
+| `process_website_documents(website_id)` | Fan a website's documents out as per-document jobs (Phase 5)   |
 
 ## Deviations from original docs
 
@@ -550,6 +551,21 @@ Phase 4 (Data Ingestion Engine) is implemented and verified end-to-end. Notes be
 - **Incremental ingestion:** `documents` are idempotently upserted on the unique `(tenant_id, website_id, url)` key with a SHA-256 content checksum, so Phase 5 can re-embed only changed content.
 - **Retention (ADR-005):** `crawl_jobs` carry a 30-day TTL; crawl audit entries a 1-year TTL.
 - **Deferred to Phase 5:** semantic chunking, embedding generation, vector storage, duplicate detection across embeddings.
+
+---
+
+# 12. Phase 5 Completion Notes (August 2026)
+
+Phase 5 (Knowledge Processing) is implemented and verified end-to-end. Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
+
+- **Chunking (TRD §6):** `backend/services/knowledge/chunker.py` is a dependency-free approximate tokenizer (word + punctuation runs); defaults `KNOWLEDGE_CHUNK_SIZE_TOKENS=700` / `KNOWLEDGE_CHUNK_OVERLAP_TOKENS=100` follow the TRD. Windows prefer sentence/paragraph boundaries; the window always advances by at least one token, guaranteeing termination even when a boundary cut sits close to the window start.
+- **Embedding (ADR-008 Phase 5):** `GoogleEmbeddingClient` (`backend/services/knowledge/embedding.py`) calls `text-embedding-004` via the Google GenAI async SDK (`client.aio.models.embed_content`, verified against SDK 2.17). Batches of `EMBEDDING_BATCH_SIZE=32` retry with exponential backoff + full jitter up to `EMBEDDING_MAX_RETRIES=5`, bounded by `EMBEDDING_REQUEST_TIMEOUT_SECONDS`. `EmbeddingUnavailableError` fails fast (no retries) when `GEMINI_API_KEY` is missing; all other errors normalize to `EmbeddingError` after retry exhaustion. Usage (calls/characters/estimated_tokens/failures) is captured per batch and reported through an optional hook.
+- **Layering:** the processor depends only on the `VectorRepository` and `EmbeddingClient` Protocols (00-AI-Development-Rules §13); the ARQ worker binds MongoDB-backed repositories and injects the embedding client via `ctx["embedding_client"]` at startup (ADR-002 container pattern, mirroring the crawl job).
+- **Worker/queue config (ADR-002):** `process_document` and `process_website_documents` are registered alongside `ping`, `send_email`, and `crawl_website`. The worker applies a unified `job_timeout = 600` (10 min) to all jobs, `max_tries = 3`, and ARQ default retry behaviour (no custom backoff). ADR-002's Configuration and Task Registry tables were corrected to match this implementation after the Phase 5 audit (`docs/Phase-5-Verification-Report.md`).
+- **Vector storage:** `knowledge_chunks` (docs/05 §7) with a unique `(tenant_id, website_id, document_id, chunk_index)` index for idempotent writes; Atlas `$vectorSearch` with `filter` on tenant+website, `numCandidates=max(top_k*10, 50)`, and `score` via `$meta: vectorSearchScore`. Missing Atlas index surfaces an actionable error. `KnowledgeChunk.to_out()` never exposes the embedding vector.
+- **Incremental re-indexing:** `documents.knowledge_checksum` is compared to the Phase 4 content checksum; unchanged documents with existing chunks skip embedding entirely, changed documents delete + rebuild their chunks. Empty pages record a clean `ready`/`0` state.
+- **Status surface:** `WebsiteOut` and the dashboard website card expose `knowledge_status` / `knowledge_documents` / `knowledge_chunks` / `last_knowledge_at`; failures audit `KNOWLEDGE_FAILED`.
+- **Deferred to Phase 6:** retrieval (question embedding + vector search), prompt building, Gemini generation, conversation memory, and cross-embedding duplicate detection.
 
 ---
 

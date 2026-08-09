@@ -231,6 +231,49 @@ Convert website content into searchable knowledge.
 
 - Knowledge Base
 
+### Status — COMPLETE (August 2026)
+
+The Phase 5 knowledge pipeline is implemented, tested, and verified end-to-end
+(ADR-008):
+
+- **Chunking** (`backend/services/knowledge/chunker.py`): dependency-free token
+  chunker (regex word/punctuation tokenizer), TRD-aligned defaults
+  `KNOWLEDGE_CHUNK_SIZE_TOKENS=700`, `KNOWLEDGE_CHUNK_OVERLAP_TOKENS=100`,
+  sentence/paragraph-boundary alignment, and guaranteed-forward window so
+  chunking always terminates.
+- **Embedding** (`backend/services/knowledge/embedding.py`):
+  `GoogleEmbeddingClient` calling `text-embedding-004` through the GenAI async
+  SDK — batching (`EMBEDDING_BATCH_SIZE=32`), per-batch exponential backoff with
+  full jitter and retry cap (`EMBEDDING_MAX_RETRIES=5`), timeout enforcement,
+  usage capture (calls/characters/estimated_tokens/failures) via an optional
+  hook, and fail-fast on missing `GEMINI_API_KEY` (`EmbeddingUnavailableError`).
+- **Vector storage** (`backend/repositories/vector/`): `VectorRepository`
+  Protocol + MongoDB Atlas `$vectorSearch` implementation over the
+  `knowledge_chunks` collection (tenant/website pre-filter, Top-5 cosine,
+  `index: "default"`, actionable error when the Atlas index is missing).
+  Unique `(tenant_id, website_id, document_id, chunk_index)` index makes chunk
+  inserts idempotent; all writes/deletes are tenant-scoped.
+- **Orchestration** (`backend/services/knowledge/processor.py`):
+  `KnowledgeProcessor` binds only Protocols. `process_document` is idempotent —
+  skips when the SHA-256 checksum is unchanged and chunks already exist,
+  replaces chunks on content change, records a clean state for empty pages, and
+  marks `failed` + audits `KNOWLEDGE_FAILED` when embedding errors.
+  `process_website_documents` fans documents out as per-document ARQ jobs.
+- **Worker** (`backend/workers/jobs/knowledge.py`): `process_document` and
+  `process_website_documents` registered in the ARQ task registry; the shared
+  `GoogleEmbeddingClient` is injected via `ctx["embedding_client"]` at worker
+  startup.
+- **Read side**: `KnowledgeChunkRepository` counts and
+  `WebsiteOut.knowledge_{status,documents,chunks}` + `last_knowledge_at`
+  surface "knowledge status" on the dashboard website cards.
+- **Tests**: chunker, embedding-client, processor (incremental skip, replace on
+  change, no-content, embedding failure, tenant isolation, fan-out), and worker
+  task tests; full backend suite green (263 tests).
+
+Out of scope (deferred to Phase 6): retrieval (question embedding + vector
+search), prompt building, Gemini generation, conversation memory. Duplicate
+detection across embeddings remains open for the analytics phase.
+
 ---
 
 # Phase 6 — RAG Pipeline
