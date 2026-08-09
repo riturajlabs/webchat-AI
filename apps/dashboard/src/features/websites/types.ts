@@ -54,6 +54,11 @@ export interface CreateWebsiteResponse {
   embed_script: string;
 }
 
+export interface WidgetResponse {
+  widget: Widget;
+  embed_script: string;
+}
+
 export interface UpdateWebsiteInput {
   websiteId: string;
   name?: string;

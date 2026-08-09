@@ -511,6 +511,16 @@ Amended from `06-Implementation-Plan.md`. One phase must be fully complete (test
 
 **Ordering note:** Analytics/usage was moved after the dashboard so its backends exist first; Admin Panel is now a first-class phase; security hardening remains an audit on top of security implemented from Phase 2 onward.
 
+### Phase ordering clarification (post-ADR-008)
+
+ADR-008 lists _Phase 7 → Widget SDK, Phase 8 → Dashboard_. However, the Dashboard was **implemented in Phase 7**, ahead of the Widget SDK, because the APIs the dashboard consumes were already available: authentication (Phase 2), website management (Phase 3), crawl jobs (Phase 4), knowledge (Phase 5), RAG chat + usage (Phase 6), and health endpoints (Phase 1).
+
+- The **Widget SDK is moved to Phase 8** (public config/sessions/chat endpoints, scoped session tokens, rate limits, <100 KB embed script — per ADR-004).
+- `docs/06-Implementation-Plan.md` is the **active implementation roadmap** and governs phase ordering. Its _Phase 7 — Dashboard_ and _Phase 8 — Widget SDK_ sections reflect the implemented order.
+- Phase completion is tracked by the per-phase verification reports in `docs/`.
+
+Where the two documents differ, `docs/06` ordering wins for scheduling; ADR-008 remains authoritative for the scope of each phase and for the decision register.
+
 ---
 
 # 9. Decision Register

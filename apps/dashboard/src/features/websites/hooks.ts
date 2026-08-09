@@ -12,6 +12,7 @@ import type {
   StartCrawlResponse,
   UpdateWebsiteInput,
   Website,
+  WidgetResponse,
 } from './types';
 
 export const websitesKeys = {
@@ -82,5 +83,13 @@ export function useCrawlJob(jobId: string | null) {
     enabled: jobId !== null,
     refetchInterval: (query) =>
       TERMINAL_CRAWL_STATUSES.has(query.state.data?.status ?? '') ? false : 3000,
+  });
+}
+
+export function useWebsiteWidget(websiteId: string | null) {
+  return useQuery({
+    queryKey: ['website-widget', websiteId ?? ''],
+    queryFn: () => api.get<WidgetResponse>(`/api/websites/${websiteId}/widget`),
+    enabled: websiteId !== null,
   });
 }
