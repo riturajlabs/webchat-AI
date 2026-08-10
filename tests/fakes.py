@@ -239,6 +239,12 @@ class FakeWidgetRepository:
             if widget.tenant_id == tenant_id and widget.website_id == website_id:
                 del self._widgets[widget_id]
 
+    async def find_by_widget_id(self, widget_id: str) -> Widget | None:
+        return next(
+            (widget for widget in self._widgets.values() if widget.widget_id == widget_id),
+            None,
+        )
+
 
 class RecordingMailDispatcher:
     """Async callable that records delivered emails for assertions."""
@@ -248,6 +254,31 @@ class RecordingMailDispatcher:
 
     async def __call__(self, message: EmailMessage) -> None:
         self.sent.append(message)
+
+
+class FakeWidgetStore:
+    """In-memory `WidgetStore` mirroring the Redis surface (Phase 8)."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    @property
+    def data(self) -> dict[str, str]:
+        return self._data
+
+    async def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def setex(self, key: str, seconds: int, value: str) -> None:
+        self._data[key] = value
+
+    async def incr(self, key: str) -> int:
+        value = int(self._data.get(key, "0")) + 1
+        self._data[key] = str(value)
+        return value
+
+    async def expire(self, key: str, seconds: int) -> None:
+        pass
 
 
 class FakeCrawlJobRepository:

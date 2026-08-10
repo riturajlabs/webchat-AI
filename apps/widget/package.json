@@ -20,6 +20,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:size": "tsc --noEmit && vite build && node scripts/check-size.mjs",
+    "check:size": "node scripts/check-size.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -32,9 +34,11 @@
     "@types/node": "^20",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
+    "axe-core": "^4.13.0",
     "eslint": "^9",
     "eslint-config-prettier": "^9",
     "globals": "^17.9.0",
+    "jsdom": "^25",
     "typescript": "^5",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"

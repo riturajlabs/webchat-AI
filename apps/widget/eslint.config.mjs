@@ -10,6 +10,14 @@ export default [
   },
   js.configs.recommended,
   {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
     files: ["src/**/*.ts"],
     languageOptions: {
       parser: tsparser,
@@ -26,6 +34,9 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
+      // TS itself reports undefined identifiers at typecheck; the base no-undef
+      // false-positives on DOM lib types like RequestInit.
+      "no-undef": "off",
     },
   },
   prettier,

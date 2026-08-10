@@ -62,6 +62,18 @@ class Settings(BaseSettings):
     # Where the built widget SDK bundle is served from (embed-script generation).
     widget_script_url: str = "http://localhost:8080/webchat-widget.iife.min.js"
 
+    # Public widget API (Phase 8, ADR-004 §widget).
+    widget_session_token_minutes: int = 15
+    widget_session_validity_hours: int = 24
+    widget_config_cache_seconds: int = 300
+    widget_per_widget_limit: int = 60
+    widget_per_visitor_limit: int = 20
+    widget_session_issue_limit: int = 30
+    widget_max_messages_per_session: int = 50
+    # Master switch for the widget rate limits; `None` inherits the global
+    # `rate_limit_enabled` (resolved in the validator below).
+    widget_rate_limit_enabled: bool | None = None
+
     # Email (Phase 2 - ADR-001)
     resend_api_key: str | None = None
     email_from: str = "WebChat AI <no-reply@webchatai.example>"
@@ -127,6 +139,8 @@ class Settings(BaseSettings):
         if self.environment.lower() == "production":
             if len(self.jwt_secret.encode("utf-8")) < 32:
                 raise ValueError("JWT_SECRET must be at least 32 bytes in production.")
+        if self.widget_rate_limit_enabled is None:
+            self.widget_rate_limit_enabled = self.rate_limit_enabled
         return self
 
 

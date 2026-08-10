@@ -1,0 +1,56 @@
+import { describe, expect, it, vi } from 'vitest';
+import { createComposer, COMPOSER_MAX_LENGTH } from './composer';
+
+function setup() {
+  const onSend = vi.fn();
+  const composer = createComposer({
+    placeholder: 'Ask…',
+    onSend,
+    isDisabled: () => false,
+  });
+  document.body.appendChild(composer.element);
+  return { composer, onSend };
+}
+
+describe('createComposer', () => {
+  it('sends trimmed non-empty input and resets', () => {
+    const { composer, onSend } = setup();
+    composer.input.value = '  hello  ';
+    composer.input.dispatchEvent(new Event('input'));
+    composer.sendButton.click();
+    expect(onSend).toHaveBeenCalledWith('hello');
+    expect(composer.input.value).toBe('');
+  });
+
+  it('does not send empty input', () => {
+    const { composer, onSend } = setup();
+    composer.sendButton.click();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('sends on Enter but not Shift+Enter', () => {
+    const { composer, onSend } = setup();
+    composer.input.value = 'question';
+    const enter = new KeyboardEvent('keydown', { key: 'Enter' });
+    composer.input.dispatchEvent(enter);
+    expect(onSend).toHaveBeenCalledWith('question');
+
+    const { composer: composer2, onSend: onSend2 } = setup();
+    composer2.input.value = 'line1';
+    const shiftEnter = new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true });
+    composer2.input.dispatchEvent(shiftEnter);
+    expect(onSend2).not.toHaveBeenCalled();
+  });
+
+  it('caps input at the max length attribute', () => {
+    const { composer } = setup();
+    expect(composer.input.maxLength).toBe(COMPOSER_MAX_LENGTH);
+  });
+
+  it('setDisabled disables the input and send', () => {
+    const { composer } = setup();
+    composer.setDisabled(true);
+    expect(composer.input.disabled).toBe(true);
+    expect(composer.sendButton.disabled).toBe(true);
+  });
+});

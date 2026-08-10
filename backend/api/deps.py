@@ -5,7 +5,8 @@ repository Protocol implementations bound here. ADR-004 (rate limiting) and
 ADR-003 (double-submit CSRF) are enforced as dependencies.
 """
 
-from collections.abc import Callable, Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any
 
 from fastapi import Depends, Header, Request
@@ -24,7 +25,7 @@ from backend.core.errors import (
 )
 from backend.core.rate_limit import SlidingWindowRateLimiter
 from backend.core.redis import get_redis
-from backend.core.security import csrf_tokens_match
+from backend.core.security import csrf_tokens_match, decode_widget_session_token
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoChatMessageRepository,
@@ -44,6 +45,7 @@ from backend.services.chat.rag_service import RagService
 from backend.services.crawl import CrawlService
 from backend.services.knowledge.embedding import GoogleEmbeddingClient
 from backend.services.website import WebsiteService
+from backend.services.widget import WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
 
@@ -115,6 +117,38 @@ def get_rag_service(
         sessions=MongoChatSessionRepository(db),
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),
+    )
+
+
+class _RedisWidgetStore:
+    """Adapter exposing Redis's minimal surface to `WidgetService`."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def get(self, key: str) -> str | None:
+        value = await self._redis.get(key)
+        return str(value) if value is not None else None
+
+    async def setex(self, key: str, seconds: int, value: str) -> None:
+        await self._redis.setex(key, seconds, value)
+
+    async def incr(self, key: str) -> int:
+        return int(await self._redis.incr(key))
+
+    async def expire(self, key: str, seconds: int) -> None:
+        await self._redis.expire(key, seconds)
+
+
+def get_widget_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> WidgetService:
+    """Build the public widget service with MongoDB + Redis (Phase 8)."""
+    return WidgetService(
+        widgets=MongoWidgetRepository(db),
+        tenants=MongoTenantRepository(db),
+        websites=MongoWebsiteRepository(db),
+        store=_RedisWidgetStore(get_redis()),
     )
 
 
@@ -231,6 +265,119 @@ crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)
+
+
+class WidgetRateLimitDependency:
+    """Sliding-window limiter keyed by an entity (widget/visitor) instead of IP.
+
+    Phase 8 (ADR-004 §widget abuse table): per-widget and per-visitor budgets
+    are independent sliding windows. The key factory derives the Redis key from
+    the request (e.g. `rl:widget:{widget_id}`, `rl:visitor:{visitor_id}`) so the
+    budget tracks the entity, not the connection. Fails closed like
+    `RateLimitDependency` (503 on Redis outage). Limits resolve from settings
+    at call time (`limit_setting` names the `Settings` field) so test
+    environments can override them without reimporting.
+    """
+
+    def __init__(
+        self,
+        *,
+        key_factory: Callable[[Request], Awaitable[str] | str],
+        limit: int | None = None,
+        window_seconds: int | None = None,
+        limit_setting: str | None = None,
+    ) -> None:
+        self.limit = limit
+        self.window_seconds = window_seconds
+        self.limit_setting = limit_setting
+        self._key_factory = key_factory
+
+    async def __call__(self, request: Request) -> None:
+        settings = get_settings()
+        if not settings.widget_rate_limit_enabled:
+            return
+        limit = self.limit
+        if limit is None and self.limit_setting is not None:
+            limit = int(getattr(settings, self.limit_setting))
+        if limit is None or self.window_seconds is None:
+            return
+        limiter = SlidingWindowRateLimiter(
+            _RedisRateLimitStore(get_redis()), limit=limit, window_seconds=self.window_seconds
+        )
+        result = self._key_factory(request)
+        key = (await result) if asyncio.iscoroutine(result) else result
+        try:
+            allowed = await limiter.consume(str(key))
+        except Exception as exc:
+            raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
+        if not allowed:
+            raise RateLimitExceededError("Too many requests. Please try again later.")
+
+
+def widget_visitor_id(request: Request) -> str:
+    """Anonymous visitor id from the widget session claims (`"anon"` fallback)."""
+    claims = getattr(request.state, "widget_claims", None) or {}
+    return str(claims.get("visitor_id") or "anon")
+
+
+def _widget_rate_limit_key(request: Request) -> str:
+    claims = getattr(request.state, "widget_claims", None) or {}
+    return f"rl:widget:{claims.get('widget_id', 'unknown')}"
+
+
+def _visitor_rate_limit_key(request: Request) -> str:
+    return f"rl:visitor:{widget_visitor_id(request)}"
+
+
+async def _session_issue_rate_limit_key(request: Request) -> str:
+    """Key the session-issue limit by the requested widget_id.
+
+    `POST /sessions` is anonymous, so the widget_id comes from the body
+    (matching the same budget as the chat per-widget limit).
+    """
+    widget_id = "unknown"
+    try:
+        body = await request.json()
+        widget_id = str(body.get("widget_id") or widget_id)
+    except Exception:
+        pass
+    return f"rl:widget:{widget_id}"
+
+
+# Phase 8 widget abuse protection (ADR-004 §widget):
+#  * per-widget: WIDGET_PER_WIDGET_LIMIT / min (60)
+#  * per-visitor: WIDGET_PER_VISITOR_LIMIT / min (20)
+#  * session issue: WIDGET_SESSION_ISSUE_LIMIT / min (30)
+widget_chat_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_per_widget_limit",
+)
+widget_visitor_limiter = WidgetRateLimitDependency(
+    key_factory=_visitor_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_per_visitor_limit",
+)
+widget_session_issue_limiter = WidgetRateLimitDependency(
+    key_factory=_session_issue_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_session_issue_limit",
+)
+
+
+async def widget_session_claims(
+    request: Request,
+    access_token: Annotated[str, Depends(get_access_token)],
+) -> dict[str, Any]:
+    """Decode the `Authorization: Bearer` widget-session token (Phase 8).
+
+    Stashes the claims on `request.state.widget_claims` so the widget/visitor
+    rate-limit key factories (above) can derive their keys from the same
+    decoded identity without re-parsing the token.
+    """
+    claims = decode_widget_session_token(access_token)
+    request.state.widget_claims = claims
+    return claims
 
 
 async def verify_csrf(request: Request) -> None:

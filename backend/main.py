@@ -8,12 +8,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.api.middleware import RequestIDMiddleware, SecurityHeadersMiddleware
+from backend.api.middleware import (
+    RequestIDMiddleware,
+    SecurityHeadersMiddleware,
+    WidgetCORSHeadersMiddleware,
+)
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.chat import router as chat_router
 from backend.api.routes.crawl_jobs import router as crawl_jobs_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.websites import router as websites_router
+from backend.api.routes.widget import router as widget_router
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import AppError
@@ -57,6 +62,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # WidgetCORS is registered after (thus wraps/runs before) the dashboard
+    # CORSMiddleware: `/api/widget/*` gets public `ACAO: *`, and its preflights
+    # are answered before the dashboard CORS config is consulted.
+    app.add_middleware(WidgetCORSHeadersMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
@@ -91,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(websites_router, prefix="/api")
     app.include_router(crawl_jobs_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
+    app.include_router(widget_router, prefix="/api")
 
     return app
 

@@ -132,3 +132,38 @@ class GenerationUnavailableError(GenerationError):
     """Generation service cannot run (e.g. missing API key)."""
 
     code = "GENERATION_UNAVAILABLE"
+
+
+class WidgetNotFoundError(AppError):
+    """Public widget id does not exist (Phase 8, ADR-004)."""
+
+    status_code = 404
+    code = "WIDGET_NOT_FOUND"
+
+
+class WidgetDisabledError(AppError):
+    """Widget exists but is disabled by its tenant (Phase 8, ADR-004)."""
+
+    status_code = 403
+    code = "WIDGET_DISABLED"
+
+
+class WebsiteNotReadyError(AppError):
+    """Website has not finished indexing, so it cannot answer (Phase 8)."""
+
+    status_code = 409
+    code = "WEBSITE_NOT_READY"
+
+
+class MessageLimitReachedError(AppError):
+    """Visitor exceeded the per-conversation message cap (Phase 8, ADR-004)."""
+
+    status_code = 429
+    code = "MESSAGE_LIMIT_REACHED"
+
+
+class SpamRejectedError(AppError):
+    """Question rejected by the low-cost spam heuristics (Phase 8)."""
+
+    status_code = 400
+    code = "SPAM_REJECTED"

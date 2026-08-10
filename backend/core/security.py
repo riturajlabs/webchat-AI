@@ -17,7 +17,7 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from backend.core.config import get_settings
 from backend.core.errors import InvalidTokenError, TokenExpiredError
 
-TokenPurpose = Literal["access", "email_verify", "password_reset"]
+TokenPurpose = Literal["access", "email_verify", "password_reset", "widget_session"]
 
 # ADR-003: Argon2id, memory 19 MiB, time 2, parallelism 1.
 _argon2 = PasswordHasher(memory_cost=19 * 1024, time_cost=2, parallelism=1)
@@ -125,6 +125,38 @@ def decode_password_reset_token(token: str) -> tuple[str, int]:
     """Validate a password-reset JWT; returns (user_id, token_version)."""
     payload = _decode(token, "password_reset")
     return str(payload["sub"]), int(payload["pwd_token_version"])
+
+
+def create_widget_session_token(
+    *,
+    widget_id: str,
+    tenant_id: str,
+    website_id: str,
+    visitor_id: str | None,
+) -> tuple[str, int]:
+    """Create a short-lived public widget-session JWT (Phase 8, ADR-004).
+
+    The token is scoped to a single widget (and thus one tenant+website) and
+    carries the anonymous visitor id so per-visitor rate limits and session
+    continuity work without any cookie reaching the API (ADR-003 CSRF
+    exemption). Returns (token, ttl_s).
+    """
+    settings = get_settings()
+    ttl = settings.widget_session_token_minutes * 60
+    payload = {
+        "widget_id": widget_id,
+        "tenant_id": tenant_id,
+        "website_id": website_id,
+        "visitor_id": visitor_id,
+        "token_type": "widget_session",
+        "jti": new_id(),
+    }
+    return _encode(payload, ttl), ttl
+
+
+def decode_widget_session_token(token: str) -> dict[str, Any]:
+    """Decode and validate a widget-session JWT, returning its claims."""
+    return _decode(token, "widget_session")
 
 
 def generate_refresh_token() -> str:

@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { init } from './index';
 
 describe('init', () => {
   it('mounts the widget without throwing', () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     expect(() => init({ widgetId: 'widget_123' })).not.toThrow();
-    info.mockRestore();
+  });
+
+  it('returns a controller exposing the widget id', () => {
+    const controller = init({ widgetId: 'widget_123' });
+    expect(controller.widgetId).toBe('widget_123');
+    controller.destroy();
   });
 });

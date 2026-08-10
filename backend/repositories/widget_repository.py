@@ -18,6 +18,11 @@ class WidgetRepository(Protocol):
 
     async def delete_by_website_id(self, tenant_id: str, website_id: str) -> None: ...
 
+    # Public widget read path (Phase 8, ADR-004): resolves the widget by its
+    # public `widget_id` (unique index) regardless of tenant, since callers of
+    # the widget API are anonymous. The tenant is read off the widget itself.
+    async def find_by_widget_id(self, widget_id: str) -> Widget | None: ...
+
 
 class MongoWidgetRepository:
     """MongoDB-backed widget repository. All queries are tenant-scoped."""
@@ -29,20 +34,18 @@ class MongoWidgetRepository:
         await self._collection.insert_one(widget.to_doc())
 
     async def find_by_website_id(self, tenant_id: str, website_id: str) -> Widget | None:
-        doc = await self._collection.find_one(
-            {"tenant_id": tenant_id, "website_id": website_id}
-        )
+        doc = await self._collection.find_one({"tenant_id": tenant_id, "website_id": website_id})
         return Widget.from_doc(doc) if doc else None
 
     async def list_by_website_ids(self, tenant_id: str, website_ids: list[str]) -> list[Widget]:
         if not website_ids:
             return []
-        cursor = self._collection.find(
-            {"tenant_id": tenant_id, "website_id": {"$in": website_ids}}
-        )
+        cursor = self._collection.find({"tenant_id": tenant_id, "website_id": {"$in": website_ids}})
         return [Widget.from_doc(doc) async for doc in cursor]
 
     async def delete_by_website_id(self, tenant_id: str, website_id: str) -> None:
-        await self._collection.delete_many(
-            {"tenant_id": tenant_id, "website_id": website_id}
-        )
+        await self._collection.delete_many({"tenant_id": tenant_id, "website_id": website_id})
+
+    async def find_by_widget_id(self, widget_id: str) -> Widget | None:
+        doc = await self._collection.find_one({"widget_id": widget_id})
+        return Widget.from_doc(doc) if doc else None
