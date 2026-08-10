@@ -31,12 +31,17 @@ class _FakeModels:
         self._client = client
 
     async def generate_content_stream(self, model: str, contents: list, config: dict):
-        """Async generator mirroring the SDK surface (no await on call)."""
+        """Mirror the real SDK (2.17): an async def that *returns* a stream,
+        so callers must `await` it before iterating."""
         self._client.last_request = {"model": model, "contents": contents, "config": config}
-        for chunk in self._client.chunks:
-            if self._client.failures:
-                raise self._client.failures.pop(0)
-            yield chunk
+
+        async def _stream():
+            for chunk in self._client.chunks:
+                if self._client.failures:
+                    raise self._client.failures.pop(0)
+                yield chunk
+
+        return _stream()
 
 
 class _FakeAio:
@@ -79,9 +84,7 @@ async def test_streams_text_deltas_and_captures_usage(fake_sdk) -> None:
     client = _client(fake_sdk)
 
     deltas = []
-    async for delta in client.stream_generate(
-        system="sys", messages=[("user", "hi")]
-    ):
+    async for delta in client.stream_generate(system="sys", messages=[("user", "hi")]):
         deltas.append(delta)
 
     assert deltas == ["Hello ", "world"]

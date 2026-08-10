@@ -192,9 +192,7 @@ class WebsiteService:
         if url is not None:
             normalized_url = normalize_url(url)
             if normalized_url != website.url:
-                existing = await self._websites.find_by_url(
-                    principal.tenant_id, normalized_url
-                )
+                existing = await self._websites.find_by_url(principal.tenant_id, normalized_url)
                 if existing is not None and existing.id != website.id:
                     raise DuplicateWebsiteError("A website with this URL already exists.")
                 website.url = normalized_url

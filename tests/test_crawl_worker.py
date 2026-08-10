@@ -163,6 +163,7 @@ async def test_worker_acquires_crawl_semaphore(patch_dns, monkeypatch) -> None:
 
 async def test_worker_fails_permanently_on_ssrf_blocked_seed(patch_dns, monkeypatch) -> None:
     """SSRF-blocked seeds fail immediately instead of burning ARQ retries."""
+
     async def private_resolve(self, host: str) -> list[str]:
         return ["127.0.0.1"]
 
@@ -196,3 +197,49 @@ async def test_worker_keeps_job_active_on_transient_failure(patch_dns) -> None:
     website = websites.websites[list(websites.websites)[0]]
     assert website.status == "pending"
     assert not any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
+
+
+async def test_worker_enqueues_knowledge_pass_after_success(patch_dns) -> None:
+    """A successful crawl hands the documents off to the knowledge pipeline."""
+    ctx, job, jobs, documents, websites, audit = await _env()
+    enqueued: list[str] = []
+
+    async def fake_enqueue(website_id: str) -> None:
+        enqueued.append(website_id)
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        enqueue_knowledge=fake_enqueue,
+    )
+
+    assert result["status"] == "completed"
+    assert enqueued == [job.website_id]
+
+
+async def test_worker_skips_knowledge_pass_on_failure(patch_dns) -> None:
+    """No knowledge handoff on a failed crawl (nothing new to embed)."""
+    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
+    ctx["job_try"] = 3
+    enqueued: list[str] = []
+
+    async def fake_enqueue(website_id: str) -> None:
+        enqueued.append(website_id)
+
+    with pytest.raises(RuntimeError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            enqueue_knowledge=fake_enqueue,
+        )
+
+    assert enqueued == []

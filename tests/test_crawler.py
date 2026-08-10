@@ -85,7 +85,7 @@ async def test_deduplicates_normalized_links(guard) -> None:
 
 
 async def test_respects_max_depth(guard) -> None:
-    page2 = '<html><body><main><h1>Page 2</h1><p>Deep page.</p></main></body></html>'
+    page2 = "<html><body><main><h1>Page 2</h1><p>Deep page.</p></main></body></html>"
     home = (
         "<html><body><main>"
         "<h1>Home</h1><p>Home body.</p>"
@@ -149,15 +149,10 @@ async def test_skips_off_site_links(guard) -> None:
 
 
 async def test_respects_robots_disallow(guard) -> None:
-    robots = (
-        "User-agent: *\n"
-        "Disallow: /private\n"
-        "Disallow: /admin\n"
-        "Allow: /\n"
-    )
+    robots = "User-agent: *\nDisallow: /private\nDisallow: /admin\nAllow: /\n"
     fetcher = FakePageFetcher(
         {
-            SEED: '<html><body><main><h1>Home</h1><p>Home.</p>'
+            SEED: "<html><body><main><h1>Home</h1><p>Home.</p>"
             '<a href="/private/secret">Secret</a>'
             '<a href="/about">About</a></main></body></html>',
             "https://acme.example/robots.txt": robots,
@@ -207,8 +202,7 @@ async def test_skips_pages_exceeding_response_size_limit(guard) -> None:
     assert stored == 1  # only the seed is stored; /about exceeds the limit
     assert {d.url for d in session._documents.documents.values()} == {SEED}
     assert any(
-        e.url == "https://acme.example/about" and "size limit" in e.message
-        for e in session.errors
+        e.url == "https://acme.example/about" and "size limit" in e.message for e in session.errors
     )
 
 

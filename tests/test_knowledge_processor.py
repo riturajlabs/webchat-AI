@@ -117,6 +117,36 @@ async def test_embeds_document_and_updates_stats() -> None:
     assert any(log.action == AUDIT_KNOWLEDGE_PROCESSED for log in env.audit.logs)
 
 
+async def test_website_stats_are_persisted_after_processing() -> None:
+    """`_refresh_website` must persist, not just mutate (Mongo returns fresh
+    objects on every read, so in-memory-only changes would be lost)."""
+
+    class CopyOnReadWebsites(FakeWebsiteRepository):
+        async def find_by_id(self, tenant_id: str, website_id: str) -> Website | None:
+            website = await super().find_by_id(tenant_id, website_id)
+            return website.model_copy(deep=True) if website else None
+
+        async def find_by_id_any(self, website_id: str) -> Website | None:
+            website = self._websites.get(website_id)
+            return website.model_copy(deep=True) if website else None
+
+    env = await _env()
+    websites = CopyOnReadWebsites()
+    websites._websites = env.websites._websites
+    env.websites = websites
+    env.processor = _processor(env)
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    persisted = await websites.find_by_id(env.document.tenant_id, env.website.id)
+    assert persisted is not None
+    assert persisted.knowledge_chunks == result["chunks"]
+    assert persisted.knowledge_documents == 1
+    assert persisted.knowledge_status == KNOWLEDGE_STATUS_READY
+    assert persisted.last_knowledge_at is not None
+
+
 async def test_chunk_metadata_carries_source_and_document_ids() -> None:
     env = await _env()
 
@@ -234,9 +264,7 @@ async def test_website_fanout_enqueues_each_document() -> None:
     await env.documents.upsert(second)
     enqueue = RecordingEnqueue()
 
-    result = await env.processor.process_website_documents(
-        env.website.id, enqueue=enqueue
-    )
+    result = await env.processor.process_website_documents(env.website.id, enqueue=enqueue)
 
     assert result == {"status": "queued", "documents": 2}
     assert set(enqueue.document_ids) == {env.document.id, second.id}

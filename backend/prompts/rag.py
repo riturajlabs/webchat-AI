@@ -35,7 +35,7 @@ _SYSTEM_PROMPT_V1 = (
     "1. Answer only using the reference material. Never invent, guess, or use "
     "outside knowledge.\n"
     "2. If the reference material does not contain the answer, say exactly: "
-    '"I couldn\'t find that information in the website\'s knowledge base."\n'
+    "\"I couldn't find that information in the website's knowledge base.\"\n"
     "3. Keep answers short, friendly, accurate, and in the same language as the "
     "question.\n"
     "4. Cite sources by adding the matching [1], [2], ... markers after each claim.\n"

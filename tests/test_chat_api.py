@@ -108,9 +108,7 @@ async def test_chat_streams_answer_with_sources_and_done(client) -> None:
 
 async def test_chat_requires_authentication(client) -> None:
     test_client, _, _ = client
-    response = test_client.post(
-        "/api/chat/stream", json={"website_id": "web-1", "question": "Hi"}
-    )
+    response = test_client.post("/api/chat/stream", json={"website_id": "web-1", "question": "Hi"})
     assert response.status_code == 401
 
 

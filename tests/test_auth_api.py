@@ -95,9 +95,7 @@ def test_refresh_rotates_refresh_cookie_with_valid_csrf(client) -> None:
     assert csrf
     old_refresh = test_client.cookies.get("refresh_token")
 
-    response = test_client.post(
-        "/api/auth/refresh", headers={"X-CSRF-Token": csrf}
-    )
+    response = test_client.post("/api/auth/refresh", headers={"X-CSRF-Token": csrf})
 
     assert response.status_code == 200
     assert response.json()["access_token"]
@@ -139,9 +137,7 @@ def test_me_requires_bearer_token(client) -> None:
     access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
         "access_token"
     ]
-    response = test_client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
-    )
+    response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
     assert response.status_code == 200
     assert response.json()["email"] == "alice@example.com"
 
@@ -151,9 +147,7 @@ def test_verify_email_endpoint(client) -> None:
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
     verification_token = token_from_url(env.mail.sent[0])
 
-    response = test_client.post(
-        "/api/auth/verify-email", json={"token": verification_token}
-    )
+    response = test_client.post("/api/auth/verify-email", json={"token": verification_token})
 
     assert response.status_code == 200
     assert response.json()["message"] == "Email verified."
@@ -165,9 +159,7 @@ def test_forgot_password_endpoint_is_always_successful(client) -> None:
     test_client, env = client
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
 
-    response = test_client.post(
-        "/api/auth/forgot-password", json={"email": "alice@example.com"}
-    )
+    response = test_client.post("/api/auth/forgot-password", json={"email": "alice@example.com"})
 
     assert response.status_code == 200
     assert len(env.mail.sent) == 2

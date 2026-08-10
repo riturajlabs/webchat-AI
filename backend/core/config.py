@@ -82,14 +82,14 @@ class Settings(BaseSettings):
     # AI (Phase 4-6)
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
-    embedding_model: str = "text-embedding-004"
+    embedding_model: str = "gemini-embedding-001"
 
     # Knowledge processing (Phase 5, docs/06 implementation plan).
     # Approximate-token chunk sizing (docs/02-TRD.md §6: 500-800 tokens/chunk,
     # 100-token overlap).
     knowledge_chunk_size_tokens: int = 700
     knowledge_chunk_overlap_tokens: int = 100
-    # Embedding client (Google text-embedding-004 via the Gemini API, ADR-008).
+    # Embedding client (Google gemini-embedding-001 via the Gemini API, ADR-008).
     # The API key is never logged and never exposed through any API (00 rules §12).
     embedding_batch_size: int = 32
     embedding_max_retries: int = 5

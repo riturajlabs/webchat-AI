@@ -36,6 +36,7 @@ from backend.repositories import (
 )
 from backend.services.ingestion import BrowserPageFetcher, CrawlSession, SsrFGuard
 from backend.services.ingestion.browser import crawl_semaphore
+from backend.workers.jobs.knowledge import enqueue_process_website_documents
 
 logger = logging.getLogger("webchat_ai")
 
@@ -64,6 +65,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         documents=MongoDocumentRepository(db),
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
+        enqueue_knowledge=enqueue_process_website_documents,
     )
 
 
@@ -75,6 +77,7 @@ async def _run_crawl_job(
     documents: Any,
     websites: Any,
     audit: Any,
+    enqueue_knowledge: Any = None,
 ) -> dict[str, Any]:
     """Core worker logic, testable with fake repositories/fetcher injected.
 
@@ -140,16 +143,18 @@ async def _run_crawl_job(
         await crawl_jobs.update(job)
 
         website.status = WEBSITE_STATUS_READY
-        website.pages_indexed = await documents.count_by_website(
-            job.tenant_id, job.website_id
-        )
+        website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
         website.last_crawled_at = job.completed_at
         website.checksum = await _site_checksum(documents, job.tenant_id, job.website_id)
         website.updated_at = utcnow()
         await websites.update(website)
-        await audit.create(
-            AuditLog.new(action=AUDIT_CRAWL_COMPLETED, tenant_id=job.tenant_id)
-        )
+        await audit.create(AuditLog.new(action=AUDIT_CRAWL_COMPLETED, tenant_id=job.tenant_id))
+        if enqueue_knowledge is not None:
+            # Phase 5 handoff: fan the freshly crawled documents out as
+            # per-document embedding jobs (ADR-002 task registry). The website
+            # is marked `ready` here; `knowledge_chunks` is updated as each
+            # document's embedding lands.
+            await enqueue_knowledge(job.website_id)
         return {"status": "completed", "pages": stored}
     except InvalidUrlError as exc:
         # Deterministic failure: the seed is not crawlable (SSRF-blocked,
@@ -163,9 +168,7 @@ async def _run_crawl_job(
         website.status = WEBSITE_STATUS_FAILED
         website.updated_at = utcnow()
         await websites.update(website)
-        await audit.create(
-            AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id)
-        )
+        await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
         logger.warning("crawl job %s failed (permanent): %s", crawl_job_id, exc)
         return {"status": "failed"}
     except Exception as exc:
@@ -180,21 +183,15 @@ async def _run_crawl_job(
             website.status = WEBSITE_STATUS_FAILED
             website.updated_at = utcnow()
             await websites.update(website)
-            await audit.create(
-                AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id)
-            )
+            await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
         else:
             job.updated_at = utcnow()
             await crawl_jobs.update(job)
-        logger.warning(
-            "crawl job %s failed (try %s/%s): %s", crawl_job_id, job_try, max_tries, exc
-        )
+        logger.warning("crawl job %s failed (try %s/%s): %s", crawl_job_id, job_try, max_tries, exc)
         raise
 
 
-async def _site_checksum(
-    documents: Any, tenant_id: str, website_id: str
-) -> str:
+async def _site_checksum(documents: Any, tenant_id: str, website_id: str) -> str:
     """Aggregate checksum over the website's stored documents (Phase 5 diff)."""
     digests = await documents.all_checksums(tenant_id, website_id)
     return hashlib.sha256("".join(sorted(digests)).encode("utf-8")).hexdigest()

@@ -36,9 +36,7 @@ def _done_event(events):
 async def test_answers_from_retrieval_and_persists_everything() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="We offer Pro and Team plans."
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="We offer Pro and Team plans.")
 
     events = await _stream(
         env,
@@ -92,9 +90,7 @@ async def test_fallback_when_knowledge_base_empty_no_model_call() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=0)
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Anything at all?"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Anything at all?")
 
     assert env.generation.calls == []  # never call the model without context
     assert _message_event(events) == [UNKNOWN_ANSWER_FALLBACK]
@@ -111,9 +107,7 @@ async def test_fallback_when_no_search_hits_no_model_call() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="About nothing?"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="About nothing?")
 
     assert env.generation.calls == []
     assert _message_event(events) == [UNKNOWN_ANSWER_FALLBACK]
@@ -124,9 +118,7 @@ async def test_foreign_tenant_website_is_rejected() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
 
-    events = await _stream(
-        env, tenant_id=TENANT_B, website_id=WEB_1, question="Hello?"
-    )
+    events = await _stream(env, tenant_id=TENANT_B, website_id=WEB_1, question="Hello?")
 
     assert events == [
         {"event": "error", "data": {"code": "WEBSITE_NOT_FOUND", "message": "Website not found."}}
@@ -161,12 +153,8 @@ async def test_session_from_another_website_is_rejected() -> None:
         url="https://other.example",
         knowledge_chunks=1,
     )
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id="web-2", text="Other site data."
-    )
-    first_events = await _stream(
-        env, tenant_id=TENANT_A, website_id="web-2", question="Hi"
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id="web-2", text="Other site data.")
+    first_events = await _stream(env, tenant_id=TENANT_A, website_id="web-2", question="Hi")
     session_id = _done_event(first_events)["data"]["session_id"]
 
     events = await _stream(
@@ -185,13 +173,9 @@ async def test_session_from_another_website_is_rejected() -> None:
 async def test_conversation_memory_flows_into_prompt() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Pricing starts at $19."
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Pricing starts at $19.")
 
-    first = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="What are prices?"
-    )
+    first = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="What are prices?")
     session_id = _done_event(first)["data"]["session_id"]
 
     second = await _stream(
@@ -213,14 +197,10 @@ async def test_conversation_memory_flows_into_prompt() -> None:
 async def test_generation_failure_emits_error_and_persists_user_turn() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge."
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
     env.generation.failures = [GenerationError("model exploded")]
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
 
     assert events[0]["event"] == "sources"
     assert events[-1]["event"] == "error"
@@ -249,9 +229,7 @@ async def test_embedding_failure_emits_error_and_skips_model() -> None:
         usage=env.usage,
     )
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
 
     assert events[-1]["data"]["code"] == "EMBEDDING_UNAVAILABLE"
     assert env.generation.calls == []
@@ -260,14 +238,10 @@ async def test_embedding_failure_emits_error_and_skips_model() -> None:
 async def test_internal_errors_do_not_leak_details() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge."
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
     env.generation.failures = [RuntimeError("s3cr3t internal path")]
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
 
     error = events[-1]
     assert error["data"]["code"] == "INTERNAL_ERROR"
@@ -277,9 +251,7 @@ async def test_internal_errors_do_not_leak_details() -> None:
 async def test_question_is_sanitized_before_generation() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge."
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
 
     await _stream(
         env,
@@ -295,16 +267,10 @@ async def test_question_is_sanitized_before_generation() -> None:
 async def test_chunks_are_deduplicated_by_url_and_text() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Same content", chunk_index=0
-    )
-    await make_chunk(
-        env, tenant_id=TENANT_A, website_id=WEB_1, text="Same content", chunk_index=1
-    )
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Same content", chunk_index=0)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Same content", chunk_index=1)
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Tell me"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Tell me")
 
     sources = next(event for event in events if event["event"] == "sources")
     assert len(sources["data"]["sources"]) == 1
@@ -323,9 +289,7 @@ async def test_top_k_limits_retrieved_chunks() -> None:
             chunk_index=index,
         )
 
-    events = await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello"
-    )
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello")
 
     sources = next(event for event in events if event["event"] == "sources")
     assert len(sources["data"]["sources"]) == 2

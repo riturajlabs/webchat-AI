@@ -140,9 +140,7 @@ async def test_create_session_mints_scoped_token() -> None:
     widgets, tenants, _, _, service = _widget_env()
     _seed_widget(widgets, tenants)
 
-    token, expires_at = await service.create_session(
-        widget_id="widget-1", visitor_id="visitor-9"
-    )
+    token, expires_at = await service.create_session(widget_id="widget-1", visitor_id="visitor-9")
     assert token
     assert expires_at is not None
     assert "ws:session:widget-1:visitor-9" in service._store._data
@@ -173,9 +171,7 @@ async def test_validate_chat_accepts_ready_widget() -> None:
     _seed_widget(widgets, tenants)
     _seed_website(websites)
 
-    await service.validate_chat(
-        widget_id="widget-1", tenant_id="tenant-a", website_id="web-1"
-    )
+    await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
 
 
 async def test_validate_chat_rejects_foreign_widget() -> None:
@@ -193,9 +189,7 @@ async def test_validate_chat_rejects_disabled_widget() -> None:
     _seed_widget(widgets, tenants, enabled=False)
     _seed_website(websites)
     with pytest.raises(WidgetDisabledError):
-        await service.validate_chat(
-            widget_id="widget-1", tenant_id="tenant-a", website_id="web-1"
-        )
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
 
 
 async def test_validate_chat_rejects_suspended_tenant() -> None:
@@ -203,9 +197,7 @@ async def test_validate_chat_rejects_suspended_tenant() -> None:
     _seed_widget(widgets, tenants, tenant_status="suspended")
     _seed_website(websites)
     with pytest.raises(WidgetDisabledError):
-        await service.validate_chat(
-            widget_id="widget-1", tenant_id="tenant-a", website_id="web-1"
-        )
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
 
 
 async def test_validate_chat_rejects_not_ready_website() -> None:
@@ -213,9 +205,7 @@ async def test_validate_chat_rejects_not_ready_website() -> None:
     _seed_widget(widgets, tenants)
     _seed_website(websites, status=WEBSITE_STATUS_PENDING)
     with pytest.raises(WebsiteNotReadyError):
-        await service.validate_chat(
-            widget_id="widget-1", tenant_id="tenant-a", website_id="web-1"
-        )
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
 
 
 async def test_message_cap_reached_after_limit() -> None:
@@ -252,6 +242,4 @@ async def test_message_cap_fails_open_on_store_error() -> None:
             raise RuntimeError("redis down")
 
     service._store = _Boom()
-    await service.check_message_cap(
-        widget_id="widget-1", visitor_id="v1", session_id="session-1"
-    )
+    await service.check_message_cap(widget_id="widget-1", visitor_id="v1", session_id="session-1")

@@ -85,3 +85,63 @@ jobs:
 
       - name: Build Widget image
         run: docker build -f docker/Dockerfile.widget -t webchat-widget:ci .
+
+  # Widget E2E (Playwright) - full no-mock flow via scripts/e2e-widget.sh.
+  #
+  # Required services (docker/compose.dev.yml):
+  #   mongo, redis, mailpit, api, worker, widget
+  # Required secrets:
+  #   GEMINI_API_KEY - real embeddings for the crawl + RAG answer stream.
+  #
+  # The job self-skips when GEMINI_API_KEY is not configured so a fork/PR
+  # without the secret never breaks the pipeline; it is gated on the
+  # backend+frontend jobs passing to avoid burning resources on a red tree.
+  widget-e2e:
+    name: Widget E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip when GEMINI_API_KEY is not configured
+        if: env.GEMINI_API_KEY == ''
+        run: echo "GEMINI_API_KEY secret not set - skipping widget E2E"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Install Playwright browser
+        run: uv run python -m playwright install --with-deps chromium
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.13.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Provision .env for the E2E stack
+        if: env.GEMINI_API_KEY != ''
+        run: |
+          cp .env.example .env
+          # Real key for embeddings (never echo it).
+          sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY='"${GEMINI_API_KEY}"'|' .env
+          sed -i 's|^RATE_LIMIT_ENABLED=.*|RATE_LIMIT_ENABLED=false|' .env || true
+
+      - name: Run widget E2E (full no-mock flow)
+        if: env.GEMINI_API_KEY != ''
+        run: scripts/e2e-widget.sh

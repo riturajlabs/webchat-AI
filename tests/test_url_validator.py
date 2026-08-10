@@ -137,9 +137,7 @@ def test_normalize_crawl_url_strips_fragment_and_tracking() -> None:
 
 
 def test_normalize_crawl_url_resolves_relative_links() -> None:
-    assert (
-        normalize_crawl_url("/about", "https://acme.example/") == "https://acme.example/about"
-    )
+    assert normalize_crawl_url("/about", "https://acme.example/") == "https://acme.example/about"
     assert (
         normalize_crawl_url("about", "https://acme.example/docs/")
         == "https://acme.example/docs/about"

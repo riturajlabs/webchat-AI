@@ -66,13 +66,9 @@ class GoogleGeminiClient:
         settings = get_settings()
         self._model = model or settings.gemini_model
         self._max_output_tokens = max_output_tokens or settings.chat_max_output_tokens
-        self._temperature = (
-            temperature if temperature is not None else settings.chat_temperature
-        )
+        self._temperature = temperature if temperature is not None else settings.chat_temperature
         self._timeout_seconds = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else settings.generation_timeout_seconds
+            timeout_seconds if timeout_seconds is not None else settings.generation_timeout_seconds
         )
         self._genai_client = genai_client
         self._usage = GenerationUsage()
@@ -115,7 +111,10 @@ class GoogleGeminiClient:
             },
         }
         try:
-            stream = self._client().aio.models.generate_content_stream(**request)
+            # SDK 2.17: `aio.models.generate_content_stream` is an async def
+            # that *returns* the stream, so it must be awaited before
+            # iteration.
+            stream = await self._client().aio.models.generate_content_stream(**request)
             while True:
                 try:
                     chunk = await asyncio.wait_for(

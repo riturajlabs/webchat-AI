@@ -56,9 +56,7 @@ class MongoChatSessionRepository:
             )
 
     async def find_by_session_id(self, tenant_id: str, session_id: str) -> ChatSession | None:
-        doc = await self._collection.find_one(
-            {"session_id": session_id, "tenant_id": tenant_id}
-        )
+        doc = await self._collection.find_one({"session_id": session_id, "tenant_id": tenant_id})
         return ChatSession.from_doc(doc) if doc else None
 
     async def touch(self, session_id: str) -> None:

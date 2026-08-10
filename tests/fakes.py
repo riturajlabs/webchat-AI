@@ -174,7 +174,8 @@ class FakeWebsiteRepository:
         candidates = [
             website
             for website in self._websites.values()
-            if website.tenant_id == tenant_id and website.status != WEBSITE_STATUS_DELETED
+            if website.tenant_id == tenant_id
+            and website.status != WEBSITE_STATUS_DELETED
             and (status is None or website.status == status)
         ]
         reverse = order == "desc"
@@ -301,9 +302,7 @@ class FakeCrawlJobRepository:
     async def find_by_id_any(self, job_id: str) -> CrawlJob | None:
         return self._jobs.get(job_id)
 
-    async def find_active_for_website(
-        self, tenant_id: str, website_id: str
-    ) -> CrawlJob | None:
+    async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None:
         return next(
             (
                 job
@@ -381,11 +380,7 @@ class FakeEmbeddingClient:
 
     @property
     def embeddings(self) -> dict[str, list[float]]:
-        return {
-            text: self._vector(text)
-            for batch in self.calls
-            for text in batch
-        }
+        return {text: self._vector(text) for batch in self.calls for text in batch}
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         self.calls.append(texts)
@@ -660,7 +655,9 @@ class FakeGenerationClient:
         self.calls.append({"system": system, "messages": messages})
         if self.failures:
             raise self.failures.pop(0)
+
         async def _stream():
             for delta in self.deltas:
                 yield delta
+
         return _stream()

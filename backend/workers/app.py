@@ -19,6 +19,7 @@ from backend.workers import tasks
 
 _settings = get_settings()
 
+
 async def startup(ctx: dict[str, Any]) -> None:
     """Runs once when the worker starts."""
     ctx["app_name"] = _settings.app_name

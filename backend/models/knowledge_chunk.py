@@ -1,7 +1,7 @@
 """Knowledge chunk document model (Phase 5, docs/05-Backend-Schema.md §7).
 
 One `knowledge_chunks` document per semantic chunk of a crawled page: the clean
-text, its dense embedding (text-embedding-004), and the metadata needed by
+text, its dense embedding (gemini-embedding-001), and the metadata needed by
 Phase 6 retrieval (source URL, page title, heading). Every document carries
 `tenant_id`; every repository query is tenant-scoped
 (00-AI-Development-Rules.md §7).

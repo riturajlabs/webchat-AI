@@ -79,21 +79,15 @@ async def _run_process_document(
     return await processor.process_document(document_id)
 
 
-async def process_website_documents(
-    ctx: dict[str, Any], website_id: str
-) -> dict[str, Any]:
+async def process_website_documents(ctx: dict[str, Any], website_id: str) -> dict[str, Any]:
     """Worker task: fan a website's documents out as per-document jobs."""
-    return await _run_process_website(
-        ctx, website_id, _processor(ctx, _embedder(ctx))
-    )
+    return await _run_process_website(ctx, website_id, _processor(ctx, _embedder(ctx)))
 
 
 async def _run_process_website(
     ctx: dict[str, Any], website_id: str, processor: KnowledgeProcessor
 ) -> dict[str, Any]:
-    return await processor.process_website_documents(
-        website_id, enqueue=enqueue_process_document
-    )
+    return await processor.process_website_documents(website_id, enqueue=enqueue_process_document)
 
 
 __all__ = [

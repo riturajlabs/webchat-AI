@@ -273,12 +273,8 @@ class RagService:
             raise SessionNotFoundError("Chat session not found.")
         return existing
 
-    async def _load_history(
-        self, tenant_id: str, session_id: str
-    ) -> list[tuple[str, str]]:
-        recent = await self._messages.list_recent(
-            tenant_id, session_id, limit=self._memory_turns
-        )
+    async def _load_history(self, tenant_id: str, session_id: str) -> list[tuple[str, str]]:
+        recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
         return [(message.role, message.content) for message in recent]
 
     def _build_context(
@@ -296,9 +292,7 @@ class RagService:
             if key in seen:
                 continue
             seen.add(key)
-            items.append(
-                ContextItem(url=url, title=title, heading=None, text=chunk.chunk_text)
-            )
+            items.append(ContextItem(url=url, title=title, heading=None, text=chunk.chunk_text))
             sources.append(
                 {
                     "chunk_id": chunk.id,

@@ -70,9 +70,7 @@ class CrawlService:
         website = await self._websites.find_by_id(principal.tenant_id, website_id)
         if website is None:
             raise WebsiteNotFoundError("Website not found.")
-        active = await self._crawl_jobs.find_active_for_website(
-            principal.tenant_id, website_id
-        )
+        active = await self._crawl_jobs.find_active_for_website(principal.tenant_id, website_id)
         if active is not None:
             raise CrawlConflictError("A crawl is already in progress for this website.")
 

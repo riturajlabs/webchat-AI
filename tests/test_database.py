@@ -55,9 +55,9 @@ async def test_init_indexes_declares_required_user_indexes(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["users"])
-    assert ("email", True) in indexes          # unique login key (race gatekeeper)
-    assert ("tenant_id", False) in indexes      # tenant-scoped queries
-    assert ("status", False) in indexes         # suspension filtering
+    assert ("email", True) in indexes  # unique login key (race gatekeeper)
+    assert ("tenant_id", False) in indexes  # tenant-scoped queries
+    assert ("status", False) in indexes  # suspension filtering
 
 
 async def test_init_indexes_declares_required_refresh_token_indexes(monkeypatch) -> None:
@@ -67,11 +67,12 @@ async def test_init_indexes_declares_required_refresh_token_indexes(monkeypatch)
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["refresh_tokens"])
-    assert ("token_hash", True) in indexes      # reuse detection lookup
-    assert ("tenant_id", False) in indexes      # tenant-scoped queries
-    assert ("user_id", False) in indexes        # logout / revoke-all-for-user
-    ttl = [kwargs for keys, kwargs in db["refresh_tokens"].indexes
-           if kwargs.get("expireAfterSeconds")]
+    assert ("token_hash", True) in indexes  # reuse detection lookup
+    assert ("tenant_id", False) in indexes  # tenant-scoped queries
+    assert ("user_id", False) in indexes  # logout / revoke-all-for-user
+    ttl = [
+        kwargs for keys, kwargs in db["refresh_tokens"].indexes if kwargs.get("expireAfterSeconds")
+    ]
     assert ttl == [{"expireAfterSeconds": REFRESH_TOKEN_TTL}]
 
 
@@ -82,10 +83,7 @@ async def test_init_indexes_declares_member_unique_compound_index(monkeypatch) -
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["members"])
-    assert any(
-        keys == (("tenant_id", 1), ("user_id", 1)) and unique
-        for (keys, unique) in indexes
-    )
+    assert any(keys == (("tenant_id", 1), ("user_id", 1)) and unique for (keys, unique) in indexes)
 
 
 async def test_init_indexes_declares_audit_log_ttl_of_one_year(monkeypatch) -> None:
@@ -94,12 +92,13 @@ async def test_init_indexes_declares_audit_log_ttl_of_one_year(monkeypatch) -> N
 
     await MongoDB.init_indexes()
 
-    ttl = [kwargs for keys, kwargs in db["audit_logs"].indexes
-           if kwargs.get("expireAfterSeconds")]
+    ttl = [kwargs for keys, kwargs in db["audit_logs"].indexes if kwargs.get("expireAfterSeconds")]
     assert ttl == [{"expireAfterSeconds": AUDIT_LOG_TTL}]
     # The tenant-scoped sort index is also present (ADR-006 audit viewer).
-    assert any("tenant_id" in str(keys) and "created_at" in str(keys)
-               for keys, _ in db["audit_logs"].indexes)
+    assert any(
+        "tenant_id" in str(keys) and "created_at" in str(keys)
+        for keys, _ in db["audit_logs"].indexes
+    )
 
 
 async def test_init_indexes_declares_website_indexes(monkeypatch) -> None:
@@ -110,10 +109,7 @@ async def test_init_indexes_declares_website_indexes(monkeypatch) -> None:
 
     indexes = _index_map(db["websites"])
     # The unique (tenant_id, url) pair is the duplicate gatekeeper (Phase 3).
-    assert any(
-        keys == (("tenant_id", 1), ("url", 1)) and unique
-        for (keys, unique) in indexes
-    )
+    assert any(keys == (("tenant_id", 1), ("url", 1)) and unique for (keys, unique) in indexes)
     assert ("tenant_id", False) in indexes
     assert ("url", False) in indexes
 
@@ -125,12 +121,11 @@ async def test_init_indexes_declares_widget_indexes(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["widgets"])
-    assert ("widget_id", True) in indexes        # public widget identifier
-    assert ("tenant_id", False) in indexes        # tenant-scoped queries
+    assert ("widget_id", True) in indexes  # public widget identifier
+    assert ("tenant_id", False) in indexes  # tenant-scoped queries
     # One widget per (tenant, website): (tenant_id, website_id) unique.
     assert any(
-        keys == (("tenant_id", 1), ("website_id", 1)) and unique
-        for (keys, unique) in indexes
+        keys == (("tenant_id", 1), ("website_id", 1)) and unique for (keys, unique) in indexes
     )
 
 
@@ -140,8 +135,7 @@ async def test_init_indexes_declares_crawl_job_ttl_of_30_days(monkeypatch) -> No
 
     await MongoDB.init_indexes()
 
-    ttl = [kwargs for keys, kwargs in db["crawl_jobs"].indexes
-           if kwargs.get("expireAfterSeconds")]
+    ttl = [kwargs for keys, kwargs in db["crawl_jobs"].indexes if kwargs.get("expireAfterSeconds")]
     assert ttl == [{"expireAfterSeconds": CRAWL_JOB_TTL}]
     # The status index drives the active-job gatekeeper and admin queue monitor.
     assert any(
@@ -174,14 +168,12 @@ async def test_init_indexes_declares_chat_session_indexes(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["chat_sessions"])
-    assert ("session_id", True) in indexes       # conversation key (docs/05 §9)
-    assert ("tenant_id", False) in indexes        # tenant-scoped queries
+    assert ("session_id", True) in indexes  # conversation key (docs/05 §9)
+    assert ("tenant_id", False) in indexes  # tenant-scoped queries
     assert any(
-        keys == (("tenant_id", 1), ("website_id", 1)) and not unique
-        for (keys, unique) in indexes
+        keys == (("tenant_id", 1), ("website_id", 1)) and not unique for (keys, unique) in indexes
     )
-    ttl = [kwargs for keys, kwargs in db["chat_sessions"].indexes
-           if "expireAfterSeconds" in kwargs]
+    ttl = [kwargs for keys, kwargs in db["chat_sessions"].indexes if "expireAfterSeconds" in kwargs]
     assert ttl == [{"expireAfterSeconds": CHAT_SESSION_TTL}]
 
 
@@ -199,8 +191,7 @@ async def test_init_indexes_declares_message_indexes(monkeypatch) -> None:
         keys == (("tenant_id", 1), ("session_id", 1), ("created_at", 1)) and not unique
         for (keys, unique) in indexes
     )
-    ttl = [kwargs for keys, kwargs in db["messages"].indexes
-           if kwargs.get("expireAfterSeconds")]
+    ttl = [kwargs for keys, kwargs in db["messages"].indexes if kwargs.get("expireAfterSeconds")]
     assert ttl == [{"expireAfterSeconds": CHAT_TTL}]
 
 
@@ -218,6 +209,7 @@ async def test_init_indexes_declares_usage_record_indexes(monkeypatch) -> None:
     )
     assert ("tenant_id", False) in indexes
     assert ("date", False) in indexes
-    ttl = [kwargs for keys, kwargs in db["usage_records"].indexes
-           if kwargs.get("expireAfterSeconds")]
+    ttl = [
+        kwargs for keys, kwargs in db["usage_records"].indexes if kwargs.get("expireAfterSeconds")
+    ]
     assert ttl == [{"expireAfterSeconds": USAGE_TTL}]

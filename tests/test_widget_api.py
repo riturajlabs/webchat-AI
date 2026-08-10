@@ -58,6 +58,9 @@ def client(monkeypatch):
     """A TestClient whose widget + rag services are backed by fakes."""
     monkeypatch.setenv("COOKIE_SECURE", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    # Hermetic: a developer's .env may enable the widget limiter (which needs
+    # live Redis); the fakes below don't provide one, so pin it off here.
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
     chat_env = build_chat_env()
     widget_service = _build_widget_service(chat_env.websites)

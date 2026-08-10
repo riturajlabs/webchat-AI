@@ -127,10 +127,7 @@ def test_async_resolution_is_fresh_each_call_not_cached(monkeypatch) -> None:
 
         async def getaddrinfo(self, host: str, port, **kwargs):
             self.calls += 1
-            return [
-                (socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 80))
-                for ip in _PUBLIC_IPS
-            ]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 80)) for ip in _PUBLIC_IPS]
 
     loop = _Loop()
     monkeypatch.setattr(asyncio, "get_running_loop", lambda: loop)

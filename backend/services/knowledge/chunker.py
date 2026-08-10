@@ -3,7 +3,7 @@
 Splits cleaned page text into overlapping chunks sized by an approximate
 tokenizer (words + punctuation runs). Chunk sizing is deterministic and
 dependency-free: ~1 token per word or punctuation cluster, which tracks the
-dense-embedding behavior of `text-embedding-004` closely enough for chunk
+dense-embedding behavior of `gemini-embedding-001` closely enough for chunk
 boundaries. Defaults follow the TRD: 500-800 tokens per chunk with a 100-token
 overlap (ADR-008, Phase 5).
 """

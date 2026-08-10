@@ -54,9 +54,7 @@ def _create_website(
     url: str = "https://example.com",
     name: str = "Example",
 ) -> dict:
-    response = test_client.post(
-        "/api/websites", json={"name": name, "url": url}, headers=headers
-    )
+    response = test_client.post("/api/websites", json={"name": name, "url": url}, headers=headers)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -71,7 +69,7 @@ def test_create_website_returns_website_widget_secret_and_script(client) -> None
     assert website["status"] == "pending"
     assert website["widget_id"]
     assert body["widget_secret"]
-    assert body["embed_script"].startswith('<script src=')
+    assert body["embed_script"].startswith("<script src=")
     assert website["widget_id"] in body["embed_script"]
     assert len(env.websites.websites) == 1
     assert len(env.widgets.widgets) == 1
@@ -132,9 +130,7 @@ def test_get_website_detail(client) -> None:
 
 def test_get_website_missing_returns_404(client) -> None:
     test_client, _ = client
-    response = test_client.get(
-        "/api/websites/missing-id", headers=_auth_headers(test_client)
-    )
+    response = test_client.get("/api/websites/missing-id", headers=_auth_headers(test_client))
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "WEBSITE_NOT_FOUND"
 
@@ -203,9 +199,7 @@ def test_delete_website_returns_204(client) -> None:
 
 def test_delete_website_missing_returns_404(client) -> None:
     test_client, _ = client
-    response = test_client.delete(
-        "/api/websites/missing-id", headers=_auth_headers(test_client)
-    )
+    response = test_client.delete("/api/websites/missing-id", headers=_auth_headers(test_client))
     assert response.status_code == 404
 
 
@@ -244,9 +238,7 @@ def test_list_websites_paginates_and_sorts(client) -> None:
     )
     assert [website["name"] for website in response.json()] == ["Gamma"]
 
-    response = test_client.get(
-        "/api/websites?limit=1&sort=name&order=desc", headers=headers
-    )
+    response = test_client.get("/api/websites?limit=1&sort=name&order=desc", headers=headers)
     assert [website["name"] for website in response.json()] == ["Gamma"]
 
 

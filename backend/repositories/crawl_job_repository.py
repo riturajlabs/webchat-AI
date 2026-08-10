@@ -21,9 +21,7 @@ class CrawlJobRepository(Protocol):
 
     async def find_by_id(self, tenant_id: str, job_id: str) -> CrawlJob | None: ...
 
-    async def find_active_for_website(
-        self, tenant_id: str, website_id: str
-    ) -> CrawlJob | None: ...
+    async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None: ...
 
     async def update(self, job: CrawlJob) -> None: ...
 
@@ -50,9 +48,7 @@ class MongoCrawlJobRepository:
         doc = await self._collection.find_one({"_id": job_id})
         return CrawlJob.from_doc(doc) if doc else None
 
-    async def find_active_for_website(
-        self, tenant_id: str, website_id: str
-    ) -> CrawlJob | None:
+    async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None:
         """Return the most recent non-terminal job for a website, if any."""
         doc = await self._collection.find_one(
             {

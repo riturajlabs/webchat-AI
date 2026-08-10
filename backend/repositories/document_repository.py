@@ -72,21 +72,15 @@ class MongoDocumentRepository:
         return [str(doc["checksum"]) async for doc in cursor]
 
     async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None:
-        doc = await self._collection.find_one(
-            {"_id": document_id, "tenant_id": tenant_id}
-        )
+        doc = await self._collection.find_one({"_id": document_id, "tenant_id": tenant_id})
         return Document.from_doc(doc) if doc is not None else None
 
     async def find_by_id_any(self, document_id: str) -> Document | None:
         doc = await self._collection.find_one({"_id": document_id})
         return Document.from_doc(doc) if doc is not None else None
 
-    async def list_by_website(
-        self, tenant_id: str, website_id: str
-    ) -> list[Document]:
-        cursor = self._collection.find(
-            {"tenant_id": tenant_id, "website_id": website_id}
-        )
+    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]:
+        cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
         return [Document.from_doc(doc) async for doc in cursor]
 
 

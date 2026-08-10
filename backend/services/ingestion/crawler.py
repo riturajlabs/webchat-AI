@@ -123,9 +123,7 @@ class CrawlSession:
 
             extracted = extract_page(page.html, page.url)
             final_url = normalize_crawl_url(page.url, page.url) or page.url
-            content = clean_html(
-                page.html, max_chars=self._settings.crawl_max_content_bytes
-            )
+            content = clean_html(page.html, max_chars=self._settings.crawl_max_content_bytes)
             if not content:
                 self._record_error(final_url, "No extractable content found.")
                 continue

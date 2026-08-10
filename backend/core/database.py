@@ -92,15 +92,9 @@ class MongoDB:
         await db["refresh_tokens"].create_index(
             "expires_at", expireAfterSeconds=_REFRESH_TOKEN_TTL_SECONDS
         )
-        await db["members"].create_index(
-            [("tenant_id", 1), ("user_id", 1)], unique=True
-        )
-        await db["audit_logs"].create_index(
-            [("tenant_id", 1), ("created_at", -1)]
-        )
-        await db["audit_logs"].create_index(
-            "created_at", expireAfterSeconds=_AUDIT_LOG_TTL_SECONDS
-        )
+        await db["members"].create_index([("tenant_id", 1), ("user_id", 1)], unique=True)
+        await db["audit_logs"].create_index([("tenant_id", 1), ("created_at", -1)])
+        await db["audit_logs"].create_index("created_at", expireAfterSeconds=_AUDIT_LOG_TTL_SECONDS)
         # Phase 3 website management (docs/05 §5-6, ADR-005 §5.3).
         # (tenant_id, url) is unique: the race-free duplicate gatekeeper.
         await db["websites"].create_index([("tenant_id", 1), ("url", 1)], unique=True)
@@ -114,9 +108,7 @@ class MongoDB:
         await db["crawl_jobs"].create_index("tenant_id")
         await db["crawl_jobs"].create_index("website_id")
         await db["crawl_jobs"].create_index([("tenant_id", 1), ("status", 1)])
-        await db["crawl_jobs"].create_index(
-            "created_at", expireAfterSeconds=_CRAWL_JOB_TTL_SECONDS
-        )
+        await db["crawl_jobs"].create_index("created_at", expireAfterSeconds=_CRAWL_JOB_TTL_SECONDS)
         await db["documents"].create_index(
             [("tenant_id", 1), ("website_id", 1), ("url", 1)], unique=True
         )
@@ -138,9 +130,7 @@ class MongoDB:
         await db["knowledge_chunks"].create_index("tenant_id")
         await db["knowledge_chunks"].create_index("website_id")
         await db["knowledge_chunks"].create_index("document_id")
-        await db["knowledge_chunks"].create_index(
-            [("tenant_id", 1), ("website_id", 1)]
-        )
+        await db["knowledge_chunks"].create_index([("tenant_id", 1), ("website_id", 1)])
         # Phase 6 RAG pipeline (docs/05 §9-10, ADR-005 §5.5-5.8).
         # `session_id` is unique: the conversation key used by messages and the
         # future widget API. TTLs: sessions on `expires_at`, messages on
@@ -153,12 +143,8 @@ class MongoDB:
         )
         await db["messages"].create_index("tenant_id")
         await db["messages"].create_index("session_id")
-        await db["messages"].create_index(
-            [("tenant_id", 1), ("session_id", 1), ("created_at", 1)]
-        )
-        await db["messages"].create_index(
-            "created_at", expireAfterSeconds=_messages_ttl_seconds()
-        )
+        await db["messages"].create_index([("tenant_id", 1), ("session_id", 1), ("created_at", 1)])
+        await db["messages"].create_index("created_at", expireAfterSeconds=_messages_ttl_seconds())
         await db["usage_records"].create_index(
             [("tenant_id", 1), ("website_id", 1), ("date", 1)], unique=True
         )

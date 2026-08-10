@@ -69,9 +69,7 @@ class KnowledgeProcessor:
         website = await self._websites.find_by_id_any(website_id)
         if website is None or website.status == WEBSITE_STATUS_DELETED:
             return {"status": "not_found"}
-        documents = await self._documents.list_by_website(
-            website.tenant_id, website_id
-        )
+        documents = await self._documents.list_by_website(website.tenant_id, website_id)
         if not documents:
             return {"status": "no_documents"}
         website.knowledge_status = KNOWLEDGE_STATUS_PROCESSING
@@ -90,15 +88,11 @@ class KnowledgeProcessor:
         document = await self._documents.find_by_id_any(document_id)
         if document is None:
             return {"status": "not_found"}
-        website = await self._websites.find_by_id(
-            document.tenant_id, document.website_id
-        )
+        website = await self._websites.find_by_id(document.tenant_id, document.website_id)
         if website is None:
             return {"status": "skipped", "reason": "website_missing"}
 
-        existing_chunks = await self._chunks.count_by_document(
-            document.tenant_id, document.id
-        )
+        existing_chunks = await self._chunks.count_by_document(document.tenant_id, document.id)
         if document.knowledge_checksum == document.checksum and existing_chunks > 0:
             return {"status": "unchanged"}
 
@@ -111,19 +105,17 @@ class KnowledgeProcessor:
             if not text_chunks:
                 # Nothing embeddable (empty page): drop stale chunks and record
                 # a clean "processed with no content" state.
-                await self._vector.delete_by_document(
-                    document.tenant_id, document.id
-                )
+                await self._vector.delete_by_document(document.tenant_id, document.id)
                 await self._record_document(
-                    document, status=KNOWLEDGE_STATUS_READY,
-                    checksum=document.checksum, chunks=0,
+                    document,
+                    status=KNOWLEDGE_STATUS_READY,
+                    checksum=document.checksum,
+                    chunks=0,
                 )
                 await self._refresh_website(website)
                 return {"status": "no_content"}
 
-            vectors = await self._embedder.embed(
-                [text_chunk.text for text_chunk in text_chunks]
-            )
+            vectors = await self._embedder.embed([text_chunk.text for text_chunk in text_chunks])
         except EmbeddingError:
             await self._record_document(
                 document,
@@ -143,8 +135,10 @@ class KnowledgeProcessor:
         await self._vector.insert_chunks(chunks)
 
         await self._record_document(
-            document, status=KNOWLEDGE_STATUS_READY,
-            checksum=document.checksum, chunks=len(chunks),
+            document,
+            status=KNOWLEDGE_STATUS_READY,
+            checksum=document.checksum,
+            chunks=len(chunks),
         )
         await self._refresh_website(website)
         await self._audit.create(
@@ -197,7 +191,7 @@ class KnowledgeProcessor:
         await self._documents.upsert(document)
 
     async def _refresh_website(self, website: Website) -> None:
-        """Recompute dashboard knowledge statistics for a website."""
+        """Recompute and persist dashboard knowledge statistics for a website."""
         website.knowledge_chunks = await self._chunks.count_by_website(
             website.tenant_id, website.id
         )
@@ -209,6 +203,7 @@ class KnowledgeProcessor:
         )
         website.last_knowledge_at = utcnow()
         website.updated_at = utcnow()
+        await self._websites.update(website)
 
 
 __all__ = ["KnowledgeProcessor"]

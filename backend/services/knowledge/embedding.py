@@ -1,6 +1,6 @@
 """Embedding generation for the knowledge base (Phase 5, ADR-008).
 
-`GoogleEmbeddingClient` calls `text-embedding-004` through the Google GenAI
+`GoogleEmbeddingClient` calls `gemini-embedding-001` through the Google GenAI
 async SDK (`client.aio.models.embed_content`). Texts are sent in configurable
 batches, each batch retried with exponential backoff and jitter, and every
 successful batch reports usage through an optional hook. Application code
@@ -41,7 +41,7 @@ class EmbeddingClient(Protocol):
 
 
 class GoogleEmbeddingClient:
-    """`text-embedding-004` via the Google GenAI async SDK."""
+    """`gemini-embedding-001` via the Google GenAI async SDK."""
 
     def __init__(
         self,
@@ -108,9 +108,7 @@ class GoogleEmbeddingClient:
         for attempt in range(self._max_retries):
             try:
                 vectors = await asyncio.wait_for(
-                    self._client().aio.models.embed_content(
-                        model=self._model, contents=batch
-                    ),
+                    self._client().aio.models.embed_content(model=self._model, contents=batch),
                     timeout=self._timeout_seconds,
                 )
                 parsed = self._parse_response(vectors, len(batch))

@@ -81,9 +81,7 @@ class BrowserPageFetcher:
         page = await context.new_page()
         try:
             await self._install_route_guard(page)
-            response = await page.goto(
-                url, wait_until="domcontentloaded", timeout=self._timeout_ms
-            )
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
             if response is None:
                 raise FetchError(f"No response for {url}.")
             if response.status >= 400:

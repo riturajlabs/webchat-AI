@@ -82,8 +82,7 @@ async def test_list_recent_returns_latest_messages_in_chronological_order() -> N
     # 12 turns in one session; memory_turns defaults to 8.
     start = datetime(2026, 8, 1, 12, 0, 0)
     messages = [
-        _message(start + timedelta(minutes=index), content=f"turn-{index}")
-        for index in range(12)
+        _message(start + timedelta(minutes=index), content=f"turn-{index}") for index in range(12)
     ]
     repo = MongoChatMessageRepository(_FakeDb(_FakeMessageCollection(_docs(messages))))
 
@@ -101,8 +100,7 @@ async def test_list_recent_returns_latest_messages_in_chronological_order() -> N
 async def test_list_recent_returns_all_when_below_limit() -> None:
     start = datetime(2026, 8, 1, 12, 0, 0)
     messages = [
-        _message(start + timedelta(minutes=index), content=f"turn-{index}")
-        for index in range(3)
+        _message(start + timedelta(minutes=index), content=f"turn-{index}") for index in range(3)
     ]
     repo = MongoChatMessageRepository(_FakeDb(_FakeMessageCollection(_docs(messages))))
 
@@ -123,9 +121,7 @@ async def test_list_recent_is_tenant_scoped() -> None:
         content="foreign",
         created_at=start,
     )
-    repo = MongoChatMessageRepository(
-        _FakeDb(_FakeMessageCollection(_docs([own, foreign])))
-    )
+    repo = MongoChatMessageRepository(_FakeDb(_FakeMessageCollection(_docs([own, foreign]))))
 
     recent = await repo.list_recent(TENANT, SESSION, limit=8)
 

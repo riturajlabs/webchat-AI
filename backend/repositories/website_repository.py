@@ -102,12 +102,7 @@ class MongoWebsiteRepository:
         if status is not None:
             query["status"] = status
         direction = ASCENDING if order == "asc" else DESCENDING
-        cursor = (
-            self._collection.find(query)
-            .sort(sort, direction)
-            .skip(offset)
-            .limit(limit)
-        )
+        cursor = self._collection.find(query).sort(sort, direction).skip(offset).limit(limit)
         return [Website.from_doc(doc) async for doc in cursor]
 
     async def count_by_tenant(self, tenant_id: str, *, status: str | None = None) -> int:

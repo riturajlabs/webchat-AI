@@ -60,13 +60,19 @@ async def test_register_creates_tenant_user_member_audit_and_email() -> None:
 async def test_register_duplicate_email_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     with pytest.raises(DuplicateEmailError):
         await env.service.register(
-            name="Bob", email="alice@example.com", password=VALID_PASSWORD,
-            ip_address=None, user_agent=None,
+            name="Bob",
+            email="alice@example.com",
+            password=VALID_PASSWORD,
+            ip_address=None,
+            user_agent=None,
         )
 
 
@@ -78,8 +84,11 @@ async def test_register_concurrent_duplicate_returns_409_code() -> None:
     """
     env = build_auth_env()
     existing = await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
 
     class RacingUsers(FakeUserRepository):
@@ -96,8 +105,11 @@ async def test_register_concurrent_duplicate_returns_409_code() -> None:
 
     with pytest.raises(DuplicateEmailError) as exc_info:
         await env.service.register(
-            name="Bob", email="alice@example.com", password=VALID_PASSWORD,
-            ip_address=None, user_agent=None,
+            name="Bob",
+            email="alice@example.com",
+            password=VALID_PASSWORD,
+            ip_address=None,
+            user_agent=None,
         )
     assert exc_info.value.status_code == 409
     assert exc_info.value.code == "EMAIL_ALREADY_EXISTS"
@@ -111,16 +123,22 @@ async def test_register_weak_password_rejected() -> None:
     env = build_auth_env()
     with pytest.raises(ValueError):
         await env.service.register(
-            name="Alice", email="alice@example.com", password="short",
-            ip_address=None, user_agent=None,
+            name="Alice",
+            email="alice@example.com",
+            password="short",
+            ip_address=None,
+            user_agent=None,
         )
 
 
 async def test_login_success_updates_last_login_and_audits() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     result = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address="9.9.9.9", user_agent="ua"
@@ -136,8 +154,11 @@ async def test_login_success_updates_last_login_and_audits() -> None:
 async def test_login_wrong_password_rejected_with_generic_error() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     with pytest.raises(InvalidCredentialsError) as exc:
         await env.service.login(
@@ -160,8 +181,11 @@ async def test_login_unknown_email_rejected_with_same_error() -> None:
 async def test_login_suspended_user_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     user = env.users.users[next(iter(env.users.users))]
     user.status = "suspended"
@@ -174,8 +198,11 @@ async def test_login_suspended_user_rejected() -> None:
 async def test_login_suspended_tenant_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     tenant = env.tenants.tenants[next(iter(env.tenants.tenants))]
     tenant.status = "suspended"
@@ -188,8 +215,11 @@ async def test_login_suspended_tenant_rejected() -> None:
 async def test_verify_email_marks_user_verified_and_audits() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     token = token_from_url(env.mail.sent[0])
 
@@ -202,8 +232,11 @@ async def test_verify_email_marks_user_verified_and_audits() -> None:
 async def test_verify_email_invalid_token_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     with pytest.raises(InvalidTokenError):
         await env.service.verify_email(token="garbage-token", ip_address=None, user_agent=None)
@@ -212,8 +245,11 @@ async def test_verify_email_invalid_token_rejected() -> None:
 async def test_refresh_rotates_token_and_revokes_previous() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
@@ -241,8 +277,11 @@ async def test_refresh_rotates_token_and_revokes_previous() -> None:
 async def test_refresh_reuse_detection_revokes_all_and_alerts() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
@@ -276,8 +315,11 @@ async def test_refresh_unknown_token_rejected() -> None:
 async def test_refresh_expired_token_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
@@ -298,8 +340,11 @@ async def test_refresh_expired_token_rejected() -> None:
 async def test_logout_revokes_all_and_audits() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
@@ -320,9 +365,7 @@ async def test_logout_revokes_all_and_audits() -> None:
 
 async def test_forgot_password_unknown_email_is_silent() -> None:
     env = build_auth_env()
-    await env.service.forgot_password(
-        email="ghost@example.com", ip_address=None, user_agent=None
-    )
+    await env.service.forgot_password(email="ghost@example.com", ip_address=None, user_agent=None)
     assert env.mail.sent == []
     assert env.audit.logs == []
 
@@ -330,13 +373,14 @@ async def test_forgot_password_unknown_email_is_silent() -> None:
 async def test_forgot_password_sends_versioned_reset_link() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
 
-    await env.service.forgot_password(
-        email="alice@example.com", ip_address=None, user_agent=None
-    )
+    await env.service.forgot_password(email="alice@example.com", ip_address=None, user_agent=None)
 
     assert env.audit.logs[-1].action == AUDIT_FORGOT_PASSWORD
     assert len(env.mail.sent) == 2
@@ -350,8 +394,11 @@ async def test_forgot_password_sends_versioned_reset_link() -> None:
 async def test_reset_password_updates_hash_increments_version_and_revokes_sessions() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     # Establish a session; the reset must revoke it.
     await env.service.login(
@@ -381,8 +428,11 @@ async def test_reset_password_updates_hash_increments_version_and_revokes_sessio
 async def test_reset_password_reused_link_rejected() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     user = env.users.users[next(iter(env.users.users))]
     token = create_password_reset_token(user.id, user.pwd_token_version)
@@ -399,8 +449,11 @@ async def test_reset_password_reused_link_rejected() -> None:
 async def test_rbac_role_resolved_from_membership() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     user = env.users.users[next(iter(env.users.users))]
     member = env.members.members[next(iter(env.members.members))]
@@ -420,8 +473,11 @@ async def test_rbac_role_resolved_from_membership() -> None:
 async def test_authenticate_rejects_wrong_tenant_token() -> None:
     env = build_auth_env()
     await env.service.register(
-        name="Alice", email="alice@example.com", password=VALID_PASSWORD,
-        ip_address=None, user_agent=None,
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
     )
     user = env.users.users[next(iter(env.users.users))]
     forged = create_access_token(user.id, "other-tenant-id", "owner")[0]

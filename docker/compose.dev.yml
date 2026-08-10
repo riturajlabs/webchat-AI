@@ -4,10 +4,21 @@
 
 name: webchat-ai
 
+# Docker's default bridge MTU (1500) breaks outbound HTTPS when the host's
+# egress link has a smaller path MTU (e.g. a VPN tunnel): oversized handshake
+# packets are silently dropped and TLS stalls. Set DOCKER_BRIDGE_MTU to the
+# host's path MTU (see .env.example) so container traffic matches the host.
+networks:
+  webchat:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: ${DOCKER_BRIDGE_MTU:-1500}
+
 services:
   mongo:
     image: mongo:7
     container_name: webchat-mongo
+    networks: [webchat]
     restart: unless-stopped
     # No host port: api/worker reach it via the compose network as "mongo".
     # A native MongoDB (or other container) on 27017 does not collide.
@@ -23,6 +34,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: webchat-redis
+    networks: [webchat]
     restart: unless-stopped
     # No host port: see mongo note above (native redis often occupies 6379).
     volumes:
@@ -36,6 +48,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.20
     container_name: webchat-mailpit
+    networks: [webchat]
     restart: unless-stopped
     ports:
       - "1025:1025"
@@ -52,6 +65,7 @@ services:
       dockerfile: docker/Dockerfile.api
       network: host
     container_name: webchat-api
+    networks: [webchat]
     restart: unless-stopped
     environment:
       ENVIRONMENT: development
@@ -63,6 +77,11 @@ services:
       COOKIE_SECURE: "false"
       PUBLIC_BASE_URL: http://localhost:3000
       MAILPIT_API_URL: http://mailpit:8025
+      # Passed through from .env so the stack supports real chat + embeddings
+      # (required by scripts/e2e-widget.sh; empty when unset).
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # scripts/e2e-widget.sh sets this to false for the E2E stack.
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
     ports:
       - "8000:8000"
     depends_on:
@@ -89,12 +108,15 @@ services:
       dockerfile: docker/Dockerfile.worker
       network: host
     container_name: webchat-worker
+    networks: [webchat]
     restart: unless-stopped
     environment:
       ENVIRONMENT: development
       MONGODB_URI: mongodb://mongo:27017
       REDIS_URL: redis://redis:6379
       MAILPIT_API_URL: http://mailpit:8025
+      # Passed through from .env for real embeddings (see api service).
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     depends_on:
       mongo:
         condition: service_healthy
@@ -107,6 +129,7 @@ services:
       dockerfile: docker/Dockerfile.dashboard
       network: host
     container_name: webchat-dashboard
+    networks: [webchat]
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -133,6 +156,7 @@ services:
       dockerfile: docker/Dockerfile.widget
       network: host
     container_name: webchat-widget
+    networks: [webchat]
     restart: unless-stopped
     ports:
       - "8080:80"
