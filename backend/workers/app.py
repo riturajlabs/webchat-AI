@@ -12,9 +12,9 @@ from typing import Any
 
 from arq.connections import RedisSettings
 
+from backend.ai.registry import build_embedding_fallback
 from backend.core.config import get_settings
 from backend.services.ingestion.browser import close_browser
-from backend.services.knowledge.embedding import GoogleEmbeddingClient
 from backend.workers import tasks
 
 _settings = get_settings()
@@ -23,9 +23,10 @@ _settings = get_settings()
 async def startup(ctx: dict[str, Any]) -> None:
     """Runs once when the worker starts."""
     ctx["app_name"] = _settings.app_name
-    # Shared embedding client for all knowledge jobs in this process. Building
-    # it never touches the network (the Google SDK client is created lazily).
-    ctx["embedding_client"] = GoogleEmbeddingClient()
+    # Shared embedding client for all knowledge jobs in this process (Phase 9,
+    # ADR-009): the configured fallback chain. Building it never touches the
+    # network (clients are created lazily).
+    ctx["embedding_client"] = build_embedding_fallback()
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:

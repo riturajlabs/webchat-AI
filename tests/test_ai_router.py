@@ -1,0 +1,225 @@
+"""Tests for the Phase 9 fallback router (ADR-009).
+
+`FallbackGenerationClient`/`FallbackEmbeddingClient` wrap provider sequences;
+they must keep the existing `GenerationClient`/`EmbeddingClient` Protocol
+surfaces while adding: ordered fallback, pre-stream-only generation fallback
+(no mid-stream restart), usage of the serving provider, and `active_provider`
+observability.
+"""
+
+import pytest
+from backend.ai.gemini import GenerationUsage
+from backend.ai.router import FallbackEmbeddingClient, FallbackGenerationClient
+from backend.core.errors import (
+    EmbeddingError,
+    EmbeddingUnavailableError,
+    GenerationError,
+    GenerationUnavailableError,
+)
+from backend.services.knowledge.embedding import EmbeddingUsage
+
+
+class StubGenerationClient:
+    """Canned generation client. `raise_before` fails the whole stream up
+    front; `raise_after` emits all deltas, then fails (mid-stream failure)."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        deltas: tuple[str, ...] = ("hello",),
+        raise_before: Exception | None = None,
+        raise_after: Exception | None = None,
+        usage: GenerationUsage | None = None,
+    ) -> None:
+        self.name = name
+        self.deltas = deltas
+        self.raise_before = raise_before
+        self.raise_after = raise_after
+        self.calls = 0
+        self._usage = (
+            usage
+            if usage is not None
+            else GenerationUsage(input_tokens=3, output_tokens=4)
+        )
+
+    @property
+    def usage(self) -> GenerationUsage:
+        return self._usage
+
+    async def stream_generate(self, *, system: str, messages: list[tuple[str, str]]):
+        self.calls += 1
+        if self.raise_before is not None:
+            raise self.raise_before
+        for delta in self.deltas:
+            yield delta
+        if self.raise_after is not None:
+            raise self.raise_after
+
+
+class StubEmbeddingClient:
+    def __init__(
+        self,
+        *,
+        name: str,
+        vector: tuple[float, ...] = (0.1, 0.2),
+        raise_error: Exception | None = None,
+        usage: EmbeddingUsage | None = None,
+    ) -> None:
+        self.name = name
+        self.vector = vector
+        self.raise_error = raise_error
+        self.calls = 0
+        self._usage = (
+            usage
+            if usage is not None
+            else EmbeddingUsage(calls=1, characters=5, estimated_tokens=2)
+        )
+
+    @property
+    def usage(self) -> EmbeddingUsage:
+        return self._usage
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.raise_error is not None:
+            raise self.raise_error
+        return [list(self.vector) for _ in texts]
+
+
+async def _collect(stream) -> list[str]:
+    return [delta async for delta in stream]
+
+
+# ---- FallbackGenerationClient ----
+
+async def test_generation_uses_first_provider_and_skips_rest() -> None:
+    first = StubGenerationClient(name="first", deltas=("a", "b"))
+    second = StubGenerationClient(name="second")
+    fallback = FallbackGenerationClient([first, second])
+
+    assert await _collect(fallback.stream_generate(system="s", messages=[("user", "q")])) == [
+        "a",
+        "b",
+    ]
+    assert first.calls == 1
+    assert second.calls == 0
+    assert fallback.active_provider == "first"
+    assert fallback.usage == first.usage
+
+
+async def test_generation_falls_back_when_first_fails_before_output() -> None:
+    first = StubGenerationClient(
+        name="first", raise_before=GenerationUnavailableError("primary down")
+    )
+    second = StubGenerationClient(name="second", deltas=("fallback answer",))
+    fallback = FallbackGenerationClient([first, second])
+
+    assert await _collect(fallback.stream_generate(system="s", messages=[("user", "q")])) == [
+        "fallback answer"
+    ]
+    assert first.calls == 1
+    assert second.calls == 1
+    assert fallback.active_provider == "second"
+    assert fallback.usage == second.usage
+
+
+async def test_generation_never_falls_back_after_output_starts() -> None:
+    first = StubGenerationClient(
+        name="first", deltas=("partial",), raise_after=GenerationError("mid-stream boom")
+    )
+    second = StubGenerationClient(name="second")
+    fallback = FallbackGenerationClient([first, second])
+
+    deltas: list[str] = []
+    with pytest.raises(GenerationError, match="mid-stream"):
+        async for delta in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            deltas.append(delta)
+
+    assert deltas == ["partial"]
+    assert second.calls == 0
+    assert fallback.active_provider == "first"
+
+
+async def test_generation_raises_last_error_when_all_fail() -> None:
+    first = StubGenerationClient(name="first", raise_before=GenerationUnavailableError("a"))
+    second = StubGenerationClient(name="second", raise_before=GenerationError("b"))
+    fallback = FallbackGenerationClient([first, second])
+
+    with pytest.raises(GenerationError, match="b"):
+        async for _ in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+
+
+async def test_generation_empty_chain_raises_unavailable() -> None:
+    fallback = FallbackGenerationClient([])
+
+    with pytest.raises(GenerationUnavailableError):
+        async for _ in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+
+
+async def test_generation_non_normalized_error_propagates_without_fallback() -> None:
+    first = StubGenerationClient(name="first", raise_before=RuntimeError("internal bug"))
+    second = StubGenerationClient(name="second")
+    fallback = FallbackGenerationClient([first, second])
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        async for _ in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+    assert second.calls == 0
+
+
+async def test_generation_active_provider_starts_unset() -> None:
+    fallback = FallbackGenerationClient([StubGenerationClient(name="first")])
+    assert fallback.active_provider is None
+
+
+# ---- FallbackEmbeddingClient ----
+
+async def test_embedding_uses_first_provider_and_skips_rest() -> None:
+    first = StubEmbeddingClient(name="first", vector=(0.5, 0.5))
+    second = StubEmbeddingClient(name="second")
+    fallback = FallbackEmbeddingClient([first, second])
+
+    assert await fallback.embed(["q"]) == [[0.5, 0.5]]
+    assert first.calls == 1
+    assert second.calls == 0
+    assert fallback.active_provider == "first"
+    assert fallback.usage == first.usage
+
+
+async def test_embedding_falls_back_on_first_failure() -> None:
+    first = StubEmbeddingClient(name="first", raise_error=EmbeddingUnavailableError("down"))
+    second = StubEmbeddingClient(name="second", vector=(0.7, 0.7))
+    fallback = FallbackEmbeddingClient([first, second])
+
+    assert await fallback.embed(["q"]) == [[0.7, 0.7]]
+    assert fallback.active_provider == "second"
+    assert fallback.usage == second.usage
+
+
+async def test_embedding_raises_last_error_when_all_fail() -> None:
+    first = StubEmbeddingClient(name="first", raise_error=EmbeddingUnavailableError("a"))
+    second = StubEmbeddingClient(name="second", raise_error=EmbeddingError("b"))
+    fallback = FallbackEmbeddingClient([first, second])
+
+    with pytest.raises(EmbeddingError, match="b"):
+        await fallback.embed(["q"])
+
+
+async def test_embedding_empty_chain_raises_unavailable() -> None:
+    fallback = FallbackEmbeddingClient([])
+
+    with pytest.raises(EmbeddingUnavailableError):
+        await fallback.embed(["q"])
+
+
+async def test_embedding_non_normalized_error_propagates_without_fallback() -> None:
+    first = StubEmbeddingClient(name="first", raise_error=RuntimeError("internal bug"))
+    second = StubEmbeddingClient(name="second")
+    fallback = FallbackEmbeddingClient([first, second])
+
+    with pytest.raises(RuntimeError, match="internal bug"):
+        await fallback.embed(["q"])
+    assert second.calls == 0

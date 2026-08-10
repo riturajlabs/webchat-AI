@@ -13,7 +13,7 @@ from fastapi import Depends, Header, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
-from backend.ai.gemini import GoogleGeminiClient
+from backend.ai.registry import build_embedding_fallback, build_generation_fallback
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import (
@@ -43,7 +43,6 @@ from backend.repositories import (
 from backend.services.auth import AuthService, Principal
 from backend.services.chat.rag_service import RagService
 from backend.services.crawl import CrawlService
-from backend.services.knowledge.embedding import GoogleEmbeddingClient
 from backend.services.website import WebsiteService
 from backend.services.widget import WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
@@ -105,15 +104,19 @@ def get_rag_service(
 ) -> RagService:
     """Build the RAG service with MongoDB-backed repositories (Phase 6).
 
-    Both the embedding and the generation clients lazily build the Google
-    GenAI SDK from `GEMINI_API_KEY` (never logged or exposed). Retrieval goes
-    through the vector repository, which is always tenant-scoped (ADR-008).
+    Embedding and generation resolve through the Phase 9 fallback chains
+    (ADR-009): providers are tried in `*_PROVIDER_ORDER`, missing-key providers
+    are skipped, and the chain fails only when every provider is unavailable.
+    Clients are built lazily - building the chain never touches the network,
+    and API keys come from settings (env) and are never logged or exposed.
+    Retrieval goes through the vector repository, which is always tenant-scoped
+    (ADR-008).
     """
     return RagService(
         websites=MongoWebsiteRepository(db),
         vector=get_vector_repository(db),
-        embedder=GoogleEmbeddingClient(),
-        generation=GoogleGeminiClient(),
+        embedder=build_embedding_fallback(),
+        generation=build_generation_fallback(),
         sessions=MongoChatSessionRepository(db),
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),

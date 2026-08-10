@@ -523,7 +523,66 @@ Where the two documents differ, `docs/06` ordering wins for scheduling; ADR-008 
 
 ---
 
-# 9. Decision Register
+# 9. ADR-009: AI Provider Abstraction & Fallback
+
+## Decision
+
+Introduce a thin provider abstraction for the two AI capabilities the platform consumes — **LLM answer generation** and **text embedding** — so no application code is coupled to a single vendor. Application code keeps depending on the existing Protocols (`GenerationClient` in `backend/ai/gemini.py`, `EmbeddingClient` in `backend/services/knowledge/embedding.py`); the concrete provider now resolves through a registry + fallback chain.
+
+## Provider interfaces
+
+Both capabilities keep the exact Protocol surfaces already used by the RAG service and the knowledge worker (Liskov Substitution: any provider is a drop-in for the Protocol):
+
+- `GenerationClient` — `stream_generate(system, messages)` streaming answer deltas; `usage` for token capture (ADR-005 §5.8).
+- `EmbeddingClient` — `embed(texts)` → one vector per text; `usage` for usage rollups; `dimensions` for the compatibility check.
+
+## Registry (`backend/ai/registry.py`)
+
+- Providers register by name with a factory and, optionally, a `required_key` (settings field whose presence gates availability).
+- `GENERATION_PROVIDER_ORDER` / `EMBEDDING_PROVIDER_ORDER` (JSON arrays in `.env`) resolve into ordered client chains:
+  - a provider whose required key is missing is **skipped with a warning** (one unconfigured provider cannot break the chain);
+  - an **unknown name fails fast** with `ProviderConfigurationError` (500) rather than silently serving a degraded chain.
+- Embedding chains **warn when providers report differing vector dimensions** (e.g. Gemini 3072 vs Ollama 768), because switching embedding providers on a mixed corpus corrupts `$vectorSearch`.
+
+## Fallback semantics (`backend/ai/router.py`)
+
+- **Generation is pre-stream only:** providers are tried in order, but once a provider starts emitting deltas the stream is committed. A mid-stream failure is re-raised (surfaces as an SSE `error`) rather than restarting the answer, so the client never sees a truncated answer followed by a fresh complete one.
+- **Embedding is atomic** (no streaming), so a failed provider is fully retried on the next one.
+- An **empty chain raises at call time** (`GenerationUnavailableError` / `EmbeddingUnavailableError`), preserving the no-key behaviour the direct Gemini client had.
+- `active_provider` reports which provider served the last request (observability); token usage always reflects the _serving_ provider.
+
+## Providers
+
+| Capability | Provider   | Client                                                              | Default model                       | API key              |
+| ---------- | ---------- | ------------------------------------------------------------------- | ----------------------------------- | -------------------- |
+| Generation | Gemini     | `GoogleGeminiClient` (`backend/ai/gemini.py`)                       | `gemini-2.5-flash`                  | `GEMINI_API_KEY`     |
+| Generation | Groq       | `GroqGenerationClient` (`backend/ai/providers/groq.py`)             | `llama-3.3-70b-versatile`           | `GROQ_API_KEY`       |
+| Generation | OpenRouter | `OpenRouterGenerationClient` (`backend/ai/providers/openrouter.py`) | `meta-llama/llama-3.3-70b-instruct` | `OPENROUTER_API_KEY` |
+| Embedding  | Gemini     | `GoogleEmbeddingClient` (`backend/services/knowledge/embedding.py`) | `gemini-embedding-001`              | `GEMINI_API_KEY`     |
+| Embedding  | Ollama     | `OllamaEmbeddingClient` (`backend/ai/providers/ollama.py`)          | `nomic-embed-text` (768-dim)        | none (self-hosted)   |
+
+Groq and OpenRouter share an OpenAI-compatible `chat/completions` streaming implementation (`backend/ai/providers/openai_compat.py`): one connection pool per process, a single `build_chat_payload` (with `stream_options.include_usage` for token capture), robust SSE parsing, and HTTP status mapping (401/402/403/429 → unavailable so the chain moves on; other statuses → `GenerationError`). Raw SDK/`httpx` errors never escape the AI layer (00-AI-Development-Rules §18).
+
+## Configuration
+
+Default chains are Gemini-only; production fails fast unless at least one generation key and a non-empty embedding order are configured. New env vars (all in `.env.example`):
+
+- `GENERATION_PROVIDER_ORDER` / `EMBEDDING_PROVIDER_ORDER`
+- `GROQ_API_KEY` / `GROQ_MODEL`
+- `OPENROUTER_API_KEY` / `OPENROUTER_MODEL`
+- `AI_PROVIDER_TIMEOUT_SECONDS`
+- `EMBEDDING_DIMENSIONS`
+- `OLLAMA_BASE_URL` / `OLLAMA_MODEL` / `OLLAMA_EMBEDDING_DIMENSIONS`
+
+## Why not a single "generic LLM SDK"
+
+- **No new runtime dependency.** Groq/OpenRouter are called over `httpx` (already a dependency) instead of adding `openai`; Gemini keeps the `google-genai` SDK.
+- **Keeps existing Protocols stable.** The RAG service and knowledge worker required zero signature changes; wiring simply switches `GoogleGeminiClient()` / `GoogleEmbeddingClient()` for `build_generation_fallback()` / `build_embedding_fallback()`.
+- **Fail-fast configuration** catches typos in the order lists instead of silently degrading.
+
+---
+
+# 10. Decision Register
 
 | ADR     | Decision                                                                                                        | Status   |
 | ------- | --------------------------------------------------------------------------------------------------------------- | -------- |
@@ -535,10 +594,11 @@ Where the two documents differ, `docs/06` ordering wins for scheduling; ADR-008 
 | ADR-006 | Admin panel: tenants, stats, audit, crawl monitor via `/api/admin/*`; no new collections                        | Approved |
 | ADR-007 | Canonical folder structure (resolves `00` vs `06` conflict)                                                     | Approved |
 | ADR-008 | 16-phase plan incl. admin + usage/feedback; security from Phase 2                                               | Approved |
+| ADR-009 | AI provider abstraction: registry + ordered fallback (Gemini→Groq→OpenRouter gen; Gemini/Ollama embed)          | Approved |
 
 ---
 
-# 10. Documentation Reconciliation
+# 11. Documentation Reconciliation
 
 | Doc                          | Reconciliation action                                                                                                            |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -552,7 +612,7 @@ This ADR must be kept in sync with `05` and `06` as the codebase evolves.
 
 ---
 
-# 11. Phase 4 Completion Notes (August 2026)
+# 12. Phase 4 Completion Notes (August 2026)
 
 Phase 4 (Data Ingestion Engine) is implemented and verified end-to-end. Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
 
@@ -564,7 +624,7 @@ Phase 4 (Data Ingestion Engine) is implemented and verified end-to-end. Notes be
 
 ---
 
-# 12. Phase 5 Completion Notes (August 2026)
+# 13. Phase 5 Completion Notes (August 2026)
 
 Phase 5 (Knowledge Processing) is implemented and verified end-to-end. Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
 
@@ -579,7 +639,7 @@ Phase 5 (Knowledge Processing) is implemented and verified end-to-end. Notes bel
 
 ---
 
-# 13. Phase 6 Completion Notes (August 2026)
+# 14. Phase 6 Completion Notes (August 2026)
 
 Phase 6 (RAG Pipeline) is implemented and verified (`docs/Phase-6-Verification-Report.md`). Notes below describe how the phase was built against the decisions in this record; they do not change any ADR.
 
@@ -590,6 +650,17 @@ Phase 6 (RAG Pipeline) is implemented and verified (`docs/Phase-6-Verification-R
 - **Token usage capture (ADR-005 §5.8):** per-message `input_tokens`/`output_tokens` on `messages`; daily atomic rollups (`chats`, `messages`, `input_tokens`, `output_tokens`, `vector_queries`) in `usage_records`. `embeddings_created`/`crawl_pages` counters remain reserved for the Phase 5/9 worker rollups.
 - **TTL alignment (ADR-005 §5.7):** `chat_sessions` uses the Mongo deadline pattern (`expires_at` with `expireAfterSeconds=0`, matching `CHAT_RETENTION_DAYS`); `messages` and `usage_records` TTLs are derived from `CHAT_RETENTION_DAYS` / `USAGE_RETENTION_DAYS` config.
 - **Deferred to Phase 7:** dashboard chat UI/conversations surface; widget SDK chat (public endpoints + scoped session tokens, ADR-004) is Phase 8. Cross-embedding duplicate detection remains open for the analytics phase.
+
+---
+
+# 15. Phase 9 Completion Notes (August 2026)
+
+Phase 9 (AI Provider Abstraction & Fallback, ADR-009) is implemented. Notes below describe how it was built against this record; they do not change any ADR.
+
+- **Stable Protocols:** `GenerationClient` and `EmbeddingClient` were unchanged at the call site. The embedding Protocol gained only `usage` and `dimensions` read-only properties (already present on the concrete clients) so the fallback router can report the serving provider's usage and the registry can detect dimension mismatches.
+- **Wiring:** the RAG dependency (`backend/api/deps.py::get_rag_service`) and the ARQ worker (`backend/workers/app.py` startup) now build the chains via `build_generation_fallback()` / `build_embedding_fallback()` instead of hardcoding `GoogleGeminiClient` / `GoogleEmbeddingClient`. Building a chain never touches the network — provider clients are created lazily.
+- **No API surface change:** routes, SSE event shapes, and worker task signatures are untouched; fallback is purely internal. A Gemini-only environment behaves exactly as before Phase 9.
+- **Deferred:** analytics rollups for `embeddings_created`/`crawl_pages`, UI improvements, and adding further providers to the chains.
 
 ---
 

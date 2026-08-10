@@ -54,6 +54,8 @@ class GenerationClient(Protocol):
 class GoogleGeminiClient:
     """`gemini-2.5-flash` streaming via the Google GenAI async SDK."""
 
+    name = "gemini"
+
     def __init__(
         self,
         *,

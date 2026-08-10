@@ -84,6 +84,31 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash"
     embedding_model: str = "gemini-embedding-001"
 
+    # AI provider abstraction (Phase 9, ADR-009). Ordered fallback chains:
+    # providers are tried in the order listed; a provider whose required API
+    # key is missing is skipped and the next provider is attempted. Unknown
+    # names are a configuration error and fail fast.
+    generation_provider_order: list[str] = ["gemini"]
+    embedding_provider_order: list[str] = ["gemini"]
+
+    # Fallback generation providers (OpenAI-compatible chat completions API).
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
+
+    # Local embedding fallback (self-hosted, no API key; ADR-009).
+    # CAUTION: only use an embedding fallback whose vector dimension matches
+    # the primary provider, or vector search on a mixed corpus breaks.
+    embedding_dimensions: int = 3072
+    # Shared HTTP timeout for non-Gemini providers (Groq/OpenRouter/Ollama).
+    ai_provider_timeout_seconds: float = 60.0
+
+    # Ollama (local embedding fallback, ADR-009).
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "nomic-embed-text"
+    ollama_embedding_dimensions: int = 768
+
     # Knowledge processing (Phase 5, docs/06 implementation plan).
     # Approximate-token chunk sizing (docs/02-TRD.md §6: 500-800 tokens/chunk,
     # 100-token overlap).
@@ -139,6 +164,19 @@ class Settings(BaseSettings):
         if self.environment.lower() == "production":
             if len(self.jwt_secret.encode("utf-8")) < 32:
                 raise ValueError("JWT_SECRET must be at least 32 bytes in production.")
+            # At least one provider per capability must be configured (ADR-009).
+            generation_keys = bool(
+                self.gemini_api_key or self.groq_api_key or self.openrouter_api_key
+            )
+            if not generation_keys:
+                raise ValueError(
+                    "At least one generation provider key is required in production "
+                    "(GEMINI_API_KEY, GROQ_API_KEY or OPENROUTER_API_KEY)."
+                )
+            if not self.embedding_provider_order:
+                raise ValueError("EMBEDDING_PROVIDER_ORDER must not be empty in production.")
+            if not self.embedding_provider_order or self.embedding_dimensions <= 0:
+                raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer in production.")
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled
         return self

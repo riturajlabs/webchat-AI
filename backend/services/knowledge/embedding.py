@@ -37,11 +37,18 @@ class EmbeddingUsage:
 class EmbeddingClient(Protocol):
     """Async embedding interface. Never raises raw SDK errors."""
 
+    @property
+    def usage(self) -> EmbeddingUsage:
+        """Aggregate usage so far (Phase 9 fallback reads the serving provider)."""
+        ...
+
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 class GoogleEmbeddingClient:
     """`gemini-embedding-001` via the Google GenAI async SDK."""
+
+    name = "gemini"
 
     def __init__(
         self,
@@ -69,10 +76,16 @@ class GoogleEmbeddingClient:
         self._on_usage = on_usage
         self._genai_client = genai_client
         self._usage = EmbeddingUsage()
+        self._dimensions = settings.embedding_dimensions
 
     @property
     def usage(self) -> EmbeddingUsage:
         return self._usage
+
+    @property
+    def dimensions(self) -> int:
+        """Embedding vector length (Phase 9 dimension-compatibility check)."""
+        return self._dimensions
 
     def _client(self) -> Any:
         """Lazily build the SDK client (never touches network until first call)."""

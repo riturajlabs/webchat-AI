@@ -134,6 +134,18 @@ class GenerationUnavailableError(GenerationError):
     code = "GENERATION_UNAVAILABLE"
 
 
+class ProviderConfigurationError(AppError):
+    """AI provider configuration is invalid (unknown name in an order list).
+
+    Raised by the Phase 9 provider registry so a typo in
+    `GENERATION_PROVIDER_ORDER`/`EMBEDDING_PROVIDER_ORDER` fails fast instead
+    of silently serving a degraded chain.
+    """
+
+    status_code = 500
+    code = "PROVIDER_CONFIGURATION"
+
+
 class WidgetNotFoundError(AppError):
     """Public widget id does not exist (Phase 8, ADR-004)."""
 

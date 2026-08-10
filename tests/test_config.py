@@ -18,7 +18,12 @@ def test_production_rejects_missing_jwt_secret() -> None:
 
 
 def test_production_accepts_32_byte_jwt_secret() -> None:
-    settings = Settings(environment="production", jwt_secret="a" * 32)
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        gemini_api_key="test-key",
+    )
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
 
@@ -29,3 +34,56 @@ def test_development_allows_example_jwt_secret() -> None:
 
 def test_trust_proxy_defaults_to_false() -> None:
     assert Settings(_env_file=None).trust_proxy is False
+
+
+# --- Phase 9 (ADR-009): provider order & fallback configuration ---
+
+
+def test_provider_order_defaults_to_gemini() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.generation_provider_order == ["gemini"]
+    assert settings.embedding_provider_order == ["gemini"]
+
+
+def test_production_rejects_settings_with_no_provider_key() -> None:
+    with pytest.raises(ValueError, match="generation provider key"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            jwt_secret="a" * 32,
+            gemini_api_key=None,
+            groq_api_key=None,
+            openrouter_api_key=None,
+        )
+
+
+def test_production_accepts_groq_as_generation_provider() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        groq_api_key="test-key",
+    )
+    assert settings.groq_api_key == "test-key"
+
+
+def test_production_rejects_empty_embedding_order() -> None:
+    with pytest.raises(ValueError, match="EMBEDDING_PROVIDER_ORDER"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            jwt_secret="a" * 32,
+            gemini_api_key="test-key",
+            embedding_provider_order=[],
+        )
+
+
+def test_provider_order_parses_from_json_list() -> None:
+    settings = Settings(
+        _env_file=None,
+        generation_provider_order=["gemini", "openrouter"],
+        embedding_provider_order=["ollama"],
+    )
+    assert settings.generation_provider_order == ["gemini", "openrouter"]
+    assert settings.embedding_provider_order == ["ollama"]
+    assert settings.ai_provider_timeout_seconds == 60.0
