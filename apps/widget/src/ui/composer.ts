@@ -3,6 +3,11 @@
  *
  * Textarea with a 2000-char cap, Enter-to-send / Shift+Enter newline, disabled
  * while streaming, and an error banner slot. Focus is retained on send.
+ *
+ * Phase 10: a Stop button (`.wc-stop`) replaces the Send button while the
+ * assistant turn is streaming; clicking it calls `onStop`. `setStreaming`
+ * drives that swap and keeps the input disabled mid-turn so a second message
+ * can't be sent before the first finishes.
  */
 
 export interface ComposerOptions {
@@ -10,13 +15,19 @@ export interface ComposerOptions {
   maxLength?: number;
   onSend: (question: string) => void;
   isDisabled: () => boolean;
+  /** Called when the Stop-generation button is pressed (Phase 10). */
+  onStop?: () => void;
 }
 
 export interface ChatComposer {
   element: HTMLElement;
   input: HTMLTextAreaElement;
   sendButton: HTMLButtonElement;
+  /** Stop-generation button; hidden unless a turn is streaming. */
+  stopButton: HTMLButtonElement;
   setDisabled(disabled: boolean): void;
+  /** Swap Send ↔ Stop and lock the input while a turn streams. */
+  setStreaming(streaming: boolean): void;
   focus(): void;
   reset(): void;
 }
@@ -47,9 +58,19 @@ export function createComposer(options: ComposerOptions): ChatComposer {
   sendButton.textContent = 'Send';
   sendButton.disabled = true;
 
+  const stopButton = document.createElement('button');
+  stopButton.type = 'button';
+  stopButton.className = 'wc-stop';
+  stopButton.setAttribute('aria-label', 'Stop generating');
+  stopButton.textContent = 'Stop';
+  stopButton.hidden = true;
+
+  let locked = false;
+  let streaming = false;
+
   const updateCounter = (): void => {
     counter.textContent = `${input.value.length}/${maxLength}`;
-    sendButton.disabled = options.isDisabled() || input.value.trim().length === 0;
+    sendButton.disabled = locked || options.isDisabled() || input.value.trim().length === 0;
   };
 
   const reset = (): void => {
@@ -59,7 +80,7 @@ export function createComposer(options: ComposerOptions): ChatComposer {
 
   const submit = (): void => {
     const question = input.value.trim();
-    if (!question || options.isDisabled()) {
+    if (!question || locked || options.isDisabled()) {
       return;
     }
     options.onSend(question);
@@ -74,21 +95,39 @@ export function createComposer(options: ComposerOptions): ChatComposer {
     }
   });
   sendButton.addEventListener('click', submit);
+  stopButton.addEventListener('click', () => options.onStop?.());
 
   wrapper.appendChild(input);
   wrapper.appendChild(counter);
   wrapper.appendChild(sendButton);
+  wrapper.appendChild(stopButton);
 
   const setDisabled = (disabled: boolean): void => {
+    locked = disabled;
     input.disabled = disabled;
     updateCounter();
+  };
+
+  const setStreaming = (next: boolean): void => {
+    if (next === streaming) {
+      return;
+    }
+    streaming = next;
+    input.disabled = next;
+    sendButton.hidden = next;
+    stopButton.hidden = !next;
+    if (next) {
+      stopButton.focus();
+    }
   };
 
   return {
     element: wrapper,
     input,
     sendButton,
+    stopButton,
     setDisabled,
+    setStreaming,
     focus() {
       input.focus();
     },

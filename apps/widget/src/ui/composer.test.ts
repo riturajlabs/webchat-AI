@@ -53,4 +53,36 @@ describe('createComposer', () => {
     expect(composer.input.disabled).toBe(true);
     expect(composer.sendButton.disabled).toBe(true);
   });
+
+  it('keeps the Stop button hidden until a turn streams', () => {
+    const { composer } = setup();
+    expect(composer.stopButton.hidden).toBe(true);
+    expect(composer.sendButton.hidden).toBe(false);
+  });
+
+  it('setStreaming swaps Send for Stop and disables the input', () => {
+    const { composer } = setup();
+    composer.setStreaming(true);
+    expect(composer.sendButton.hidden).toBe(true);
+    expect(composer.stopButton.hidden).toBe(false);
+    expect(composer.input.disabled).toBe(true);
+    expect(document.activeElement).toBe(composer.stopButton);
+
+    composer.setStreaming(false);
+    expect(composer.sendButton.hidden).toBe(false);
+    expect(composer.stopButton.hidden).toBe(true);
+    expect(composer.input.disabled).toBe(false);
+  });
+
+  it('calls onStop when the Stop button is pressed', () => {
+    const onStop = vi.fn();
+    const composer = createComposer({
+      placeholder: 'Ask…',
+      onSend: () => {},
+      isDisabled: () => false,
+      onStop,
+    });
+    composer.stopButton.click();
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
 });

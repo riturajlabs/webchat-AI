@@ -216,6 +216,41 @@ describe('streamChat', () => {
     expect(result.error?.code).toBe('timeout');
     expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'timeout' }));
   });
+
+  it('cancels a stalled stream and returns aborted (Stop button)', async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(encoder.encode('event: message\ndata: {"delta":"par"}\n\n'));
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const resultPromise = streamChat(
+      OPTIONS,
+      { question: 'hi' },
+      h,
+      client,
+      fetchImpl,
+      controller.signal,
+    );
+    controller.abort();
+    const result = await resultPromise;
+    expect(result.completed).toBe(false);
+    expect(result.aborted).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(h.onError).not.toHaveBeenCalled();
+  });
 });
 
 afterEach(() => {

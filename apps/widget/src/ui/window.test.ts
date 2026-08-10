@@ -162,4 +162,23 @@ describe('createChatWindow', () => {
     windowApi.composer.sendButton.click();
     expect(onSend).toHaveBeenCalledWith('hello');
   });
+
+  it('setStreaming reflects on the composer Stop button', () => {
+    const { windowApi } = setup();
+    windowApi.setStreaming(true);
+    expect(windowApi.composer.stopButton.hidden).toBe(false);
+    expect(windowApi.composer.sendButton.hidden).toBe(true);
+    windowApi.setStreaming(false);
+    expect(windowApi.composer.stopButton.hidden).toBe(true);
+    expect(windowApi.composer.sendButton.hidden).toBe(false);
+  });
+
+  it('setStatus drives the visually-hidden live region', () => {
+    const { windowApi } = setup();
+    const status = windowApi.element.querySelector<HTMLElement>('.wc-status-live');
+    windowApi.setStatus('Code copied');
+    expect(status?.textContent).toBe('Code copied');
+    windowApi.setStatus('');
+    expect(status?.textContent).toBe('');
+  });
 });

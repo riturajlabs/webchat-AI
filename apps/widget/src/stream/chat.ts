@@ -4,9 +4,21 @@
  * Holds the `chat_session_id` (the conversation identifier, distinct from the
  * widget session token — plan §3.2.1), the message list, and the streaming
  * buffer. The UI subscribes via `onChange`.
+ *
+ * Phase 10 additions: per-message `sources` (citation list from the SSE
+ * `sources` event) and `stop()` to end a turn early (Stop-generation button)
+ * without treating it as a failure.
  */
 
 export type MessageRole = 'user' | 'assistant';
+
+export interface ChatSource {
+  chunk_id?: string;
+  url?: string;
+  title?: string;
+  score?: number;
+  citation?: string;
+}
 
 export interface ChatMessage {
   id: string;
@@ -14,6 +26,10 @@ export interface ChatMessage {
   content: string;
   streaming?: boolean;
   error?: boolean;
+  /** True when the user stopped the turn early (partial answer kept). */
+  stopped?: boolean;
+  /** Citation list attached to an assistant turn (Phase 10). */
+  sources?: ChatSource[];
 }
 
 export interface ConversationState {
@@ -83,11 +99,34 @@ export class Conversation {
     }
   }
 
+  /** Attach the citation/source list to an assistant turn (SSE `sources`). */
+  setSources(id: string, sources: ChatSource[]): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.sources = sources;
+      this.emit();
+    }
+  }
+
   /** End an assistant turn cleanly. */
   endTurn(id: string): void {
     const message = this.messages.find((m) => m.id === id);
     if (message) {
       message.streaming = false;
+    }
+    this.streaming = false;
+    this.emit();
+  }
+
+  /**
+   * Stop the current assistant turn early (Stop-generation button). The partial
+   * answer is kept and marked `stopped`; this is not an error.
+   */
+  stopTurn(id: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.streaming = false;
+      message.stopped = true;
     }
     this.streaming = false;
     this.emit();

@@ -89,6 +89,10 @@ export const WIDGET_STYLES = `
   .wc-launcher:focus-visible,
   .wc-close:focus-visible,
   .wc-send:focus-visible,
+  .wc-stop:focus-visible,
+  .wc-retry-message:focus-visible,
+  .wc-more-toggle:focus-visible,
+  .wc-code-copy:focus-visible,
   .wc-chip:focus-visible,
   .wc-composer-input:focus-visible {
     outline: 2px solid var(--wc-accent);
@@ -222,8 +226,117 @@ export const WIDGET_STYLES = `
     }
   }
 
+  /* Animated typing indicator while the turn has no content yet (Phase 10). */
+  .wc-typing {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 4px 0;
+  }
+
+  .wc-typing i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--wc-muted);
+    animation: wc-typing-dot 1.2s ease-in-out infinite;
+  }
+
+  .wc-typing i:nth-child(2) {
+    animation-delay: 0.15s;
+  }
+
+  .wc-typing i:nth-child(3) {
+    animation-delay: 0.3s;
+  }
+
+  @keyframes wc-typing-dot {
+    0%,
+    60%,
+    100% {
+      opacity: 0.25;
+      transform: translateY(0);
+    }
+    30% {
+      opacity: 1;
+      transform: translateY(-3px);
+    }
+  }
+
   .wc-bubble-error {
     border: 1px solid #fca5a5;
+  }
+
+  /* Partial answer kept after the user pressed Stop (Phase 10). */
+  .wc-stopped .wc-bubble-content::after {
+    content: ' (stopped)';
+    color: var(--wc-muted);
+    font-style: italic;
+  }
+
+  /* Per-message Retry action (Phase 10). */
+  .wc-retry-message {
+    display: block;
+    margin-top: 8px;
+    border: 1px solid var(--wc-border);
+    background: var(--wc-surface-elevated);
+    color: var(--wc-text);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 0.85em;
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  /* Show more/less toggle for long answers (Phase 10). */
+  .wc-long.wc-collapsed .wc-bubble-content {
+    max-height: 180px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .wc-long.wc-collapsed .wc-bubble-content::after {
+    content: '';
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 48px;
+    background: linear-gradient(transparent, var(--wc-bubble-bg));
+    pointer-events: none;
+  }
+
+  .wc-more-toggle {
+    display: block;
+    margin-top: 6px;
+    border: none;
+    background: transparent;
+    color: var(--wc-primary);
+    padding: 2px 0;
+    font-size: 0.85em;
+    cursor: pointer;
+    text-decoration: underline;
+    min-height: 24px;
+  }
+
+  /* Citation / source list (Phase 10). */
+  .wc-sources {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--wc-border);
+    font-size: 0.8em;
+    color: var(--wc-muted);
+  }
+
+  .wc-sources-label {
+    font-weight: 600;
+  }
+
+  .wc-sources-list {
+    margin: 4px 0 0;
+    padding-left: 18px;
+  }
+
+  .wc-sources-list a {
+    color: var(--wc-primary);
   }
 
   .wc-bubble-content h3,
@@ -241,6 +354,41 @@ export const WIDGET_STYLES = `
     border-radius: 8px;
     overflow-x: auto;
     font-size: 0.85em;
+  }
+
+  .wc-bubble-content .wc-code {
+    padding: 0;
+    margin: 8px 0;
+  }
+
+  .wc-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--wc-muted);
+  }
+
+  .wc-code-lang {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .wc-code-copy {
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-size: 0.8em;
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  .wc-code-copy:hover {
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .wc-bubble-content code {
@@ -323,10 +471,28 @@ export const WIDGET_STYLES = `
     cursor: not-allowed;
   }
 
+  /* Stop-generation button, swaps in while a turn streams (Phase 10). */
+  .wc-stop {
+    border: 1px solid #fca5a5;
+    background: #fee2e2;
+    color: #991b1b;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 0.9em;
+    cursor: pointer;
+    min-height: 40px;
+  }
+
+  :host([data-dark='1']) .wc-stop {
+    background: #451a03;
+    color: #fecaca;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .wc-launcher,
     .wc-window,
-    .wc-streaming::after {
+    .wc-streaming::after,
+    .wc-typing i {
       transition: none;
       animation: none;
     }

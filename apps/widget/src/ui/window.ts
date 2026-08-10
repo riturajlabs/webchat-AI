@@ -9,6 +9,10 @@
  * window (Tab/Shift+Tab cycle composer ↔ send ↔ chips ↔ close) and the first
  * focusable receives focus. Focus is released and returned to the launcher on
  * close (wired in `mount.ts`).
+ *
+ * Phase 10: `setStreaming` swaps the composer Send ↔ Stop controls while a
+ * turn streams, and `setStatus` drives the visually-hidden `wc-status-live`
+ * region for "typing / responding" announcements.
  */
 
 import type { WidgetPublicConfig } from '../config/types';
@@ -27,6 +31,8 @@ export interface ChatWindowOptions {
   /** Dismiss the banner (plan §9). */
   onDismiss: () => void;
   isDisabled: () => boolean;
+  /** Stop-generation action wired to the composer Stop button (Phase 10). */
+  onStop?: () => void;
 }
 
 export interface ChatWindow {
@@ -38,6 +44,10 @@ export interface ChatWindow {
   setBanner(message: string | null, retryable?: boolean): void;
   /** Current banner message text ('' when none). */
   currentBanner(): string;
+  /** Reflect the streaming state on the composer (Send ↔ Stop, Phase 10). */
+  setStreaming(streaming: boolean): void;
+  /** Announce status text via the visually-hidden live region (Phase 10). */
+  setStatus(text: string): void;
   /** Move focus to the composer (called when the window opens). */
   focusComposer(): void;
   /** Trap focus inside the window + focus the composer. */
@@ -116,6 +126,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
     placeholder: options.config.placeholder,
     onSend: options.onSend,
     isDisabled: options.isDisabled,
+    onStop: options.onStop,
   });
 
   root.appendChild(header);
@@ -186,6 +197,12 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
     },
     currentBanner(): string {
       return bannerMessage.textContent ?? '';
+    },
+    setStreaming(streaming: boolean): void {
+      composer.setStreaming(streaming);
+    },
+    setStatus(text: string): void {
+      status.textContent = text;
     },
     focusComposer(): void {
       composer.focus();

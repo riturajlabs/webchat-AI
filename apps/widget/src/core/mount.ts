@@ -5,6 +5,12 @@
  * element, wires the core services (visitor identity, session tokens, config)
  * and renders the UI (launcher + chat window) into the shadow root. The theme
  * is applied via CSS custom properties on the host element.
+ *
+ * Phase 10: streaming UX — an `AbortController` per turn powers the composer
+ * Stop button (`streamChat` returns `{ aborted }`, the partial answer is kept
+ * and marked `stopped`, never an error); `sources` events are attached to the
+ * assistant turn; bubble actions (copy code, per-message Retry, show-more) are
+ * delegated from `mount` via `wireMessageActions`.
  */
 
 import { loadConfig, type ConfigStore } from '../config/fetch';
@@ -15,10 +21,17 @@ import { isOffline } from './network';
 import { applyTheme, prefersReducedMotion } from '../theme/apply';
 import { createLauncher, syncLauncher } from '../ui/launcher';
 import { createChatWindow } from '../ui/window';
-import { createMessageList, createWelcomeBubble, renderMessages, setBusy } from '../ui/bubbles';
+import {
+  createMessageList,
+  createWelcomeBubble,
+  renderMessages,
+  setBusy,
+  toggleExpanded,
+  wireMessageActions,
+} from '../ui/bubbles';
 import { WIDGET_STYLES } from '../ui/styles';
 import { streamChat } from '../stream/client';
-import { Conversation } from '../stream/chat';
+import { Conversation, type ChatMessage } from '../stream/chat';
 import type { WidgetError } from './errors';
 
 /** Banner shown while the browser reports itself offline (plan §9). */
@@ -48,6 +61,8 @@ export interface WidgetController {
   /** Open / close the chat window. */
   open(): void;
   close(): void;
+  /** Send a question programmatically (Phase 10 test/embed seam). */
+  sendMessage(question: string): void;
   /** Tear down the widget and detach the host element. */
   destroy(): void;
 }
@@ -59,6 +74,32 @@ export function defineWidgetElement(): void {
   if (!globalThis.customElements?.get(HOST_TAG)) {
     class WebChatWidgetElement extends HTMLElement {}
     globalThis.customElements?.define(HOST_TAG, WebChatWidgetElement);
+  }
+}
+
+/** Copy text to the clipboard with a legacy fallback (Phase 10). */
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy path.
+    }
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch {
+    return false;
   }
 }
 
@@ -84,6 +125,8 @@ export function mount(options: WidgetHostOptions): WidgetController {
   const configWaiters: Array<(config: WidgetPublicConfig) => void> = [];
   let destroyed = false;
   let open = false;
+  /** AbortController for the in-flight turn (Stop-generation button). */
+  let activeAbort: AbortController | null = null;
   /** Last question whose send failed (re-sent by the banner Retry action). */
   let lastFailedQuestion: string | null = null;
   let lastError: WidgetError | null = null;
@@ -128,12 +171,34 @@ export function mount(options: WidgetHostOptions): WidgetController {
       lastError = null;
       windowElement.setBanner(null);
     },
+    onStop: () => {
+      if (conversation.getState().streaming) {
+        activeAbort?.abort();
+      }
+    },
     isDisabled: () => conversation.getState().streaming || isOffline(),
   });
 
   shell.appendChild(windowElement.element);
   shell.appendChild(launcher);
   shadowRoot.appendChild(shell);
+
+  // --- Bubble actions (delegated: copy / retry / show-more) ----------------
+
+  wireMessageActions(messageList, {
+    onCopyCode(code: string): void {
+      void copyText(code).then((ok) => announce(ok ? 'Code copied' : 'Copy failed'));
+    },
+    onRetry(messageId: string): void {
+      retryMessage(messageId);
+    },
+    onToggleMore(messageId: string): void {
+      const message = conversation.getState().messages.find((m) => m.id === messageId);
+      if (message) {
+        toggleExpanded(messageList, message);
+      }
+    },
+  });
 
   // --- Send path -----------------------------------------------------------
 
@@ -155,6 +220,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
     };
 
     const handlers = {
+      onSources: (sources: ChatMessage['sources']) => {
+        if (sources?.length) {
+          conversation.setSources(turnId, sources);
+        }
+      },
       onDelta: (delta: string) => conversation.appendDelta(turnId, delta),
       onDone: (done: { session_id?: string }) => {
         if (done.session_id) {
@@ -170,19 +240,64 @@ export function mount(options: WidgetHostOptions): WidgetController {
       },
     };
 
-    await streamChat(
-      { widgetId, apiBaseUrl },
-      { question, sessionId: conversation.getState().sessionId },
-      handlers,
-      client,
-      fetchImpl,
-    );
-
-    conversation.endTurn(turnId);
+    const turn = new AbortController();
+    activeAbort = turn;
+    try {
+      const result = await streamChat(
+        { widgetId, apiBaseUrl },
+        { question, sessionId: conversation.getState().sessionId },
+        handlers,
+        client,
+        fetchImpl,
+        turn.signal,
+      );
+      if (result.aborted) {
+        // User pressed Stop: keep the partial answer, mark it stopped (not an
+        // error), and never surface a failure banner.
+        conversation.stopTurn(turnId);
+      } else if (!result.completed && !result.error) {
+        conversation.endTurn(turnId); // safety net
+      }
+    } finally {
+      if (activeAbort === turn) {
+        activeAbort = null;
+      }
+    }
     syncRenderer();
   }
 
+  function retryMessage(messageId: string): void {
+    const messages = conversation.getState().messages;
+    const index = messages.findIndex((m) => m.id === messageId);
+    if (index < 0) {
+      return;
+    }
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'user') {
+        void send(messages[i].content);
+        return;
+      }
+    }
+  }
+
   // --- Rendering -----------------------------------------------------------
+
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentStatus = '';
+
+  function announce(text: string): void {
+    currentStatus = text;
+    windowElement.setStatus(text);
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+    }
+    statusTimer = setTimeout(() => {
+      if (currentStatus === text) {
+        currentStatus = '';
+        windowElement.setStatus('');
+      }
+    }, 2500);
+  }
 
   function renderMessagesNow() {
     const messages = conversation.getState().messages;
@@ -204,9 +319,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
         windowElement.setBanner(null);
       }
     }
+
+    const state = conversation.getState();
     renderMessagesNow();
-    setBusy(messageList, conversation.getState().streaming);
-    windowElement.composer.setDisabled(conversation.getState().streaming || offline);
+    setBusy(messageList, state.streaming);
+    windowElement.setStreaming(state.streaming);
+    windowElement.composer.setDisabled(state.streaming || offline);
     windowElement.element.hidden = !open;
     syncLauncher(launcher, open);
   }
@@ -261,12 +379,17 @@ export function mount(options: WidgetHostOptions): WidgetController {
       syncRenderer();
       launcher.focus();
     },
+    sendMessage(question: string) {
+      void send(question);
+    },
     destroy() {
       if (destroyed) {
         return;
       }
       destroyed = true;
       open = false;
+      activeAbort?.abort();
+      activeAbort = null;
       window.removeEventListener('online', onConnectivityChange);
       window.removeEventListener('offline', onConnectivityChange);
       windowElement.releaseFocus();

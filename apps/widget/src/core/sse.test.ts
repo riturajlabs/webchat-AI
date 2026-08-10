@@ -69,4 +69,18 @@ describe('readSseStream', () => {
     );
     expect(events).toEqual([{ event: 'done', data: { message_id: 'm' } }]);
   });
+
+  it('throws a WidgetError when the signal aborts a stalled stream', async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(encoder.encode('event: message\ndata: {"delta":"x"}\n\n'));
+      },
+    });
+    const events: unknown[] = [];
+    const promise = readSseStream(body, (e) => events.push(e), controller.signal);
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ code: 'timeout' });
+  });
 });

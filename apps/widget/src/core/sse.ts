@@ -53,6 +53,8 @@ export function parseSseFrame(frame: string): SseEvent {
 /**
  * Read an SSE response body, invoking `onEvent` for each complete frame.
  * The stream is consumed until the reader signals done or `signal` aborts.
+ * On abort the underlying reader is cancelled so a stalled connection can't
+ * leave the Stop-generation button hanging (Phase 10).
  */
 export async function readSseStream(
   body: ReadableStream<Uint8Array>,
@@ -63,12 +65,21 @@ export async function readSseStream(
   const decoder = new TextDecoder();
   let buffer = '';
 
+  const cancel = (): void => {
+    reader.cancel().catch(() => undefined);
+  };
+  const onAbort = (): void => cancel();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) {
+    cancel();
+  }
+
   try {
     while (true) {
+      const { done, value } = await reader.read();
       if (signal?.aborted) {
         throw new WidgetError({ code: 'timeout', message: 'Stream aborted' });
       }
-      const { done, value } = await reader.read();
       if (done) {
         break;
       }
@@ -86,7 +97,20 @@ export async function readSseStream(
     if (buffer.trim()) {
       onEvent(parseSseFrame(buffer));
     }
+  } catch (cause) {
+    // A cancelled reader rejects with an AbortError; surface it as the
+    // recognisable WidgetError so callers map it to `{ aborted: true }`.
+    if (signal?.aborted) {
+      throw new WidgetError({ code: 'timeout', message: 'Stream aborted' });
+    }
+    throw cause;
   } finally {
-    reader.releaseLock();
+    signal?.removeEventListener('abort', onAbort);
+    // cancel() releases the lock; releaseLock() then throws — ignore it.
+    try {
+      reader.releaseLock();
+    } catch {
+      // already released via cancel()
+    }
   }
 }

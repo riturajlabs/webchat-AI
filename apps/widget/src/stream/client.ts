@@ -53,6 +53,8 @@ export interface ChatClientOptions {
 export interface StreamResult {
   /** True when the stream ended with a terminal `done` event. */
   completed: boolean;
+  /** True when the stream was cancelled by the user (Stop button). */
+  aborted?: boolean;
   done?: DonePayload;
   error?: WidgetError;
 }
@@ -60,6 +62,10 @@ export interface StreamResult {
 /**
  * Send a chat message and consume the SSE stream to `handlers`.
  * Returns a `StreamResult` describing how the stream ended.
+ *
+ * `signal` (Phase 10) cancels the in-flight request/stream — used by the Stop
+ * button. An abort surfaces as `{ aborted: true }` with no error handlers, so
+ * the caller can keep the partial answer without showing an error.
  */
 export async function streamChat(
   options: WidgetOptions,
@@ -67,6 +73,7 @@ export async function streamChat(
   handlers: ChatHandlers,
   client: ChatClientOptions,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<StreamResult> {
   const apiBaseUrl = sanitizeApiBaseUrl(options.apiBaseUrl ?? '/api/widget/v1');
 
@@ -99,9 +106,12 @@ export async function streamChat(
             session_id: request.sessionId ?? null,
           }),
         },
-        { timeoutMs: CHAT_CONNECT_TIMEOUT_MS, fetchImpl },
+        { timeoutMs: CHAT_CONNECT_TIMEOUT_MS, fetchImpl, signal },
       );
     } catch (cause) {
+      if (signal?.aborted) {
+        return { completed: false, aborted: true };
+      }
       const error = new WidgetError({
         code: cause && (cause as Error).name === 'RequestTimeoutError' ? 'timeout' : 'network',
         message: 'Chat request failed',
@@ -138,7 +148,14 @@ export async function streamChat(
       return { completed: false, error };
     }
 
-    return await consumeStream(response.body, handlers);
+    try {
+      return await consumeStream(response.body, handlers, signal);
+    } catch (cause) {
+      if (signal?.aborted) {
+        return { completed: false, aborted: true };
+      }
+      throw cause;
+    }
   }
 }
 
@@ -149,44 +166,57 @@ export async function streamChat(
 async function consumeStream(
   body: ReadableStream<Uint8Array>,
   handlers: ChatHandlers,
+  signal?: AbortSignal,
 ): Promise<StreamResult> {
   let terminalReached = false;
   let result: StreamResult = { completed: false };
 
-  await readSseStream(body, (event: SseEvent) => {
-    if (terminalReached) {
-      return; // terminal-event idempotency guard
-    }
-    switch (event.event) {
-      case 'sources':
-        handlers.onSources?.((event.data as { sources?: ChatSource[] }).sources ?? []);
-        break;
-      case 'message': {
-        const delta = (event.data as { delta?: string }).delta;
-        if (typeof delta === 'string') {
-          handlers.onDelta?.(delta);
+  try {
+    await readSseStream(
+      body,
+      (event: SseEvent) => {
+        if (terminalReached) {
+          return; // terminal-event idempotency guard
         }
-        break;
-      }
-      case 'done': {
-        terminalReached = true;
-        const done = (event.data ?? {}) as DonePayload;
-        result = { completed: true, done };
-        handlers.onDone?.(done);
-        break;
-      }
-      case 'error': {
-        terminalReached = true;
-        const payload = (event.data ?? {}) as { code?: string; message?: string };
-        const error = errorFromSseCode(payload.code, payload.message ?? 'Chat failed');
-        result = { completed: false, error };
-        handlers.onError?.(error);
-        break;
-      }
-      default:
-        break;
+        switch (event.event) {
+          case 'sources':
+            handlers.onSources?.((event.data as { sources?: ChatSource[] }).sources ?? []);
+            break;
+          case 'message': {
+            const delta = (event.data as { delta?: string }).delta;
+            if (typeof delta === 'string') {
+              handlers.onDelta?.(delta);
+            }
+            break;
+          }
+          case 'done': {
+            terminalReached = true;
+            const done = (event.data ?? {}) as DonePayload;
+            result = { completed: true, done };
+            handlers.onDone?.(done);
+            break;
+          }
+          case 'error': {
+            terminalReached = true;
+            const payload = (event.data ?? {}) as { code?: string; message?: string };
+            const error = errorFromSseCode(payload.code, payload.message ?? 'Chat failed');
+            result = { completed: false, error };
+            handlers.onError?.(error);
+            break;
+          }
+          default:
+            break;
+        }
+      },
+      signal,
+    );
+  } catch (cause) {
+    // The SSE reader raises a WidgetError when `signal` aborts (sse.ts).
+    if (signal?.aborted) {
+      return { completed: false, aborted: true };
     }
-  });
+    throw cause;
+  }
 
   if (!terminalReached && !result.error) {
     // Stream ended without a terminal event — the connection dropped mid-turn,

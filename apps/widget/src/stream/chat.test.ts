@@ -37,6 +37,33 @@ describe('Conversation', () => {
     expect(state.error).toBe('network down');
   });
 
+  it('attaches the source/citation list to an assistant turn', () => {
+    const conversation = new Conversation();
+    conversation.addUserMessage('q');
+    const id = conversation.startAssistantTurn();
+    conversation.setSources(id, [{ url: 'https://a.b', title: 'A' }]);
+    const state = conversation.getState();
+    expect(state.messages[1].sources).toEqual([{ url: 'https://a.b', title: 'A' }]);
+    expect(state.messages[1].content).toBe('');
+  });
+
+  it('stopTurn keeps the partial answer and marks it stopped, not failed', () => {
+    const conversation = new Conversation();
+    conversation.addUserMessage('q');
+    const id = conversation.startAssistantTurn();
+    conversation.appendDelta(id, 'partial');
+    conversation.stopTurn(id);
+    const state = conversation.getState();
+    expect(state.messages[1]).toMatchObject({
+      content: 'partial',
+      streaming: false,
+      stopped: true,
+    });
+    expect(state.messages[1].error).toBeUndefined();
+    expect(state.streaming).toBe(false);
+    expect(state.error).toBeNull();
+  });
+
   it('notifies subscribers on change', () => {
     const onChange = (): void => undefined;
     const spy = new (class {
