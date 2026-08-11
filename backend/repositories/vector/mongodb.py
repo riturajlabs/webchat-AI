@@ -135,9 +135,25 @@ class MongoVectorRepository(VectorRepository):
 
 
 def _atlas_only_error(exc: Exception) -> bool:
-    """True when the failure is the Atlas-only `$vectorSearch` limitation."""
+    """True when the failure is the Atlas-only `$vectorSearch` limitation.
+
+    Detection must cover the error variants across MongoDB versions: community
+    servers historically reject the stage outright (`$vectorSearch stage`,
+    "only allowed on MongoDB Atlas"), while MongoDB 8.0+ community reports
+    code 31082 `SearchNotEnabled` ("Using $search and $vectorSearch
+    aggregation stages requires additional configuration..."). All three mean
+    the local server cannot run `$vectorSearch` and the brute-force dev
+    fallback should kick in - genuine Atlas index misconfigurations keep their
+    fail-fast error because they do not match any marker.
+    """
     message = str(exc)
-    return "only allowed on MongoDB Atlas" in message or "$vectorSearch stage" in message
+    markers = (
+        "only allowed on MongoDB Atlas",
+        "$vectorSearch stage",
+        "requires additional configuration",
+        "SearchNotEnabled",
+    )
+    return any(marker in message for marker in markers)
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

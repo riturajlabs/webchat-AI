@@ -1,10 +1,21 @@
 """MongoDB connection management via the async Motor driver."""
 
+import logging
+import threading
+from collections.abc import Mapping
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.monitoring import (
+    CommandFailedEvent,
+    CommandListener,
+    CommandStartedEvent,
+    CommandSucceededEvent,
+)
 
 from backend.core.config import get_settings
+
+logger = logging.getLogger("webchat_ai")
 
 # ADR-005 §5.4: drop refresh-token documents 10 days after their expiry (40d).
 _REFRESH_TOKEN_TTL_SECONDS = 40 * 24 * 60 * 60
@@ -31,6 +42,90 @@ def _usage_ttl_seconds() -> int:
     return get_settings().usage_retention_days * 24 * 60 * 60
 
 
+# Heartbeat/control commands that would only ever log as noise.
+_NOISE_COMMANDS = {"ping", "hello", "ismaster", "saslStart", "saslContinue"}
+
+
+def _command_namespace(event: CommandStartedEvent) -> str:
+    """Best-effort `db.collection` namespace for a command event."""
+    collection = (
+        event.command.get("find")
+        or event.command.get("aggregate")
+        or event.command.get("count")
+        or event.command.get("insert")
+        or event.command.get("update")
+        or event.command.get("delete")
+    )
+    if isinstance(collection, str):
+        return f"{event.database_name}.{collection}"
+    return event.database_name
+
+
+class SlowQueryListener(CommandListener):
+    """Log MongoDB commands exceeding a threshold (Phase 12.1 instrumentation).
+
+    Opt-in via `MONGODB_SLOW_QUERY_THRESHOLD_MS` (> 0). Logs the command name,
+    namespace and duration plus, when the reply carries them,
+    `docsExamined`/`nReturned` (numeric, non-sensitive). Query filters are
+    never logged (00 rules §12/§20).
+    """
+
+    def __init__(self, threshold_ms: int) -> None:
+        self._threshold_ms = max(1, threshold_ms)
+        self._lock = threading.Lock()
+        self._starts: dict[int, CommandStartedEvent] = {}
+
+    def started(self, event: CommandStartedEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            self._starts[event.operation_id] = event
+
+    def succeeded(self, event: CommandSucceededEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            started = self._starts.pop(event.operation_id, None)
+        self._maybe_log(started, event.duration_micros, event.reply)
+
+    def failed(self, event: CommandFailedEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            started = self._starts.pop(event.operation_id, None)
+        self._maybe_log(started, event.duration_micros, None, failure=str(event.failure))
+
+    def _maybe_log(
+        self,
+        started: CommandStartedEvent | None,
+        duration_micros: int,
+        reply: Mapping[str, Any] | None,
+        *,
+        failure: str | None = None,
+    ) -> None:
+        if started is None or started.command_name in _NOISE_COMMANDS:
+            return
+        duration_ms = duration_micros / 1000.0
+        if duration_ms < self._threshold_ms:
+            return
+        extra: dict[str, Any] = {
+            "command": started.command_name,
+            "namespace": _command_namespace(started),
+            "duration_ms": round(duration_ms, 2),
+        }
+        if reply is not None:
+            docs_examined = reply.get("docsExamined")
+            returned = reply.get("nReturned")
+            if isinstance(docs_examined, int):
+                extra["docs_examined"] = docs_examined
+            if isinstance(returned, int):
+                extra["n_returned"] = returned
+        if failure is not None:
+            extra["ok"] = False
+            extra["error"] = failure
+        logger.info("mongodb_slow_query", extra=extra)
+
+
 class MongoDB:
     """Lazy singleton around the async Mongo client.
 
@@ -44,11 +139,15 @@ class MongoDB:
     def client(cls) -> AsyncIOMotorClient[Any]:
         if cls._client is None:
             settings = get_settings()
+            listeners: list[CommandListener] = []
+            if settings.mongodb_slow_query_threshold_ms > 0:
+                listeners.append(SlowQueryListener(settings.mongodb_slow_query_threshold_ms))
             cls._client = AsyncIOMotorClient[Any](
                 settings.mongodb_uri,
                 minPoolSize=settings.mongodb_min_pool_size,
                 maxPoolSize=settings.mongodb_max_pool_size,
                 serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+                event_listeners=listeners,
                 # Return BSON datetimes as aware UTC so they compare cleanly
                 # against `core.security.utcnow()` (Mongo defaults to naive).
                 tz_aware=True,

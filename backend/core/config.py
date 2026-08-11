@@ -164,6 +164,14 @@ class Settings(BaseSettings):
     cost_per_million_input_tokens: float = 0.30
     cost_per_million_output_tokens: float = 1.50
 
+    # Performance instrumentation (Phase 12.1; opt-in, disabled by default).
+    # When true, per-request HTTP timing, AI provider timings (TTFT/total) and
+    # worker job durations are logged as structured records. Never enabled in
+    # production - it is a load-testing/observability aid.
+    perf_timing_log_enabled: bool = False
+    # Log MongoDB commands slower than this threshold (ms); 0 disables.
+    mongodb_slow_query_threshold_ms: int = 0
+
     @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":
         """Fail fast on weak production secrets (00-AI-Development-Rules §20)."""

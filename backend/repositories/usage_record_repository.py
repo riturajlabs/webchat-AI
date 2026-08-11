@@ -57,7 +57,6 @@ class MongoUsageRecordRepository:
                 "$inc": increments,
                 "$setOnInsert": {
                     "_id": new_id(),
-                    "counters": {name: 0 for name in USAGE_COUNTERS},
                     "created_at": now,
                 },
                 "$set": {"updated_at": now, "schema_version": 1},

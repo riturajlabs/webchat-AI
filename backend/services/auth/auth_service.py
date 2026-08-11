@@ -55,6 +55,7 @@ from backend.repositories import (
 from backend.schemas.auth import validate_password_policy
 from backend.services.mail import build_email
 from backend.services.mail.base import EmailDispatcher
+from backend.workers.timing import chat_stage
 
 
 @dataclass(frozen=True)
@@ -326,17 +327,21 @@ class AuthService:
 
     async def authenticate(self, access_token: str) -> Principal:
         """Validate an access JWT and resolve the live user/tenant/member state."""
-        claims = decode_access_token(access_token)
+        async with chat_stage("auth.jwt"):
+            claims = decode_access_token(access_token)
         user_id = claims["sub"]
-        user = await self._users.find_by_id(user_id)
+        async with chat_stage("auth.user"):
+            user = await self._users.find_by_id(user_id)
         if user is None or user.status != "active":
             raise InvalidCredentialsError("Invalid or expired session.")
         if claims["tenant_id"] != user.tenant_id:
             raise InvalidCredentialsError("Invalid or expired session.")
-        tenant = await self._tenants.find_by_id(claims["tenant_id"])
+        async with chat_stage("auth.tenant"):
+            tenant = await self._tenants.find_by_id(claims["tenant_id"])
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
-        role = await self._resolve_role(user)
+        async with chat_stage("auth.member"):
+            role = await self._resolve_role(user)
         return Principal(
             user_id=user.id,
             tenant_id=user.tenant_id,

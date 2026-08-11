@@ -74,6 +74,25 @@ async def test_falls_back_to_brute_force_when_atlas_vector_search_is_unavailable
 
 
 @pytest.mark.asyncio
+async def test_falls_back_on_mongodb_80_search_not_enabled_error() -> None:
+    """MongoDB 8.x community reports code 31082 SearchNotEnabled; the brute-force
+    dev fallback must trigger there too."""
+    query = [1.0, 0.0]
+    docs = [_chunk("exact match", [1.0, 0.0], index=0)]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "Using $search and $vectorSearch aggregation stages requires additional "
+        "configuration. Please connect to Atlas or an AtlasCLI local deployment "
+        "to enable. code: 31082 SearchNotEnabled"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
+
+    assert [r.chunk.chunk_text for r in results] == ["exact match"]
+
+
+@pytest.mark.asyncio
 async def test_other_failures_still_raise_actionable_error() -> None:
     collection = FakeCollection([_chunk("a", [1.0, 0.0], index=0)])
     collection.aggregate_error = RuntimeError("vector index does not exist")

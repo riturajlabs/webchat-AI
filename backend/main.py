@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from backend.api.middleware import (
     RequestIDMiddleware,
+    RequestTimingMiddleware,
     SecurityHeadersMiddleware,
     WidgetCORSHeadersMiddleware,
 )
@@ -71,6 +72,9 @@ def create_app() -> FastAPI:
     app.add_middleware(WidgetCORSHeadersMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    # Outermost: measures the full request (incl. the middlewares above). No-op
+    # unless PERF_TIMING_LOG_ENABLED=true (Phase 12.1 instrumentation).
+    app.add_middleware(RequestTimingMiddleware)
 
     @app.exception_handler(AppError)
     async def app_error_handler(_: FastAPI, exc: AppError) -> JSONResponse:

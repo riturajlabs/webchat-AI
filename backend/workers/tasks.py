@@ -15,6 +15,7 @@ from typing import Any
 from backend.workers.jobs.crawl import crawl_website
 from backend.workers.jobs.email import send_email
 from backend.workers.jobs.knowledge import process_document, process_website_documents
+from backend.workers.timing import timed_job
 
 
 async def ping(ctx: dict[str, Any]) -> dict[str, str]:
@@ -25,5 +26,13 @@ async def ping(ctx: dict[str, Any]) -> dict[str, str]:
     }
 
 
-# Tasks registered in the ARQ worker (ADR-002 task registry).
-TASKS = [ping, send_email, crawl_website, process_document, process_website_documents]
+# Tasks registered in the ARQ worker (ADR-002 task registry). The timed_* wrap
+# measures queue wait + execution duration (Phase 12.1 instrumentation; only
+# logs when PERF_TIMING_LOG_ENABLED=true).
+TASKS = [
+    ping,
+    timed_job(send_email),
+    timed_job(crawl_website),
+    timed_job(process_document),
+    timed_job(process_website_documents),
+]

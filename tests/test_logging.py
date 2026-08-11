@@ -44,6 +44,17 @@ def test_json_formatter_includes_exception_details() -> None:
     assert "boom" in payload["exc_info"]
 
 
+def test_json_formatter_merges_extra_fields() -> None:
+    record = _record()
+    record.command = "find"
+    record.duration_ms = 12.5
+
+    line = JsonFormatter().format(record)
+    payload = json.loads(line)
+    assert payload["command"] == "find"
+    assert payload["duration_ms"] == 12.5
+
+
 def test_readable_formatter_carries_request_id() -> None:
     token = request_id_var.set("req-abc")
     try:

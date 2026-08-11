@@ -1,9 +1,11 @@
-"""HTTP middleware: request-ID correlation and baseline security headers.
+"""HTTP middleware: request-ID correlation, baseline security headers, timing.
 
 ADR-007 places this module at `backend/api/middleware.py`. Security headers are
 the first-pass baseline; the full hardening audit is Phase 11 (ADR-008).
 """
 
+import logging
+import time
 import uuid
 from collections.abc import MutableMapping
 from typing import Any
@@ -11,7 +13,10 @@ from typing import Any
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from backend.core.config import get_settings
 from backend.core.logging import request_id_var
+
+logger = logging.getLogger("webchat_ai")
 
 # Baseline security headers applied to every HTTP response. Headers already
 # set by an inner handler are preserved.
@@ -140,6 +145,47 @@ class WidgetCORSHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_cors)
+
+
+class RequestTimingMiddleware:
+    """Log one structured record per HTTP request with server-side duration.
+
+    Opt-in (`PERF_TIMING_LOG_ENABLED=true`): records method, path, response
+    status and total duration (to `http.response.complete`, so streaming SSE
+    responses are measured end-to-end) at INFO level. Disabled by default so
+    default log volume is unchanged (Phase 12.1 instrumentation).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or not get_settings().perf_timing_log_enabled:
+            await self.app(scope, receive, send)
+            return
+
+        started = time.perf_counter()
+        status: int | None = None
+
+        async def send_with_timing(message: MutableMapping[str, Any]) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message.get("status")
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_timing)
+        finally:
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            logger.info(
+                "http_request",
+                extra={
+                    "method": scope.get("method"),
+                    "path": scope.get("path"),
+                    "status": status,
+                    "duration_ms": round(duration_ms, 2),
+                },
+            )
 
 
 def _extract_request_id(headers: list[tuple[bytes, bytes]]) -> str:

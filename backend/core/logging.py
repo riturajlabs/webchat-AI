@@ -26,6 +26,20 @@ def get_request_id() -> str:
     return request_id_var.get()
 
 
+# Standard `LogRecord` attributes; anything else on the record was attached via
+# a logging call's `extra=` kwarg and is merged into the JSON payload.
+_LOG_RECORD_ATTRS = frozenset(
+    "name msg args levelname levelno pathname filename module exc_info "
+    "exc_text stack_info lineno funcName created msecs relativeCreated "
+    "thread threadName processName process taskName asctime message extra".split()
+)
+
+
+def _extra_fields(record: logging.LogRecord) -> dict[str, Any]:
+    """Non-standard attributes attached to `record` (the `extra=` payload)."""
+    return {k: v for k, v in record.__dict__.items() if k not in _LOG_RECORD_ATTRS}
+
+
 class JsonFormatter(logging.Formatter):
     """Format a log record as a single-line JSON object."""
 
@@ -43,6 +57,7 @@ class JsonFormatter(logging.Formatter):
         extra = getattr(record, "extra", None)
         if isinstance(extra, dict):
             payload.update(extra)
+        payload.update(_extra_fields(record))
         return json.dumps(payload, default=str)
 
 

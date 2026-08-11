@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable, Sequence
 
 from backend.ai.gemini import GenerationClient, GoogleGeminiClient
+from backend.ai.mock import MockEmbeddingClient, MockGenerationClient
 from backend.ai.providers.groq import GroqGenerationClient
 from backend.ai.providers.ollama import OllamaEmbeddingClient
 from backend.ai.providers.openrouter import OpenRouterGenerationClient
@@ -130,6 +131,10 @@ _registry.register_generation(
 _registry.register_embedding("gemini", GoogleEmbeddingClient, required_key="gemini_api_key")
 # Ollama is self-hosted: no API key, so it is always eligible.
 _registry.register_embedding("ollama", OllamaEmbeddingClient)
+# Mock is deterministic and keyless; only used when explicitly configured in
+# the provider order (offline dev / performance runs, never the default).
+_registry.register_generation("mock", MockGenerationClient)
+_registry.register_embedding("mock", MockEmbeddingClient)
 
 
 def build_generation_fallback() -> FallbackGenerationClient:

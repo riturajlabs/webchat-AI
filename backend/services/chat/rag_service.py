@@ -41,6 +41,7 @@ from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
 from backend.repositories.website_repository import WebsiteRepository
 from backend.services.knowledge.embedding import EmbeddingClient
+from backend.workers.timing import chat_stage
 
 logger = logging.getLogger("webchat_ai")
 
@@ -106,18 +107,20 @@ class RagService:
         """
         started = time.monotonic()
         try:
-            website = await self._websites.find_by_id(tenant_id, website_id)
+            async with chat_stage("website.lookup"):
+                website = await self._websites.find_by_id(tenant_id, website_id)
             if website is None:
                 yield _error_event("WEBSITE_NOT_FOUND", "Website not found.")
                 return
             question = sanitize_question(question)
-            session = await self._ensure_session(
-                tenant_id=tenant_id,
-                website_id=website_id,
-                session_id=session_id,
-                visitor_id=visitor_id,
-                user_id=user_id,
-            )
+            async with chat_stage("session.resolve"):
+                session = await self._ensure_session(
+                    tenant_id=tenant_id,
+                    website_id=website_id,
+                    session_id=session_id,
+                    visitor_id=visitor_id,
+                    user_id=user_id,
+                )
         except Exception as exc:
             yield _error_event(_error_code(exc), _safe_message(exc))
             return
@@ -131,7 +134,8 @@ class RagService:
             role=CHAT_ROLE_USER,
             content=question,
         )
-        await self._messages.create(user_message)
+        async with chat_stage("persist.user_message"):
+            await self._messages.create(user_message)
 
         if website.knowledge_chunks == 0:
             async for event in self._emit_fallback(
@@ -145,7 +149,8 @@ class RagService:
             return
 
         try:
-            vectors = await self._embedder.embed([question])
+            async with chat_stage("retrieval.embed"):
+                vectors = await self._embedder.embed([question])
             query_vector = vectors[0]
         except Exception as exc:
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
@@ -153,9 +158,10 @@ class RagService:
             return
 
         try:
-            results = await self._vector.similarity_search(
-                tenant_id, website_id, query_vector, top_k=self._top_k
-            )
+            async with chat_stage("retrieval.vector_search"):
+                results = await self._vector.similarity_search(
+                    tenant_id, website_id, query_vector, top_k=self._top_k
+                )
         except Exception as exc:
             logger.exception("vector search failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -172,9 +178,11 @@ class RagService:
                 yield event
             return
 
-        context_items, sources = self._build_context(results)
+        async with chat_stage("retrieval.context"):
+            context_items, sources = self._build_context(results)
         try:
-            history = await self._load_history(tenant_id, session.session_id)
+            async with chat_stage("retrieval.history"):
+                history = await self._load_history(tenant_id, session.session_id)
         except Exception as exc:
             logger.exception("conversation memory load failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -192,12 +200,13 @@ class RagService:
 
         deltas: list[str] = []
         try:
-            async for delta in self._generation.stream_generate(
-                system=system_prompt,
-                messages=[(CHAT_ROLE_USER, user_prompt)],
-            ):
-                deltas.append(delta)
-                yield {"event": "message", "data": {"delta": delta}}
+            async with chat_stage("generation.stream"):
+                async for delta in self._generation.stream_generate(
+                    system=system_prompt,
+                    messages=[(CHAT_ROLE_USER, user_prompt)],
+                ):
+                    deltas.append(delta)
+                    yield {"event": "message", "data": {"delta": delta}}
         except Exception as exc:
             logger.exception("answer generation failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -218,20 +227,23 @@ class RagService:
         assistant.response_time = response_time
         assistant.input_tokens = usage.input_tokens
         assistant.output_tokens = usage.output_tokens
-        await self._messages.create(assistant)
-        await self._sessions.touch(session.session_id)
-        await self._usage.increment(
-            tenant_id=tenant_id,
-            website_id=website_id,
-            date=usage_date_key(),
-            counters={
-                "chats": 1,
-                "messages": 2,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "vector_queries": 1,
-            },
-        )
+        async with chat_stage("persist.messages"):
+            await self._messages.create(assistant)
+        async with chat_stage("persist.session_touch"):
+            await self._sessions.touch(session.session_id)
+        async with chat_stage("persist.usage"):
+            await self._usage.increment(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                date=usage_date_key(),
+                counters={
+                    "chats": 1,
+                    "messages": 2,
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "vector_queries": 1,
+                },
+            )
         yield {
             "event": "done",
             "data": {
@@ -323,14 +335,17 @@ class RagService:
             content=UNKNOWN_ANSWER_FALLBACK,
         )
         assistant.response_time = response_time
-        await self._messages.create(assistant)
-        await self._sessions.touch(session.session_id)
-        await self._usage.increment(
-            tenant_id=tenant_id,
-            website_id=website_id,
-            date=usage_date_key(),
-            counters={"chats": 1, "messages": 2, "vector_queries": vector_queries},
-        )
+        async with chat_stage("persist.messages"):
+            await self._messages.create(assistant)
+        async with chat_stage("persist.session_touch"):
+            await self._sessions.touch(session.session_id)
+        async with chat_stage("persist.usage"):
+            await self._usage.increment(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                date=usage_date_key(),
+                counters={"chats": 1, "messages": 2, "vector_queries": vector_queries},
+            )
         yield {"event": "sources", "data": {"sources": []}}
         yield {"event": "message", "data": {"delta": UNKNOWN_ANSWER_FALLBACK}}
         yield {
