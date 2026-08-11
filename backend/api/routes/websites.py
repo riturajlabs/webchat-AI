@@ -15,8 +15,10 @@ from backend.api.deps import (
     current_user,
     get_crawl_service,
     get_website_service,
+    get_widget_config_service,
     require_role,
     website_limiter,
+    widget_config_limiter,
 )
 from backend.schemas.crawl import StartCrawlResponse
 from backend.schemas.websites import (
@@ -27,9 +29,11 @@ from backend.schemas.websites import (
     WidgetOut,
     WidgetResponse,
 )
+from backend.schemas.widget import WidgetConfigUpdate
 from backend.services.auth import Principal
 from backend.services.crawl import CrawlService
 from backend.services.website import WebsiteService
+from backend.services.widget import WidgetConfigService
 
 router = APIRouter(
     prefix="/websites",
@@ -142,12 +146,42 @@ async def get_website_widget(
     website_id: str,
     principal: Annotated[Principal, Depends(current_user)],
     service: Annotated[WebsiteService, Depends(get_website_service)],
-    _: Annotated[None, Depends(website_limiter)],
+    _: Annotated[None, Depends(widget_config_limiter)],
 ) -> WidgetResponse:
     widget = await service.get_widget(principal.tenant_id, website_id)
     return WidgetResponse(
         widget=WidgetOut.from_widget(widget),
         embed_script=service.build_embed_script(widget.widget_id),
+    )
+
+
+@router.patch("/{website_id}/widget", response_model=WidgetResponse)
+async def update_website_widget(
+    website_id: str,
+    body: WidgetConfigUpdate,
+    request: Request,
+    principal: Annotated[Principal, Depends(current_user)],
+    service: Annotated[WidgetConfigService, Depends(get_widget_config_service)],
+    websites: Annotated[WebsiteService, Depends(get_website_service)],
+    _: Annotated[None, Depends(widget_config_limiter)],
+) -> WidgetResponse:
+    """Customize the widget from the dashboard builder (Phase 11.5).
+
+    PATCH semantics: only the fields present in the body are applied; the rest
+    of the config is untouched. The public Redis config cache is invalidated so
+    the live embed reflects the change immediately.
+    """
+    widget = await service.update_widget_config(
+        tenant_id=principal.tenant_id,
+        website_id=website_id,
+        user_id=principal.user_id,
+        changes=body.model_dump(exclude_unset=True),
+        ip_address=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return WidgetResponse(
+        widget=WidgetOut.from_widget(widget),
+        embed_script=websites.build_embed_script(widget.widget_id),
     )
 
 

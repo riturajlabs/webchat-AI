@@ -20,6 +20,7 @@ from backend.models.website import (
 from backend.models.widget import Widget
 from backend.schemas.widget import WidgetPublicConfig
 from backend.services.widget.widget_service import WidgetService
+
 from tests.fakes import (
     FakeTenantRepository,
     FakeWebsiteRepository,
@@ -131,9 +132,47 @@ async def test_config_cache_falls_back_to_db_on_store_error() -> None:
         async def expire(self, key: str, seconds: int) -> None:
             raise RuntimeError("redis down")
 
+        async def delete(self, key: str) -> None:
+            raise RuntimeError("redis down")
+
     service._store = _Boom()
     config = await service.get_public_config("widget-1")
     assert config.widget_id == "widget-1"
+
+
+async def test_invalidate_public_config_drops_cached_entry() -> None:
+    widgets, tenants, _, store, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    await service.get_public_config("widget-1")
+    assert "wk:config:widget-1" in store.data
+
+    await service.invalidate_public_config("widget-1")
+    assert "wk:config:widget-1" not in store.data
+
+
+async def test_invalidate_public_config_survives_store_failure() -> None:
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+
+    class _Boom:
+        async def get(self, key: str) -> str | None:
+            raise RuntimeError("redis down")
+
+        async def setex(self, key: str, seconds: int, value: str) -> None:
+            raise RuntimeError("redis down")
+
+        async def incr(self, key: str) -> int:
+            raise RuntimeError("redis down")
+
+        async def expire(self, key: str, seconds: int) -> None:
+            raise RuntimeError("redis down")
+
+        async def delete(self, key: str) -> None:
+            raise RuntimeError("redis down")
+
+    service._store = _Boom()
+    # Best-effort invalidation: never raises.
+    await service.invalidate_public_config("widget-1")
 
 
 async def test_create_session_mints_scoped_token() -> None:
@@ -239,6 +278,9 @@ async def test_message_cap_fails_open_on_store_error() -> None:
             raise RuntimeError("redis down")
 
         async def expire(self, key: str, seconds: int) -> None:
+            raise RuntimeError("redis down")
+
+        async def delete(self, key: str) -> None:
             raise RuntimeError("redis down")
 
     service._store = _Boom()

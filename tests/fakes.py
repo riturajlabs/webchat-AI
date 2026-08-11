@@ -285,6 +285,24 @@ class FakeWidgetRepository:
             if widget.tenant_id == tenant_id and widget.website_id == website_id:
                 del self._widgets[widget_id]
 
+    async def update_widget_config(
+        self, tenant_id: str, website_id: str, updates: dict
+    ) -> Widget | None:
+        widget = next(
+            (
+                widget
+                for widget in self._widgets.values()
+                if widget.tenant_id == tenant_id and widget.website_id == website_id
+            ),
+            None,
+        )
+        if widget is None:
+            return None
+        for key, value in updates.items():
+            setattr(widget, key, value)
+        widget.updated_at = utcnow()
+        return widget
+
     async def find_by_widget_id(self, widget_id: str) -> Widget | None:
         return next(
             (widget for widget in self._widgets.values() if widget.widget_id == widget_id),
@@ -325,6 +343,9 @@ class FakeWidgetStore:
 
     async def expire(self, key: str, seconds: int) -> None:
         pass
+
+    async def delete(self, key: str) -> None:
+        self._data.pop(key, None)
 
 
 class FakeCrawlJobRepository:

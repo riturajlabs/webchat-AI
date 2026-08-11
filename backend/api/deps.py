@@ -49,7 +49,7 @@ from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
 from backend.services.website import WebsiteService
-from backend.services.widget import WidgetService
+from backend.services.widget import WidgetConfigService, WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
 
@@ -180,6 +180,9 @@ class _RedisWidgetStore:
     async def expire(self, key: str, seconds: int) -> None:
         await self._redis.expire(key, seconds)
 
+    async def delete(self, key: str) -> None:
+        await self._redis.delete(key)
+
 
 def get_widget_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
@@ -190,6 +193,23 @@ def get_widget_service(
         tenants=MongoTenantRepository(db),
         websites=MongoWebsiteRepository(db),
         store=_RedisWidgetStore(get_redis()),
+    )
+
+
+def get_widget_config_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    widget_service: Annotated[WidgetService, Depends(get_widget_service)],
+) -> WidgetConfigService:
+    """Build the dashboard widget-customization service (Phase 11.5).
+
+    Cache invalidation is delegated to the public `WidgetService` so the live
+    embed stops serving the stale 5-minute cached config the moment a tenant
+    saves changes from the widget builder.
+    """
+    return WidgetConfigService(
+        widgets=MongoWidgetRepository(db),
+        audit=MongoAuditLogRepository(db),
+        invalidate_public_config=widget_service.invalidate_public_config,
     )
 
 
@@ -309,6 +329,8 @@ conversations_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 analytics_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # API key management abuse protection (create/list/revoke, docs/05 §12).
 api_keys_limiter = RateLimitDependency(limit=60, window_seconds=3600)
+# Phase 11.5 widget builder abuse protection (customization read + PATCH).
+widget_config_limiter = RateLimitDependency(limit=240, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)

@@ -1,14 +1,18 @@
-"""Pydantic v2 schemas for the public widget API (Phase 8, ADR-004).
+"""Pydantic v2 schemas for the widget API (Phase 8 + Phase 11.5).
 
 The public config intentionally mirrors the dashboard `WidgetOut` *minus*
 `website_id` and timestamps (no internal identifiers leak to anonymous
-visitors) and is derived only from fields the embed needs.
+visitors) and is derived only from fields the embed needs. `WidgetConfigUpdate`
+is the dashboard-side customization surface (Phase 11.5 widget builder) and is
+strictly additive: it never touches the public API contract.
 """
 
+import re
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.models.widget import (
     WIDGET_FONT_SIZES,
@@ -21,9 +25,101 @@ MAX_VISITOR_ID_LENGTH = 128
 MAX_QUESTION_LENGTH = 2000
 MAX_SESSION_ID_LENGTH = 128
 
+# Phase 11.5 widget builder field limits (dashboard customization API).
+MAX_WELCOME_MESSAGE_LENGTH = 500
+MAX_PLACEHOLDER_LENGTH = 120
+MAX_SUGGESTED_QUESTIONS = 5
+MAX_SUGGESTED_QUESTION_LENGTH = 200
+MAX_WIDGET_URL_LENGTH = 2048
+
+_HTML_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
 WIDGET_THEMES_ALLOWED = WIDGET_THEMES
 WIDGET_POSITIONS_ALLOWED = WIDGET_POSITIONS
 WIDGET_FONT_SIZES_ALLOWED = WIDGET_FONT_SIZES
+
+WidgetTheme = Literal["light", "dark", "auto"]
+WidgetPosition = Literal["bottom-right", "bottom-left"]
+WidgetFontSize = Literal["sm", "md", "lg"]
+
+
+class WidgetConfigUpdate(BaseModel):
+    """Dashboard-side widget customization payload (Phase 11.5).
+
+    Every field is optional (PATCH semantics): only the fields the tenant
+    actually sends are applied to the `widgets` document. Explicit `null` for
+    `logo_url`/`avatar_url` clears the image; empty strings are normalized to
+    `None` by the validators below.
+    """
+
+    theme: WidgetTheme | None = None
+    position: WidgetPosition | None = None
+    primary_color: str | None = None
+    accent_color: str | None = None
+    font_size: WidgetFontSize | None = None
+    logo_url: str | None = Field(default=None, max_length=MAX_WIDGET_URL_LENGTH)
+    avatar_url: str | None = Field(default=None, max_length=MAX_WIDGET_URL_LENGTH)
+    welcome_message: str | None = Field(default=None, max_length=MAX_WELCOME_MESSAGE_LENGTH)
+    placeholder: str | None = Field(default=None, max_length=MAX_PLACEHOLDER_LENGTH)
+    suggested_questions: list[str] | None = None
+    branding: bool | None = None
+    dark_mode: bool | None = None
+    auto_open: bool | None = None
+    enabled: bool | None = None
+
+    @field_validator("primary_color", "accent_color")
+    @classmethod
+    def _validate_hex_color(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not _HTML_HEX_COLOR.match(cleaned):
+            raise ValueError("colors must be a hex value like #2563eb")
+        return cleaned
+
+    @field_validator("welcome_message", "placeholder")
+    @classmethod
+    def _strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("logo_url", "avatar_url")
+    @classmethod
+    def _validate_image_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            # An empty string means "clear the image".
+            return None
+        if len(cleaned) > MAX_WIDGET_URL_LENGTH:
+            raise ValueError("the URL is too long")
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("must be a valid http(s) URL")
+        return cleaned
+
+    @field_validator("suggested_questions")
+    @classmethod
+    def _validate_suggested_questions(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        if len(value) > MAX_SUGGESTED_QUESTIONS:
+            raise ValueError(f"no more than {MAX_SUGGESTED_QUESTIONS} questions are allowed")
+        cleaned: list[str] = []
+        for question in value:
+            stripped = " ".join(question.split())
+            if not stripped:
+                raise ValueError("suggested questions must not be blank")
+            if len(stripped) > MAX_SUGGESTED_QUESTION_LENGTH:
+                raise ValueError("a suggested question is too long")
+            cleaned.append(stripped)
+        return cleaned
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "WidgetConfigUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one widget setting is required")
+        return self
 
 
 class WidgetPublicConfig(BaseModel):
@@ -113,6 +209,7 @@ __all__ = [
     "MAX_VISITOR_ID_LENGTH",
     "MAX_WIDGET_ID_LENGTH",
     "WidgetChatRequest",
+    "WidgetConfigUpdate",
     "WidgetPublicConfig",
     "WidgetSessionResponse",
 ]

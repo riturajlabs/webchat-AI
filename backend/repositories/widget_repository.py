@@ -1,9 +1,12 @@
 """Widget data access (Protocol + MongoDB implementation)."""
 
+from datetime import datetime
 from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import ReturnDocument
 
+from backend.core.security import utcnow
 from backend.models.widget import Widget
 
 
@@ -17,6 +20,10 @@ class WidgetRepository(Protocol):
     async def list_by_website_ids(self, tenant_id: str, website_ids: list[str]) -> list[Widget]: ...
 
     async def delete_by_website_id(self, tenant_id: str, website_id: str) -> None: ...
+
+    async def update_widget_config(
+        self, tenant_id: str, website_id: str, updates: dict[str, Any]
+    ) -> Widget | None: ...
 
     # Public widget read path (Phase 8, ADR-004): resolves the widget by its
     # public `widget_id` (unique index) regardless of tenant, since callers of
@@ -45,6 +52,23 @@ class MongoWidgetRepository:
 
     async def delete_by_website_id(self, tenant_id: str, website_id: str) -> None:
         await self._collection.delete_many({"tenant_id": tenant_id, "website_id": website_id})
+
+    async def update_widget_config(
+        self, tenant_id: str, website_id: str, updates: dict[str, Any]
+    ) -> Widget | None:
+        """Apply scoped config updates and return the refreshed widget.
+
+        The filter is always `(tenant_id, website_id)` - never the request body
+        - so a caller can only ever touch its own website's widget. `updated_at`
+        is bumped on every successful write.
+        """
+        now: datetime = utcnow()
+        doc = await self._collection.find_one_and_update(
+            {"tenant_id": tenant_id, "website_id": website_id},
+            {"$set": {**updates, "updated_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return Widget.from_doc(doc) if doc else None
 
     async def find_by_widget_id(self, widget_id: str) -> Widget | None:
         doc = await self._collection.find_one({"widget_id": widget_id})

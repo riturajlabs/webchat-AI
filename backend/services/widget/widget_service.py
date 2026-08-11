@@ -54,6 +54,8 @@ class WidgetStore(Protocol):
 
     async def expire(self, key: str, seconds: int) -> None: ...
 
+    async def delete(self, key: str) -> None: ...
+
 
 class WidgetService:
     """Public-facing widget business logic (config, sessions, chat guards)."""
@@ -99,6 +101,17 @@ class WidgetService:
             config.enabled = False
         await self._cache_set(cache_key, config)
         return config
+
+    async def invalidate_public_config(self, widget_id: str) -> None:
+        """Drop the cached public config so dashboard edits apply immediately.
+
+        Best-effort: a Redis failure must never block a config save (the stale
+        entry simply ages out via its TTL).
+        """
+        try:
+            await self._store.delete(f"{CONFIG_CACHE_PREFIX}{widget_id}")
+        except Exception:
+            logger.warning("widget config cache invalidation failed for %s", widget_id)
 
     async def _cache_get(self, key: str) -> WidgetPublicConfig | None:
         try:
