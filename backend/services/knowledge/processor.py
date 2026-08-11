@@ -11,6 +11,7 @@ unchanged and it already has chunks, embedding is skipped entirely. When the
 content changed, the old chunks are deleted and rebuilt.
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -28,9 +29,13 @@ from backend.models.knowledge_chunk import (
     KNOWLEDGE_STATUS_READY,
     KnowledgeChunk,
 )
+from backend.models.usage_record import USAGE_COUNTER_EMBEDDINGS_CREATED, usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
+from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.services.knowledge.chunker import TextChunk, chunk_text
 from backend.services.knowledge.embedding import EmbeddingClient
+
+logger = logging.getLogger("webchat_ai")
 
 EnqueueFn = Callable[[str], Awaitable[None]]
 
@@ -47,6 +52,7 @@ class KnowledgeProcessor:
         websites: Any,
         audit: Any,
         embedder: EmbeddingClient,
+        usage: UsageRecordRepository | None = None,
         chunk_size: int | None = None,
         overlap: int | None = None,
     ) -> None:
@@ -56,6 +62,7 @@ class KnowledgeProcessor:
         self._websites = websites
         self._audit = audit
         self._embedder = embedder
+        self._usage = usage
         self._chunk_size = chunk_size
         self._overlap = overlap
 
@@ -134,6 +141,15 @@ class KnowledgeProcessor:
         await self._vector.delete_by_document(document.tenant_id, document.id)
         await self._vector.insert_chunks(chunks)
 
+        # ADR-005 §5.5: count every successful embedding on the daily usage
+        # rollup. Best-effort: a usage-tracking outage must never fail the
+        # pipeline (chat pipeline applies the same principle).
+        await self._record_embeddings_created(
+            tenant_id=document.tenant_id,
+            website_id=document.website_id,
+            count=len(chunks),
+        )
+
         await self._record_document(
             document,
             status=KNOWLEDGE_STATUS_READY,
@@ -204,6 +220,34 @@ class KnowledgeProcessor:
         website.last_knowledge_at = utcnow()
         website.updated_at = utcnow()
         await self._websites.update(website)
+
+    async def _record_embeddings_created(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        count: int,
+    ) -> None:
+        """Increment the daily `embeddings_created` counter.
+
+        Best-effort: a usage-tracking outage must never fail the knowledge
+        pipeline, so any exception from the rollup repo is logged and dropped
+        (mirrors the chat pipeline's `chat_stage("persist.usage")` policy).
+        """
+        if self._usage is None or count <= 0:
+            return
+        try:
+            await self._usage.increment(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                date=usage_date_key(),
+                counters={USAGE_COUNTER_EMBEDDINGS_CREATED: count},
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort usage tracking
+            logger.warning(
+                "usage rollup increment failed (counter=embeddings_created): %s",
+                exc,
+            )
 
 
 __all__ = ["KnowledgeProcessor"]

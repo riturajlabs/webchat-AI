@@ -22,6 +22,7 @@ from backend.repositories import (
     MongoAuditLogRepository,
     MongoDocumentRepository,
     MongoKnowledgeChunkRepository,
+    MongoUsageRecordRepository,
     MongoWebsiteRepository,
 )
 from backend.repositories.vector import get_vector_repository
@@ -59,6 +60,7 @@ def _processor(ctx: dict[str, Any], embedder: EmbeddingClient) -> KnowledgeProce
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         embedder=embedder,
+        usage=MongoUsageRecordRepository(db),
     )
 
 

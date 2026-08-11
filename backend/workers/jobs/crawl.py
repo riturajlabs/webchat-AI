@@ -27,11 +27,13 @@ from backend.models.crawl_job import (
     CRAWL_STATUS_PROCESSING,
     CRAWL_STATUS_RUNNING,
 )
+from backend.models.usage_record import USAGE_COUNTER_CRAWL_PAGES, usage_date_key
 from backend.models.website import WEBSITE_STATUS_FAILED, WEBSITE_STATUS_READY
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoCrawlJobRepository,
     MongoDocumentRepository,
+    MongoUsageRecordRepository,
     MongoWebsiteRepository,
 )
 from backend.services.ingestion import BrowserPageFetcher, CrawlSession, SsrFGuard
@@ -65,6 +67,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         documents=MongoDocumentRepository(db),
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
+        usage=MongoUsageRecordRepository(db),
         enqueue_knowledge=enqueue_process_website_documents,
     )
 
@@ -77,6 +80,7 @@ async def _run_crawl_job(
     documents: Any,
     websites: Any,
     audit: Any,
+    usage: Any = None,
     enqueue_knowledge: Any = None,
 ) -> dict[str, Any]:
     """Core worker logic, testable with fake repositories/fetcher injected.
@@ -149,6 +153,14 @@ async def _run_crawl_job(
         website.updated_at = utcnow()
         await websites.update(website)
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_COMPLETED, tenant_id=job.tenant_id))
+        # ADR-005 §5.5: roll up the pages this crawl successfully indexed.
+        # Best-effort: usage-tracking outages must not fail the crawl job.
+        await _record_crawl_pages(
+            usage=usage,
+            tenant_id=job.tenant_id,
+            website_id=job.website_id,
+            count=stored,
+        )
         if enqueue_knowledge is not None:
             # Phase 5 handoff: fan the freshly crawled documents out as
             # per-document embedding jobs (ADR-002 task registry). The website
@@ -195,3 +207,32 @@ async def _site_checksum(documents: Any, tenant_id: str, website_id: str) -> str
     """Aggregate checksum over the website's stored documents (Phase 5 diff)."""
     digests = await documents.all_checksums(tenant_id, website_id)
     return hashlib.sha256("".join(sorted(digests)).encode("utf-8")).hexdigest()
+
+
+async def _record_crawl_pages(
+    *,
+    usage: Any,
+    tenant_id: str,
+    website_id: str,
+    count: int,
+) -> None:
+    """Increment the daily `crawl_pages` counter after a successful crawl.
+
+    Best-effort: a usage-tracking outage must never fail the crawl job, so any
+    exception from the rollup repo is logged and dropped (mirrors the chat
+    pipeline's `chat_stage("persist.usage")` policy).
+    """
+    if usage is None or count <= 0:
+        return
+    try:
+        await usage.increment(
+            tenant_id=tenant_id,
+            website_id=website_id,
+            date=usage_date_key(),
+            counters={USAGE_COUNTER_CRAWL_PAGES: count},
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort usage tracking
+        logger.warning(
+            "usage rollup increment failed (counter=crawl_pages): %s",
+            exc,
+        )

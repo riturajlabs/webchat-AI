@@ -15,14 +15,17 @@ from backend.models.crawl_job import (
     CRAWL_STATUS_FAILED,
     CrawlJob,
 )
+from backend.models.usage_record import usage_date_key
 from backend.models.website import WEBSITE_STATUS_READY, Website
 from backend.services.ingestion import SsrFGuard
 from backend.workers.jobs.crawl import _run_crawl_job
+
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher
 from tests.fakes import (
     FakeAuditLogRepository,
     FakeCrawlJobRepository,
     FakeDocumentRepository,
+    FakeUsageRecordRepository,
     FakeWebsiteRepository,
 )
 
@@ -42,6 +45,7 @@ async def _env(*, seed: str = SEED, pages: dict[str, str] | None = None):
     documents = FakeDocumentRepository()
     websites = FakeWebsiteRepository()
     audit = FakeAuditLogRepository()
+    usage = FakeUsageRecordRepository()
     website = Website.new(tenant_id="tenant-a", name="Acme", url=seed)
     await websites.create(website)
     job = CrawlJob.new(tenant_id="tenant-a", website_id=website.id)
@@ -50,14 +54,20 @@ async def _env(*, seed: str = SEED, pages: dict[str, str] | None = None):
         pages or {seed: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT}
     )
     ctx: dict = {"crawler_fetcher": fetcher, "job_try": 1, "max_tries": 3}
-    return ctx, job, jobs, documents, websites, audit
+    return ctx, job, jobs, documents, websites, audit, usage
 
 
 async def test_worker_completes_job_and_updates_website(patch_dns) -> None:
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
 
     result = await _run_crawl_job(
-        ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
 
     assert result["status"] == "completed"
@@ -78,32 +88,50 @@ async def test_worker_completes_job_and_updates_website(patch_dns) -> None:
 
 
 async def test_worker_skips_unknown_job(patch_dns) -> None:
-    ctx, _, jobs, documents, websites, audit = await _env()
+    ctx, _, jobs, documents, websites, audit, usage = await _env()
     result = await _run_crawl_job(
-        ctx, "missing", crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        "missing",
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
     assert result == {"status": "not_found"}
 
 
 async def test_worker_skips_already_terminal_job(patch_dns) -> None:
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     job.status = CRAWL_STATUS_FAILED
     await jobs.update(job)
 
     result = await _run_crawl_job(
-        ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
     assert result == {"status": CRAWL_STATUS_FAILED}
     assert documents.documents == {}
 
 
 async def test_worker_fails_job_when_website_missing(patch_dns) -> None:
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     job.website_id = "gone"
     await jobs.update(job)
 
     result = await _run_crawl_job(
-        ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
     assert result == {"status": "failed"}
     stored = jobs.jobs[job.id]
@@ -112,13 +140,19 @@ async def test_worker_fails_job_when_website_missing(patch_dns) -> None:
 
 
 async def test_worker_final_retry_marks_failed(patch_dns) -> None:
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
     ctx["job_try"] = 3
 
     with pytest.raises(RuntimeError):
         await _run_crawl_job(
-            ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
         )
 
     stored = jobs.jobs[job.id]
@@ -153,9 +187,15 @@ async def test_worker_acquires_crawl_semaphore(patch_dns, monkeypatch) -> None:
 
     monkeypatch.setattr(crawl_module, "crawl_semaphore", lambda: TrackingSemaphore())
 
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     result = await _run_crawl_job(
-        ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
     assert result["status"] == "completed"
     assert entered == ["enter"]
@@ -169,9 +209,15 @@ async def test_worker_fails_permanently_on_ssrf_blocked_seed(patch_dns, monkeypa
 
     monkeypatch.setattr(SsrFGuard, "resolve_async", private_resolve)
 
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     result = await _run_crawl_job(
-        ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
     )
 
     assert result == {"status": "failed"}
@@ -182,13 +228,19 @@ async def test_worker_fails_permanently_on_ssrf_blocked_seed(patch_dns, monkeypa
 
 
 async def test_worker_keeps_job_active_on_transient_failure(patch_dns) -> None:
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
     ctx["job_try"] = 1
 
     with pytest.raises(RuntimeError):
         await _run_crawl_job(
-            ctx, job.id, crawl_jobs=jobs, documents=documents, websites=websites, audit=audit
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
         )
 
     stored = jobs.jobs[job.id]
@@ -201,7 +253,7 @@ async def test_worker_keeps_job_active_on_transient_failure(patch_dns) -> None:
 
 async def test_worker_enqueues_knowledge_pass_after_success(patch_dns) -> None:
     """A successful crawl hands the documents off to the knowledge pipeline."""
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     enqueued: list[str] = []
 
     async def fake_enqueue(website_id: str) -> None:
@@ -214,6 +266,7 @@ async def test_worker_enqueues_knowledge_pass_after_success(patch_dns) -> None:
         documents=documents,
         websites=websites,
         audit=audit,
+        usage=usage,
         enqueue_knowledge=fake_enqueue,
     )
 
@@ -223,7 +276,7 @@ async def test_worker_enqueues_knowledge_pass_after_success(patch_dns) -> None:
 
 async def test_worker_skips_knowledge_pass_on_failure(patch_dns) -> None:
     """No knowledge handoff on a failed crawl (nothing new to embed)."""
-    ctx, job, jobs, documents, websites, audit = await _env()
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
     ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
     ctx["job_try"] = 3
     enqueued: list[str] = []
@@ -243,3 +296,163 @@ async def test_worker_skips_knowledge_pass_on_failure(patch_dns) -> None:
         )
 
     assert enqueued == []
+
+
+# ---------------------------------------------------------------------------
+# Usage rollup tests (Phase 12.3, ADR-005 §5.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_crawl_success_increments_crawl_pages(patch_dns) -> None:
+    """ADR-005 §5.5: every successfully indexed page counts on the daily rollup."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result["status"] == "completed"
+    record = usage.get_record("tenant-a", job.website_id, usage_date_key())
+    assert record is not None
+    assert record.counters["crawl_pages"] == result["pages"] == 2
+
+
+async def test_failed_crawl_does_not_increment_crawl_pages(patch_dns) -> None:
+    """A failed crawl must NOT increment the rollup; only success counts."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
+    ctx["job_try"] = 3
+
+    with pytest.raises(RuntimeError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+
+    record = usage.get_record("tenant-a", job.website_id, usage_date_key())
+    assert record is None or record.counters.get("crawl_pages", 0) == 0
+
+
+async def test_crawl_pages_is_tenant_scoped(patch_dns) -> None:
+    """A second tenant's crawl must roll up under its own tenant_id only."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    other_website = Website.new(tenant_id="tenant-b", name="Other", url="https://other.example/")
+    await websites.create(other_website)
+    other_job = CrawlJob.new(tenant_id="tenant-b", website_id=other_website.id)
+    await jobs.create(other_job)
+    other_pages = {
+        "https://other.example/": SAMPLE_HTML,
+        "https://other.example/about": SAMPLE_ABOUT,
+    }
+    other_fetcher = FakePageFetcher(other_pages)
+    ctx_other: dict = {"crawler_fetcher": other_fetcher, "job_try": 1, "max_tries": 3}
+
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    await _run_crawl_job(
+        ctx_other,
+        other_job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    tenant_a = usage.get_record("tenant-a", job.website_id, usage_date_key())
+    tenant_b = usage.get_record("tenant-b", other_website.id, usage_date_key())
+    assert tenant_a is not None and tenant_b is not None
+    assert tenant_a.counters["crawl_pages"] == 2
+    assert tenant_b.counters["crawl_pages"] == 2
+    # Cross-tenant reads return no record (the unique key scopes by tenant).
+    assert usage.get_record("tenant-a", other_website.id, usage_date_key()) is None
+    assert usage.get_record("tenant-b", job.website_id, usage_date_key()) is None
+
+
+async def test_usage_increment_failure_does_not_fail_crawl(patch_dns) -> None:
+    """A broken usage repo must not fail the crawl (best-effort rollups)."""
+
+    class FailingUsage(FakeUsageRecordRepository):
+        async def increment(self, **kwargs: object) -> None:  # type: ignore[override]
+            raise RuntimeError("mongo down")
+
+    ctx, job, jobs, documents, websites, audit, _usage = await _env()
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=FailingUsage(),
+    )
+
+    assert result["status"] == "completed"
+    assert result["pages"] == 2
+    website = websites.websites[job.website_id]
+    assert website.status == WEBSITE_STATUS_READY
+    assert website.pages_indexed == 2
+
+
+async def test_zero_page_crawl_does_not_increment(patch_dns) -> None:
+    """A crawl that yields zero stored pages writes no `$inc`.
+
+    Verified via a recording usage repo: success path must still call `increment`
+    once with the page count, but `count=0` triggers the no-op guard in
+    `_record_crawl_pages` so the repo's records list stays empty.
+    """
+    ctx, job, jobs, documents, websites, audit, _usage = await _env()
+
+    class RecordingUsage(FakeUsageRecordRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls: list[dict] = []
+
+        async def increment(self, **kwargs: object) -> None:  # type: ignore[override]
+            self.calls.append(kwargs)
+            await super().increment(**kwargs)
+
+    recording = RecordingUsage()
+    # Make the seed link to a second page that is unreachable so the crawler
+    # stores 1 page (the seed) but the BFS won't expand. We need 0 to verify the
+    # guard, so we override the seed to be self-only with no other links AND
+    # no body content (extractor returns empty). Easiest path: use the existing
+    # SAMPLE_HTML but point to a URL whose body is empty (no <main>):
+    empty_pages = {SEED: "<!doctype html><html><head></head></html>"}
+    ctx["crawler_fetcher"] = FakePageFetcher(empty_pages)
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=recording,
+    )
+
+    assert result["status"] == "completed"
+    assert result["pages"] == 0
+    # The success branch must reach `_record_crawl_pages` exactly once with 0,
+    # which the no-op guard turns into no `increment` call.
+    assert recording.calls == []
+    assert recording.records == []

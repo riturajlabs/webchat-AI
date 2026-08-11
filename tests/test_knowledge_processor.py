@@ -16,13 +16,16 @@ from backend.models.knowledge_chunk import (
     KNOWLEDGE_STATUS_PROCESSING,
     KNOWLEDGE_STATUS_READY,
 )
+from backend.models.usage_record import usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.services.knowledge.processor import KnowledgeProcessor
+
 from tests.fakes import (
     FakeAuditLogRepository,
     FakeDocumentRepository,
     FakeEmbeddingClient,
     FakeKnowledgeChunkRepository,
+    FakeUsageRecordRepository,
     FakeVectorRepository,
     FakeWebsiteRepository,
 )
@@ -38,6 +41,7 @@ class Env:
     websites: FakeWebsiteRepository
     audit: FakeAuditLogRepository
     embedder: FakeEmbeddingClient
+    usage: FakeUsageRecordRepository
     website: Website
     document: Document
     processor: KnowledgeProcessor
@@ -58,6 +62,7 @@ def _processor(
     *,
     chunk_size: int | None = 30,
     overlap: int | None = 5,
+    usage: FakeUsageRecordRepository | None = None,
 ) -> KnowledgeProcessor:
     return KnowledgeProcessor(
         documents=env.documents,
@@ -66,6 +71,7 @@ def _processor(
         websites=env.websites,
         audit=env.audit,
         embedder=env.embedder,
+        usage=usage if usage is not None else env.usage,
         chunk_size=chunk_size,
         overlap=overlap,
     )
@@ -78,6 +84,7 @@ async def _env(*, content: str = TEXT) -> Env:
     websites = FakeWebsiteRepository()
     audit = FakeAuditLogRepository()
     embedder = FakeEmbeddingClient()
+    usage = FakeUsageRecordRepository()
 
     website = Website.new(tenant_id="tenant-a", name="Acme", url="https://acme.example/")
     await websites.create(website)
@@ -90,7 +97,18 @@ async def _env(*, content: str = TEXT) -> Env:
         checksum="abc123",
     )
     await documents.upsert(document)
-    env = Env(documents, vector, chunks, websites, audit, embedder, website, document, None)
+    env = Env(
+        documents,
+        vector,
+        chunks,
+        websites,
+        audit,
+        embedder,
+        usage,
+        website,
+        document,
+        None,
+    )
     env.processor = _processor(env)
     return env
 
@@ -328,3 +346,108 @@ async def test_embedding_usage_is_reported_through_hook() -> None:
 
     assert len(usages) == 1  # single embed call for the whole document
     assert usages[0] > 0
+
+
+# ---------------------------------------------------------------------------
+# Usage rollup tests (Phase 12.3, ADR-005 §5.5)
+# ---------------------------------------------------------------------------
+
+
+async def test_successful_embedding_increments_embeddings_created() -> None:
+    """ADR-005 §5.5: every successful embedding counts on the daily rollup."""
+    env = await _env()
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    record = env.usage.get_record(env.document.tenant_id, env.website.id, usage_date_key())
+    assert record is not None
+    assert record.counters["embeddings_created"] == result["chunks"]
+
+
+async def test_unchanged_document_does_not_increment_embeddings_created() -> None:
+    """The incremental skip (checksum match + existing chunks) must not pollute
+    the rollup: zero embeddings means zero rollup increments."""
+    env = await _env()
+    await env.processor.process_document(env.document.id)  # first run increments
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result == {"status": "unchanged"}
+    record = env.usage.get_record(env.document.tenant_id, env.website.id, usage_date_key())
+    assert record is not None
+    assert record.counters["embeddings_created"] == len(env.vector.chunks)
+
+
+async def test_embedding_failure_does_not_increment_embeddings_created() -> None:
+    """A failing embed must NOT increment the rollup; only success counts."""
+    env = await _env()
+
+    class FailingEmbedder(FakeEmbeddingClient):
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise EmbeddingError("boom")
+
+    env.processor = KnowledgeProcessor(
+        documents=env.documents,
+        vector=env.vector,
+        chunks=env.chunks,
+        websites=env.websites,
+        audit=env.audit,
+        embedder=FailingEmbedder(),
+        usage=env.usage,
+        chunk_size=30,
+        overlap=5,
+    )
+
+    with pytest.raises(EmbeddingError):
+        await env.processor.process_document(env.document.id)
+
+    record = env.usage.get_record(env.document.tenant_id, env.website.id, usage_date_key())
+    assert record is None or record.counters.get("embeddings_created", 0) == 0
+
+
+async def test_embeddings_created_is_tenant_scoped() -> None:
+    """A second tenant's embeddings must roll up under its own tenant_id only."""
+    env = await _env()
+    await env.processor.process_document(env.document.id)
+
+    other_website = Website.new(tenant_id="tenant-b", name="Other", url="https://other.example/")
+    await env.websites.create(other_website)
+    other_doc = Document.new(
+        tenant_id="tenant-b",
+        website_id=other_website.id,
+        url="https://other.example/",
+        title="Other",
+        content=TEXT,
+        checksum="other-1",
+    )
+    await env.documents.upsert(other_doc)
+
+    await env.processor.process_document(other_doc.id)
+
+    tenant_a = env.usage.get_record("tenant-a", env.website.id, usage_date_key())
+    tenant_b = env.usage.get_record("tenant-b", other_website.id, usage_date_key())
+    assert tenant_a is not None and tenant_b is not None
+    assert tenant_a.counters["embeddings_created"] > 0
+    assert tenant_b.counters["embeddings_created"] > 0
+    # Cross-tenant reads return no record (the unique key scopes by tenant).
+    assert env.usage.get_record("tenant-a", other_website.id, usage_date_key()) is None
+    assert env.usage.get_record("tenant-b", env.website.id, usage_date_key()) is None
+
+
+async def test_usage_increment_failure_does_not_fail_processing() -> None:
+    """A broken usage repo must not fail the knowledge pipeline (best-effort
+    rollups mirror the chat pipeline's `chat_stage("persist.usage")` policy)."""
+
+    class FailingUsage(FakeUsageRecordRepository):
+        async def increment(self, **kwargs: object) -> None:  # type: ignore[override]
+            raise RuntimeError("mongo down")
+
+    env = await _env()
+    env.processor = _processor(env, usage=FailingUsage())
+
+    # process_document must succeed despite the failing usage repo.
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    assert len(env.vector.chunks) == result["chunks"]
