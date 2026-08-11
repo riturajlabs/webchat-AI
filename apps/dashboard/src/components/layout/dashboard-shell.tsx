@@ -2,35 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  BarChart3,
-  Bot,
-  CircleUser,
-  KeyRound,
-  LayoutDashboard,
-  LibraryBig,
-  LogOut,
-  MessagesSquare,
-  Puzzle,
-  Settings,
-} from 'lucide-react';
+import { Bot, LogOut } from 'lucide-react';
 import { useState } from 'react';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { Button } from '@/components/ui/button';
+import { MobileNav } from '@/components/layout/mobile-nav';
+import { NAV_ITEMS } from '@/components/layout/nav-items';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { cn } from '@/lib/utils';
-
-const NAV_ITEMS = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/websites', label: 'Websites', icon: Bot },
-  { href: '/knowledge', label: 'Knowledge Base', icon: LibraryBig },
-  { href: '/conversations', label: 'Conversations', icon: MessagesSquare },
-  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { href: '/widget', label: 'Widget', icon: Puzzle },
-  { href: '/api-keys', label: 'API Keys', icon: KeyRound },
-  { href: '/profile', label: 'Profile', icon: CircleUser },
-  { href: '/settings', label: 'Settings', icon: Settings },
-];
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -83,9 +63,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </nav>
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 border-b bg-background px-6 py-3 md:px-10">
-          <p className="text-sm text-muted-foreground">Welcome{user ? `, ${user.name}` : ''}</p>
+        <header className="flex items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
+          <div className="flex min-w-0 items-center gap-2">
+            <MobileNav />
+            <p className="truncate text-sm text-muted-foreground">
+              Welcome{user ? `, ${user.name}` : ''}
+            </p>
+          </div>
           <div className="flex items-center gap-3">
+            <ThemeToggle />
             <span className="hidden text-sm text-muted-foreground sm:inline">{user?.email}</span>
             <Button
               variant="outline"
@@ -98,7 +84,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </Button>
           </div>
         </header>
-        <div className="flex-1 px-6 py-8 md:px-10">{children}</div>
+        <div className="flex-1 px-4 py-8 md:px-10">{children}</div>
       </main>
     </div>
   );

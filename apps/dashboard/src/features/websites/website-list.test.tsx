@@ -20,6 +20,13 @@ vi.mock('./add-website-dialog', () => ({
   ),
 }));
 
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+
 const mockedUseWebsites = vi.mocked(useWebsites);
 const mockedUseDeleteWebsite = vi.mocked(useDeleteWebsite);
 const mockedUseStartCrawl = vi.mocked(useStartCrawl);
@@ -107,7 +114,7 @@ describe('WebsiteList', () => {
   it('shows a loading state while pending', () => {
     mockWebsites({ isPending: true, data: undefined });
     renderList();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading websites…');
+    expect(screen.getByRole('status', { name: 'Loading websites' })).toBeInTheDocument();
   });
 
   it('shows an error state with a retry action', () => {

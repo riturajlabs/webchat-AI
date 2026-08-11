@@ -17,6 +17,12 @@ from backend.core.security import new_id, utcnow
 
 CHAT_SCHEMA_VERSION = 1
 
+# Chat session statuses (Phase 11.2 soft delete, mirroring `websites.status`).
+CHAT_SESSION_STATUS_ACTIVE = "active"
+CHAT_SESSION_STATUS_DELETED = "deleted"
+
+CHAT_SESSION_STATUSES = {CHAT_SESSION_STATUS_ACTIVE, CHAT_SESSION_STATUS_DELETED}
+
 
 class ChatSession(BaseModel):
     """A conversation between a visitor (or dashboard user) and the chatbot."""
@@ -32,6 +38,7 @@ class ChatSession(BaseModel):
     started_at: datetime
     last_activity: datetime
     expires_at: datetime
+    status: str = CHAT_SESSION_STATUS_ACTIVE
     schema_version: int = CHAT_SCHEMA_VERSION
 
     @classmethod
@@ -70,4 +77,10 @@ class ChatSession(BaseModel):
         return doc
 
 
-__all__ = ["CHAT_SCHEMA_VERSION", "ChatSession"]
+__all__ = [
+    "CHAT_SESSION_STATUS_ACTIVE",
+    "CHAT_SESSION_STATUS_DELETED",
+    "CHAT_SESSION_STATUSES",
+    "CHAT_SCHEMA_VERSION",
+    "ChatSession",
+]

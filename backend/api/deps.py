@@ -27,6 +27,7 @@ from backend.core.rate_limit import SlidingWindowRateLimiter
 from backend.core.redis import get_redis
 from backend.core.security import csrf_tokens_match, decode_widget_session_token
 from backend.repositories import (
+    MongoAnalyticsRepository,
     MongoAuditLogRepository,
     MongoChatMessageRepository,
     MongoChatSessionRepository,
@@ -40,8 +41,10 @@ from backend.repositories import (
     MongoWidgetRepository,
     get_vector_repository,
 )
+from backend.services.analytics import AnalyticsService
 from backend.services.auth import AuthService, Principal
 from backend.services.chat.rag_service import RagService
+from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
 from backend.services.website import WebsiteService
 from backend.services.widget import WidgetService
@@ -121,6 +124,29 @@ def get_rag_service(
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),
     )
+
+
+def get_conversation_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> ConversationService:
+    """Build the conversation service with MongoDB-backed repositories (Phase 11.2)."""
+    return ConversationService(
+        sessions=MongoChatSessionRepository(db),
+        messages=MongoChatMessageRepository(db),
+        audit=MongoAuditLogRepository(db),
+    )
+
+
+def get_analytics_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> AnalyticsService:
+    """Build the read-only analytics service (Phase 11.3, docs/02-TRD.md §11).
+
+    Reports over the daily `usage_records` rollup, `chat_sessions`,
+    `messages` and `websites` that the chat pipeline already maintains
+    (ADR-005 §5.5) - no new write path.
+    """
+    return AnalyticsService(analytics=MongoAnalyticsRepository(db))
 
 
 class _RedisWidgetStore:
@@ -265,6 +291,10 @@ reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).
 crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
+# Phase 11.2 conversation-management abuse protection (list/get/delete).
+conversations_limiter = RateLimitDependency(limit=120, window_seconds=3600)
+# Phase 11.3 analytics read abuse protection (summary/timeseries/top-websites/performance).
+analytics_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)

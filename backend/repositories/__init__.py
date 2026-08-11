@@ -5,6 +5,14 @@ Application code depends on the Protocol interfaces only, which keeps the data
 layer swappable and testable.
 """
 
+from backend.repositories.analytics_repository import (
+    AnalyticsRepository,
+    AnalyticsSummaryRow,
+    MongoAnalyticsRepository,
+    ResponseMetricsRow,
+    TimeseriesRow,
+    TopWebsiteRow,
+)
 from backend.repositories.audit_log_repository import (
     AuditLogRepository,
     MongoAuditLogRepository,
@@ -55,12 +63,15 @@ from backend.repositories.website_repository import (
 from backend.repositories.widget_repository import MongoWidgetRepository, WidgetRepository
 
 __all__ = [
+    "AnalyticsRepository",
+    "AnalyticsSummaryRow",
     "AuditLogRepository",
     "ChatMessageRepository",
     "ChatSessionRepository",
     "CrawlJobRepository",
     "DocumentRepository",
     "KnowledgeChunkRepository",
+    "MongoAnalyticsRepository",
     "MongoAuditLogRepository",
     "MongoChatMessageRepository",
     "MongoChatSessionRepository",
@@ -77,7 +88,10 @@ __all__ = [
     "MongoVectorRepository",
     "MemberRepository",
     "RefreshTokenRepository",
+    "ResponseMetricsRow",
     "TenantRepository",
+    "TimeseriesRow",
+    "TopWebsiteRow",
     "UserRepository",
     "UsageRecordRepository",
     "VectorRepository",

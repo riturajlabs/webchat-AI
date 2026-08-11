@@ -3,8 +3,10 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { Skeleton } from '@/components/ui/skeleton';
 
 import { AddWebsiteDialog } from './add-website-dialog';
 import { useCrawlJob, useDeleteWebsite, useStartCrawl, useWebsites, websitesKeys } from './hooks';
@@ -52,7 +54,12 @@ export function WebsiteList() {
 
   async function handleDelete(website: Website) {
     if (window.confirm(`Delete "${website.name}"? This also removes its widget.`)) {
-      await deleteWebsite.mutateAsync(website.id);
+      try {
+        await deleteWebsite.mutateAsync(website.id);
+        toast.success(`Deleted "${website.name}"`);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to delete website.');
+      }
     }
   }
 
@@ -62,8 +69,10 @@ export function WebsiteList() {
     try {
       const result = await startCrawl.mutateAsync(website.id);
       setActiveJobId(result.crawl_job_id);
+      toast.success(`Crawl started for "${website.name}"`);
     } catch (e) {
       setCrawlError(e instanceof Error ? e.message : 'Failed to start crawl.');
+      toast.error(e instanceof Error ? e.message : 'Failed to start crawl.');
     } finally {
       setPendingWebsiteId(null);
     }
@@ -94,9 +103,35 @@ export function WebsiteList() {
       ) : null}
 
       {isPending ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading websites…
-        </p>
+        <div
+          role="status"
+          aria-label="Loading websites"
+          className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
+        >
+          {[0, 1, 2].map((index) => (
+            <div
+              key={index}
+              className="flex h-full flex-col gap-4 rounded-lg border bg-card p-4 shadow-sm"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-4 w-48" />
+                </div>
+                <Skeleton className="h-5 w-16" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+              <div className="mt-auto flex gap-2">
+                <Skeleton className="h-8 w-24" />
+                <Skeleton className="h-8 w-16" />
+                <Skeleton className="h-8 w-16" />
+              </div>
+            </div>
+          ))}
+        </div>
       ) : null}
 
       {isError ? (

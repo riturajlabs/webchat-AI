@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { Check, Copy, X } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 
@@ -51,11 +52,14 @@ export function AddWebsiteDialog({
           url: url.trim(),
         });
         close();
+        toast.success('Website updated');
       } else {
         const created = await createWebsite.mutateAsync({ name: name.trim(), url: url.trim() });
         setResult(created);
+        toast.success('Website added');
       }
     } catch {
+      toast.error('Failed to save website');
       // The mutation error is already surfaced via the mutation state.
     }
   }
@@ -67,8 +71,10 @@ export function AddWebsiteDialog({
     try {
       await navigator.clipboard.writeText(result.embed_script);
       setCopied(true);
+      toast.success('Embed code copied to clipboard');
     } catch {
       setCopied(false);
+      toast.error('Failed to copy embed code');
     }
   }
 

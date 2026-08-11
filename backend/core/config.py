@@ -158,6 +158,12 @@ class Settings(BaseSettings):
     # Daily usage rollup retention (ADR-005 §5.7: 3 years).
     usage_retention_days: int = 365 * 3
 
+    # Analytics (Phase 11.3, docs/02-TRD.md §11): estimated-cost list prices,
+    # expressed per million tokens in USD. These are *estimates* for the
+    # dashboard - billing reconciles against provider invoices.
+    cost_per_million_input_tokens: float = 0.30
+    cost_per_million_output_tokens: float = 1.50
+
     @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":
         """Fail fast on weak production secrets (00-AI-Development-Rules §20)."""

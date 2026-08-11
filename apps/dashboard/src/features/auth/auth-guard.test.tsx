@@ -35,7 +35,7 @@ describe('AuthGuard', () => {
 
     render(<AuthGuard>content</AuthGuard>);
 
-    expect(screen.getByRole('status')).toHaveTextContent('Loading…');
+    expect(screen.getByRole('status', { name: 'Loading page' })).toBeInTheDocument();
     expect(screen.queryByText('content')).not.toBeInTheDocument();
   });
 

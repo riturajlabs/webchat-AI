@@ -5,8 +5,8 @@ from datetime import datetime
 from backend.ai.gemini import GenerationUsage
 from backend.core.security import utcnow
 from backend.models.audit_log import AuditLog
-from backend.models.chat_message import ChatMessage
-from backend.models.chat_session import ChatSession
+from backend.models.chat_message import CHAT_ROLE_ASSISTANT, ChatMessage
+from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED, ChatSession
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
     CrawlJob,
@@ -20,6 +20,13 @@ from backend.models.usage_record import UsageRecord
 from backend.models.user import User
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.models.widget import Widget
+from backend.repositories.analytics_repository import (
+    AnalyticsSummaryRow,
+    ResponseMetricsRow,
+    TimeseriesRow,
+    TopWebsiteRow,
+)
+from backend.repositories.chat_message_repository import MessageSummary
 from backend.repositories.vector.base import VectorSearchResult
 from backend.services.mail.base import EmailMessage
 
@@ -516,7 +523,11 @@ class FakeChatSessionRepository:
 
     async def find_by_session_id(self, tenant_id: str, session_id: str) -> ChatSession | None:
         session = self._sessions.get(session_id)
-        if session is not None and session.tenant_id == tenant_id:
+        if (
+            session is not None
+            and session.tenant_id == tenant_id
+            and session.status != CHAT_SESSION_STATUS_DELETED
+        ):
             return session
         return None
 
@@ -537,7 +548,9 @@ class FakeChatSessionRepository:
             (
                 session
                 for session in self._sessions.values()
-                if session.tenant_id == tenant_id and session.website_id == website_id
+                if session.tenant_id == tenant_id
+                and session.website_id == website_id
+                and session.status != CHAT_SESSION_STATUS_DELETED
             ),
             key=lambda session: session.last_activity,
             reverse=True,
@@ -549,9 +562,63 @@ class FakeChatSessionRepository:
             [
                 session
                 for session in self._sessions.values()
-                if session.tenant_id == tenant_id and session.website_id == website_id
+                if session.tenant_id == tenant_id
+                and session.website_id == website_id
+                and session.status != CHAT_SESSION_STATUS_DELETED
             ]
         )
+
+    async def list_by_tenant(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        session_ids: list[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[ChatSession]:
+        candidates = sorted(
+            (
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id
+                and session.status != CHAT_SESSION_STATUS_DELETED
+                and (website_id is None or session.website_id == website_id)
+                and (session_ids is None or session.session_id in session_ids)
+            ),
+            key=lambda session: session.last_activity,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_by_tenant(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        session_ids: list[str] | None = None,
+    ) -> int:
+        return len(
+            [
+                session
+                for session in self._sessions.values()
+                if session.tenant_id == tenant_id
+                and session.status != CHAT_SESSION_STATUS_DELETED
+                and (website_id is None or session.website_id == website_id)
+                and (session_ids is None or session.session_id in session_ids)
+            ]
+        )
+
+    async def delete(self, tenant_id: str, session_id: str) -> bool:
+        session = self._sessions.get(session_id)
+        if (
+            session is not None
+            and session.tenant_id == tenant_id
+            and session.status != CHAT_SESSION_STATUS_DELETED
+        ):
+            session.status = CHAT_SESSION_STATUS_DELETED
+            return True
+        return False
 
 
 class FakeChatMessageRepository:
@@ -590,6 +657,78 @@ class FakeChatMessageRepository:
             ]
         )
 
+    async def list_by_session(self, tenant_id: str, session_id: str) -> list[ChatMessage]:
+        return sorted(
+            (
+                message
+                for message in self._messages
+                if message.tenant_id == tenant_id and message.session_id == session_id
+            ),
+            key=lambda message: message.created_at,
+        )
+
+    async def summarize_sessions(
+        self, tenant_id: str, session_ids: list[str]
+    ) -> dict[str, MessageSummary]:
+        summaries: dict[str, MessageSummary] = {}
+        for session_id in session_ids:
+            messages = [
+                message
+                for message in self._messages
+                if message.tenant_id == tenant_id and message.session_id == session_id
+            ]
+            if not messages:
+                continue
+            ordered = sorted(messages, key=lambda message: message.created_at)
+            summaries[session_id] = MessageSummary(
+                message_count=len(ordered),
+                first_content=ordered[0].content,
+                last_content=ordered[-1].content,
+                last_role=ordered[-1].role,
+                last_created_at=ordered[-1].created_at,
+                total_input_tokens=sum(message.input_tokens for message in ordered),
+                total_output_tokens=sum(message.output_tokens for message in ordered),
+                max_response_time=max(
+                    (
+                        message.response_time
+                        for message in ordered
+                        if message.response_time is not None
+                    ),
+                    default=None,
+                ),
+            )
+        return summaries
+
+    async def search_session_ids(
+        self,
+        tenant_id: str,
+        *,
+        query: str,
+        website_id: str | None = None,
+        limit: int = 500,
+    ) -> list[str]:
+        needle = query.casefold()
+        matches: list[str] = []
+        for message in self._messages:
+            if message.tenant_id != tenant_id:
+                continue
+            if website_id is not None and message.website_id != website_id:
+                continue
+            if needle in message.content.casefold():
+                if message.session_id not in matches:
+                    matches.append(message.session_id)
+        return matches[:limit]
+
+    async def delete_by_session(self, tenant_id: str, session_id: str) -> int:
+        remaining = [
+            message
+            for message in self._messages
+            if not (message.tenant_id == tenant_id and message.session_id == session_id)
+        ]
+        deleted = len(self._messages) - len(remaining)
+        self._messages = remaining
+        return deleted
+
 
 class FakeUsageRecordRepository:
     """In-memory usage rollup repository (ADR-005 §5.5)."""
@@ -623,6 +762,179 @@ class FakeUsageRecordRepository:
 
     async def get(self, tenant_id: str, website_id: str, date: str) -> UsageRecord | None:
         return self._records.get((tenant_id, website_id, date))
+
+
+class FakeAnalyticsRepository:
+    """In-memory read-only analytics repository over the other fakes (Phase 11.3).
+
+    Aggregates the same way `MongoAnalyticsRepository` does, so the service and
+    routes are exercised without a database (layering rules §6): conversations
+    come from non-deleted `chat_sessions`, AI response counts and response
+    times from `assistant` messages, message/token totals from the daily
+    `usage_records` rollup, and website names from `websites`.
+    """
+
+    def __init__(
+        self,
+        *,
+        sessions: FakeChatSessionRepository,
+        messages: FakeChatMessageRepository,
+        usage: FakeUsageRecordRepository,
+        websites: FakeWebsiteRepository,
+    ) -> None:
+        self._sessions = sessions
+        self._messages = messages
+        self._usage = usage
+        self._websites = websites
+
+    async def summary(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> AnalyticsSummaryRow:
+        conversations = self._conversations(tenant_id, website_id=website_id, since=since)
+        responses = [
+            msg
+            for msg in self._messages.messages
+            if msg.tenant_id == tenant_id
+            and msg.role == CHAT_ROLE_ASSISTANT
+            and msg.created_at >= since
+            and (website_id is None or msg.website_id == website_id)
+        ]
+        response_times = [m.response_time for m in responses if m.response_time is not None]
+        records = self._usage_records(tenant_id, website_id=website_id, since=since)
+        return AnalyticsSummaryRow(
+            total_conversations=conversations,
+            total_messages=sum(r.counters.get("messages", 0) for r in records),
+            total_ai_responses=len(responses),
+            total_input_tokens=sum(r.counters.get("input_tokens", 0) for r in records),
+            total_output_tokens=sum(r.counters.get("output_tokens", 0) for r in records),
+            avg_response_time=(
+                round(sum(response_times) / len(response_times), 3)
+                if response_times
+                else None
+            ),
+        )
+
+    async def timeseries(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> list[TimeseriesRow]:
+        return [
+            TimeseriesRow(
+                date=date,
+                conversations=sum(r.counters.get("chats", 0) for r in rows),
+                messages=sum(r.counters.get("messages", 0) for r in rows),
+                tokens=sum(
+                    r.counters.get("input_tokens", 0) + r.counters.get("output_tokens", 0)
+                    for r in rows
+                ),
+                input_tokens=sum(r.counters.get("input_tokens", 0) for r in rows),
+                output_tokens=sum(r.counters.get("output_tokens", 0) for r in rows),
+            )
+            for date, rows in sorted(
+                self._usage_grouped(tenant_id, website_id=website_id, since=since).items()
+            )
+        ]
+
+    async def top_websites(
+        self,
+        tenant_id: str,
+        *,
+        since: datetime,
+        limit: int,
+    ) -> list[TopWebsiteRow]:
+        groups: dict[str, tuple[int, int]] = {}
+        for record in self._usage.records:
+            if record.tenant_id != tenant_id or record.date < since.date().isoformat():
+                continue
+            chats, messages = groups.get(record.website_id, (0, 0))
+            groups[record.website_id] = (
+                chats + record.counters.get("chats", 0),
+                messages + record.counters.get("messages", 0),
+            )
+        ranked = sorted(
+            groups.items(), key=lambda item: (-item[1][0], -item[1][1], item[0])
+        )[:limit]
+        names = self._website_names(tenant_id)
+        return [
+            TopWebsiteRow(
+                website_id=website_id,
+                website_name=names.get(website_id, "Unknown website"),
+                conversations=conversations,
+                messages=messages,
+            )
+            for website_id, (conversations, messages) in ranked
+        ]
+
+    async def response_metrics(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> ResponseMetricsRow:
+        response_times = [
+            m.response_time
+            for m in self._messages.messages
+            if m.tenant_id == tenant_id
+            and m.role == CHAT_ROLE_ASSISTANT
+            and m.response_time is not None
+            and m.created_at >= since
+            and (website_id is None or m.website_id == website_id)
+        ]
+        if not response_times:
+            return ResponseMetricsRow(None, None, None)
+        return ResponseMetricsRow(
+            avg_response_time=round(sum(response_times) / len(response_times), 3),
+            fastest_response_time=round(min(response_times), 3),
+            slowest_response_time=round(max(response_times), 3),
+        )
+
+    # ------------------------------------------------------------- internals
+
+    def _conversations(
+        self, tenant_id: str, *, website_id: str | None, since: datetime
+    ) -> int:
+        return sum(
+            1
+            for session in self._sessions.sessions.values()
+            if session.tenant_id == tenant_id
+            and session.status != CHAT_SESSION_STATUS_DELETED
+            and session.started_at >= since
+            and (website_id is None or session.website_id == website_id)
+        )
+
+    def _usage_records(
+        self, tenant_id: str, *, website_id: str | None, since: datetime
+    ) -> list[UsageRecord]:
+        return [
+            record
+            for record in self._usage.records
+            if record.tenant_id == tenant_id
+            and record.date >= since.date().isoformat()
+            and (website_id is None or record.website_id == website_id)
+        ]
+
+    def _usage_grouped(
+        self, tenant_id: str, *, website_id: str | None, since: datetime
+    ) -> dict[str, list[UsageRecord]]:
+        grouped: dict[str, list[UsageRecord]] = {}
+        for record in self._usage_records(tenant_id, website_id=website_id, since=since):
+            grouped.setdefault(record.date, []).append(record)
+        return grouped
+
+    def _website_names(self, tenant_id: str) -> dict[str, str]:
+        return {
+            website.id: website.name
+            for website in self._websites.websites.values()
+            if website.tenant_id == tenant_id and website.status != WEBSITE_STATUS_DELETED
+        }
 
 
 class FakeGenerationClient:

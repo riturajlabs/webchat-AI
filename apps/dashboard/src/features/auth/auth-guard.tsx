@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { useAuth } from '@/features/auth/auth-context';
+import { PageSkeleton } from '@/components/ui/page-skeleton';
 
 export function AuthGuard({ children }: { children: ReactNode }) {
   const { isAuthenticated, status } = useAuth();
@@ -20,8 +21,10 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   if (status === 'loading') {
     return (
-      <div className="flex min-h-screen items-center justify-center" role="status">
-        <p className="text-sm text-muted-foreground">Loading…</p>
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="w-full max-w-4xl">
+          <PageSkeleton />
+        </div>
       </div>
     );
   }
