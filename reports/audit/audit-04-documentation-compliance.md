@@ -77,7 +77,7 @@
 ### 1.8 Widget SDK (Phase 8, ADR-004)
 
 - Vanilla-TS framework-independent SDK, ships as custom element `<webchat-widget>` with closed shadow root.
-- Bundle: IIFE `gzip -9` = **20.42 kB** (hard limit 100 kB, warn 90 kB).
+- Bundle: IIFE `gzip -9` = **23.41 kB** (hard limit 100 kB, warn 90 kB).
 - Launcher, chat window, message bubbles, composer, suggested questions, markdown renderer, theme engine (CSS custom properties), accessibility (axe-core: 0 serious/critical violations).
 - Visitor cookie (`wc_visitor`), session lifecycle (15-min widget-session JWT + 24 h sliding validity), SSE client with retryable/terminal error taxonomy (`WidgetError` codes), offline banner + Retry/Dismiss.
 - Imperative SDK API: `init()`, `mount()`, controller (`updateConfig`, `open`, `close`, `destroy`, callbacks `onMessage`/`onSources`/`onOpen`/`onClose`/`onError`/`onStatusChange`).
@@ -161,8 +161,8 @@
 
 ### 2.1 Source citation in widget (PRD §11 "Cite source pages (Future)")
 
-- **Status:** Partial — backend persists sources on `messages.metadata.sources`; widget has `renderSources()` + `onSources` callback; **sources are NOT rendered inside chat bubbles in the live widget UI** (Phase 8 verification report explicitly notes this as deferred).
-- **Gap:** PRD marked future; UI/UX §16 marks "Source Citation" as Future.
+- **Status:** ✅ Complete — backend persists sources on `messages.metadata.sources`; the widget SSE consumer dispatches `sources` → `onSources` → `Conversation.setSources(turnId, sources)`; bubbles.ts renders them via `syncSources` / `renderSources` with safe-URL filtering (javascript:/data:/vbscript: rejected, `target="_blank"` + `rel="noopener noreferrer"` on safe URLs, DOM-only construction — no `innerHTML` on untrusted content). Closed during Phase 10 streaming UX commit `ea6d061`.
+- **Verification:** `apps/widget/src/ui/bubbles.test.ts` covers source rendering, empty/undefined sources (no block emitted), unsafe-scheme rejection, multiple sources in order with citation prefix, and the "Sources" label landmark. Bundle: 23.41 kB gzip (under 100 kB cap).
 
 ### 2.2 Onboarding wizard (PRD §7 / UI/UX §7)
 
@@ -239,7 +239,7 @@
 
 ### 3.6 Source citation in widget UI (PRD §11 "Future")
 
-- Backend ready; widget renders sources internally (`renderSources`) but they are not surfaced as a default UI affordance.
+- **Closed** in Phase 12.2 (commit `3287fc0`). Backend persists sources on `messages.metadata.sources`; SSE `sources` event reaches `Conversation.setSources` → `syncSources` → `renderSources`; rendered below the AI bubble with safe-URL filtering and citation labels. Covered by 5 widget tests.
 
 ### 3.7 Onboarding wizard (PRD §7)
 
@@ -328,7 +328,7 @@
 | Feedback                  | **Not started**             | Schema reserved, no collection/route/UI (§3.2).                                                                   |
 | E2E coverage              | **Partial**                 | Widget E2E happy-path exists; no admin E2E, no auth E2E.                                                          |
 | Load / performance SLO    | **Partial**                 | Instrumented; budgets not measured end-to-end (§2.7).                                                             |
-| Source citation in widget | **Partial**                 | Backend + renderSources ready; not in default UI (§2.1).                                                          |
+| Source citation in widget | **✅ Done**                 | SSE `sources` → `Conversation.setSources` → `syncSources`/`renderSources` (§2.1, commit `3287fc0`).               |
 
 ### 5.2 Gate status (latest committed, Phase 8.1)
 
@@ -370,7 +370,7 @@ The platform is **production-ready for the v1 feature set** that has been built 
 | 2   | Admin panel UI                                                                                   | ADR-006                    | M      | (1)                                                                               |
 | 3   | Feedback collection + `POST /api/feedback` + widget rating widget + dashboard satisfaction chart | ADR-005 §5.6 / UI/UX §12   | M      | `feedback` collection create                                                      |
 | 4   | Onboarding wizard (Welcome → Connect → Index → Embed → Done)                                     | UI/UX §7 / PRD §7          | M      | `onboarding_completed` / `onboarding_step` already on user                        |
-| 5   | Source citation as default widget UI (render below AI bubble)                                    | PRD §11 future / UI/UX §16 | S      | `renderSources` + `onSources` already implemented                                 |
+| 5   | ~~Source citation as default widget UI (render below AI bubble)~~                                | PRD §11 future / UI/UX §16 | ~~S~~  | **Done** — Phase 12.2 commit `3287fc0` (5 tests, 23.41 kB gzip)                   |
 | 6   | `embeddings_created` + `crawl_pages` usage rollups                                               | ADR-005 §5.5               | S      | Workers exist; add `$inc` calls                                                   |
 | 7   | Cross-embedding duplicate detection                                                              | Phase 5/6 deferred         | M      | None                                                                              |
 | 8   | Performance SLO dashboard + Redis hot-read cache                                                 | TRD §12 / Phase 11         | M      | `RequestTimingMiddleware`, `timed_job` already instrumented                       |
@@ -400,7 +400,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 1. **Admin panel (backend + UI)** — ADR-006; PRD §6 explicitly lists Super Admin role; missing entirely. Without it, "Manage tenants / Suspend accounts / View logs" (PRD §6) are unmet.
 2. **Feedback endpoint + widget + dashboard chart** — PRD §6 Visitor "Submit feedback" + UI/UX §12 "User Satisfaction" chart. Schema reserved but unused.
 3. **IaC + staging deploy** — Phase 13 has no committed manifests. The "production-ready" claim is unverifiable without a deployable target.
-4. **Source citation in widget** — explicitly noted as deferred in Phase 8 verification; trivial to ship.
+4. ~~**Source citation in widget** — explicitly noted as deferred in Phase 8 verification; trivial to ship.~~ **Closed in Phase 12.2** (commit `3287fc0`).
 5. **Coverage threshold enforcement** — pin `--cov-fail-under` in CI to protect the 354-test green.
 6. **Onboarding wizard** — PRD §7 / UI/UX §7; reduces time-to-first-chat from "no flow" to <5 min (matches UI/UX target experience §3).
 
@@ -436,7 +436,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 | §7 Authentication              | Secure signup, login, forgot, verify, JWT, refresh                                                    | **Yes**                                                  | `backend/api/routes/auth.py`                                           |
 | §7 Website Mgmt                | Add, verify, edit, delete, multiple (Future)                                                          | **Yes** (multiple not yet)                               | `backend/api/routes/websites.py`                                       |
 | §7 Knowledge Base              | Crawl, SPA, chunk, embed, vector, re-index                                                            | **Yes**                                                  | ingestion + knowledge modules                                          |
-| §7 AI Chatbot                  | Streaming, context-aware, no-hallucination, source-aware (Future)                                     | **Yes** (source UI partial)                              | rag_service + Phase 8 verification                                     |
+| §7 AI Chatbot                  | Streaming, context-aware, no-hallucination, source-aware (Future)                                     | **Yes** (source UI done Phase 12.2)                      | rag_service + Phase 12.2 commit `3287fc0`                              |
 | §7 Widget                      | One-line embed, responsive, mobile, theme, position, branding                                         | **Yes**                                                  | widget SDK + ADR-004                                                   |
 | §7 Dashboard                   | Status, crawl progress, analytics, widget config, conversations                                       | **Yes**                                                  | dashboard pages                                                        |
 | §7 Analytics                   | Total chats, active users, avg response time, popular Q, failed Q, crawl status                       | Partial — popular Q + failed Q **not surfaced**          | analytics module                                                       |
