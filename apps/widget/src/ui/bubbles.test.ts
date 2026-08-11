@@ -88,6 +88,72 @@ describe('createBubble', () => {
     expect(bubble.innerHTML).not.toContain('javascript:');
   });
 
+  it('renders no source block when the SSE sources event is empty', () => {
+    const bubble = createBubble(message('assistant', 'answer', { sources: [] }));
+    expect(bubble.querySelector('.wc-sources')).toBeNull();
+  });
+
+  it('renders no source block when sources is undefined (RAG did not return any)', () => {
+    const bubble = createBubble(message('assistant', 'answer'));
+    expect(bubble.querySelector('.wc-sources')).toBeNull();
+  });
+
+  it('rejects unsafe URL schemes and falls back to plain text', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [
+          { url: 'javascript:alert(1)', title: 'XSS attempt' },
+          { url: 'data:text/html,<script>alert(1)</script>', title: 'Data URL' },
+          { url: 'vbscript:msgbox(1)', title: 'VBScript' },
+        ],
+      }),
+    );
+    const sources = bubble.querySelector('.wc-sources');
+    expect(sources).toBeTruthy();
+    // No <a> tags should be rendered for unsafe schemes.
+    expect(sources?.querySelectorAll('a').length).toBe(0);
+    // Plain-text fallback keeps the title visible (label-only — title text only).
+    expect(sources?.textContent).toContain('XSS attempt');
+    expect(sources?.textContent).toContain('Data URL');
+    expect(sources?.textContent).toContain('VBScript');
+    // No dangerous scheme leaks into the rendered HTML.
+    expect(bubble.innerHTML).not.toMatch(/javascript:/i);
+    expect(bubble.innerHTML).not.toMatch(/data:/i);
+    expect(bubble.innerHTML).not.toMatch(/vbscript:/i);
+  });
+
+  it('renders multiple sources in order, opens links safely in a new tab', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [
+          { url: 'https://example.com/home', title: 'Homepage', citation: '1' },
+          { url: 'https://example.com/pricing', title: 'Pricing', citation: '2' },
+          { url: 'https://example.com/about', title: 'About' },
+        ],
+      }),
+    );
+    const items = bubble.querySelectorAll('.wc-sources-list li');
+    expect(items.length).toBe(3);
+    const links = bubble.querySelectorAll<HTMLAnchorElement>('.wc-sources-list a');
+    expect(links.length).toBe(3);
+    expect(links[0]?.textContent).toContain('1. Homepage');
+    expect(links[0]?.getAttribute('target')).toBe('_blank');
+    expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(links[1]?.textContent).toContain('2. Pricing');
+    expect(links[2]?.textContent).toContain('About');
+  });
+
+  it('exposes a Sources label above the citation list (a11y landmark)', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [{ url: 'https://example.com', title: 'Example' }],
+      }),
+    );
+    const label = bubble.querySelector<HTMLElement>('.wc-sources-label');
+    expect(label?.textContent).toBe('Sources');
+    expect(label?.tagName).toBe('SPAN');
+  });
+
   it('collapses very long answers behind a Show-more toggle', () => {
     const long = message('assistant', 'x'.repeat(1500));
     const bubble = createBubble(long);
