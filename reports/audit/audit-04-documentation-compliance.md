@@ -171,8 +171,8 @@
 
 ### 2.3 Usage rollups for embeddings & crawl (ADR-005 §5.5)
 
-- **Status:** Partial — `embeddings_created` and `crawl_pages` counters are defined in `usage_record.py` constants; not populated by any worker. ADR-007 §15 explicitly deferred this to Phase 9/10 worker rollups.
-- **Gap:** Analytics dashboard does not show crawl pages or embedding counts.
+- **Status:** ✅ Complete — `embeddings_created` is incremented by `KnowledgeProcessor._record_embeddings_created` (`backend/services/knowledge/processor.py`) after `vector.insert_chunks(...)` succeeds, by `len(chunks)`. `crawl_pages` is incremented by `_record_crawl_job` after `session.run()` returns, by the `stored` page count. Both reuse `UsageRecordRepository.increment(...)` (no new repo method), are best-effort (try/except + log), and stay tenant-scoped via `document.tenant_id` / `job.tenant_id`. Closed in commit `19ab1c5`.
+- **Verification:** 10 new tests cover success / failure / unchanged / zero / cross-tenant / repo-outage for both counters. `pytest tests/test_knowledge_processor.py tests/test_crawl_worker.py` → 33 passed.
 
 ### 2.4 Cross-embedding duplicate detection (Phase 5/6 deferred)
 
@@ -307,28 +307,28 @@
 
 ### 5.1 Verdict by axis
 
-| Axis                      | Status                      | Notes                                                                                                             |
-| ------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Authentication            | **Production-ready**        | Argon2id, JWT access (15 min, in-memory), refresh rotation with reuse detection, CSRF double-submit, RBAC.        |
-| Website management        | **Production-ready**        | SSRF-safe URL validation, lifecycle states, widget creation.                                                      |
-| Ingestion engine          | **Production-ready**        | Playwright + SSRF guard + robots.txt + caps + idempotent documents + crawl → knowledge handoff.                   |
-| Knowledge processing      | **Production-ready**        | Chunking, embedding, vector storage, idempotent re-embed on checksum change.                                      |
-| RAG pipeline              | **Production-ready**        | Hallucination guard, streaming, memory, versioned prompts, token usage capture.                                   |
-| Dashboard                 | **Production-ready**        | All pages with loading/empty/error/success; auth uses memory-only token with single-retry refresh.                |
-| Widget SDK                | **Production-ready**        | 20.42 kB gzip, axe a11y clean, error taxonomy, retry UX, offline banner.                                          |
-| Public widget backend     | **Production-ready**        | Per-widget/visitor rate limits, scoped session tokens, public CORS, message cap, spam filter.                     |
-| Conversations             | **Production-ready**        | List/detail/delete; tenant-scoped; rate-limited.                                                                  |
-| Analytics                 | **Production-ready for v1** | Summary, timeseries, top-websites, performance, est. cost. Embeddings_created/crawl_pages rollups missing (§2.3). |
-| API keys                  | **Production-ready**        | Argon2-hashed storage, one-time raw secret reveal, revoke, audit.                                                 |
-| AI provider fallback      | **Production-ready**        | Gemini default, Groq/OpenRouter/Ollama fallbacks; fail-fast on unknown names.                                     |
-| Multi-tenant security     | **Production-ready**        | `tenant_id` on every query; widget session re-validation; suspended-tenant semantics.                             |
-| Observability             | **Partial**                 | Structured logging, request ID, request timing, worker timing. No OTel/Grafana/Prometheus/Sentry (§3.9).          |
-| Deployment                | **Partial**                 | Dockerfiles + compose.dev complete; no Vercel/Render manifests; no IaC (§4.7).                                    |
-| Admin panel               | **Not started**             | (§3.1)                                                                                                            |
-| Feedback                  | **Not started**             | Schema reserved, no collection/route/UI (§3.2).                                                                   |
-| E2E coverage              | **Partial**                 | Widget E2E happy-path exists; no admin E2E, no auth E2E.                                                          |
-| Load / performance SLO    | **Partial**                 | Instrumented; budgets not measured end-to-end (§2.7).                                                             |
-| Source citation in widget | **✅ Done**                 | SSE `sources` → `Conversation.setSources` → `syncSources`/`renderSources` (§2.1, commit `3287fc0`).               |
+| Axis                      | Status                      | Notes                                                                                                               |
+| ------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Authentication            | **Production-ready**        | Argon2id, JWT access (15 min, in-memory), refresh rotation with reuse detection, CSRF double-submit, RBAC.          |
+| Website management        | **Production-ready**        | SSRF-safe URL validation, lifecycle states, widget creation.                                                        |
+| Ingestion engine          | **Production-ready**        | Playwright + SSRF guard + robots.txt + caps + idempotent documents + crawl → knowledge handoff.                     |
+| Knowledge processing      | **Production-ready**        | Chunking, embedding, vector storage, idempotent re-embed on checksum change.                                        |
+| RAG pipeline              | **Production-ready**        | Hallucination guard, streaming, memory, versioned prompts, token usage capture.                                     |
+| Dashboard                 | **Production-ready**        | All pages with loading/empty/error/success; auth uses memory-only token with single-retry refresh.                  |
+| Widget SDK                | **Production-ready**        | 20.42 kB gzip, axe a11y clean, error taxonomy, retry UX, offline banner.                                            |
+| Public widget backend     | **Production-ready**        | Per-widget/visitor rate limits, scoped session tokens, public CORS, message cap, spam filter.                       |
+| Conversations             | **Production-ready**        | List/detail/delete; tenant-scoped; rate-limited.                                                                    |
+| Analytics                 | **Production-ready for v1** | Summary, timeseries, top-websites, performance, est. cost. All `USAGE_COUNTERS` populated (§2.3, commit `19ab1c5`). |
+| API keys                  | **Production-ready**        | Argon2-hashed storage, one-time raw secret reveal, revoke, audit.                                                   |
+| AI provider fallback      | **Production-ready**        | Gemini default, Groq/OpenRouter/Ollama fallbacks; fail-fast on unknown names.                                       |
+| Multi-tenant security     | **Production-ready**        | `tenant_id` on every query; widget session re-validation; suspended-tenant semantics.                               |
+| Observability             | **Partial**                 | Structured logging, request ID, request timing, worker timing. No OTel/Grafana/Prometheus/Sentry (§3.9).            |
+| Deployment                | **Partial**                 | Dockerfiles + compose.dev complete; no Vercel/Render manifests; no IaC (§4.7).                                      |
+| Admin panel               | **Not started**             | (§3.1)                                                                                                              |
+| Feedback                  | **Not started**             | Schema reserved, no collection/route/UI (§3.2).                                                                     |
+| E2E coverage              | **Partial**                 | Widget E2E happy-path exists; no admin E2E, no auth E2E.                                                            |
+| Load / performance SLO    | **Partial**                 | Instrumented; budgets not measured end-to-end (§2.7).                                                               |
+| Source citation in widget | **✅ Done**                 | SSE `sources` → `Conversation.setSources` → `syncSources`/`renderSources` (§2.1, commit `3287fc0`).                 |
 
 ### 5.2 Gate status (latest committed, Phase 8.1)
 
@@ -371,7 +371,7 @@ The platform is **production-ready for the v1 feature set** that has been built 
 | 3   | Feedback collection + `POST /api/feedback` + widget rating widget + dashboard satisfaction chart | ADR-005 §5.6 / UI/UX §12   | M      | `feedback` collection create                                                      |
 | 4   | Onboarding wizard (Welcome → Connect → Index → Embed → Done)                                     | UI/UX §7 / PRD §7          | M      | `onboarding_completed` / `onboarding_step` already on user                        |
 | 5   | ~~Source citation as default widget UI (render below AI bubble)~~                                | PRD §11 future / UI/UX §16 | ~~S~~  | **Done** — Phase 12.2 commit `3287fc0` (5 tests, 23.41 kB gzip)                   |
-| 6   | `embeddings_created` + `crawl_pages` usage rollups                                               | ADR-005 §5.5               | S      | Workers exist; add `$inc` calls                                                   |
+| 6   | ~~`embeddings_created` + `crawl_pages` usage rollups~~                                           | ADR-005 §5.5               | ~~S~~  | **Done** — Phase 12.3 commit `19ab1c5` (10 tests, both counters tenant-scoped)    |
 | 7   | Cross-embedding duplicate detection                                                              | Phase 5/6 deferred         | M      | None                                                                              |
 | 8   | Performance SLO dashboard + Redis hot-read cache                                                 | TRD §12 / Phase 11         | M      | `RequestTimingMiddleware`, `timed_job` already instrumented                       |
 | 9   | OTel exporter + Prometheus metrics endpoint + Sentry SDK                                         | TRD §14 future             | M      | Logging in place                                                                  |
@@ -407,7 +407,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 ### P1 — Strengthens production quality (no block)
 
 7. **OTel + Prometheus + Sentry** — TRD §14; without it, the platform has no observability beyond logs and `RequestTimingMiddleware`.
-8. **`embeddings_created` + `crawl_pages` rollups** — closes the last two empty `usage_records.counters` keys.
+8. ~~**`embeddings_created` + `crawl_pages` rollups** — closes the last two empty `usage_records.counters` keys.~~ **Closed in Phase 12.3** (commit `19ab1c5`).
 9. **Performance SLO dashboard** — measure TRD §12 budgets continuously.
 10. **Cross-embedding duplicate detection** — Phase 5 deferred; closes the analytics chapter.
 11. **Mypy strict mode** — gate against `untyped-decorator` regressions.
