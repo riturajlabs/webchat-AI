@@ -1,6 +1,14 @@
 """Document models for Mongo collections (docs/05 + ADR-005)."""
 
+from backend.models.api_key import (
+    API_KEY_STATUS_ACTIVE,
+    API_KEY_STATUS_REVOKED,
+    API_KEY_STATUSES,
+    ApiKey,
+)
 from backend.models.audit_log import (
+    AUDIT_API_KEY_CREATED,
+    AUDIT_API_KEY_REVOKED,
     AUDIT_EMAIL_VERIFIED,
     AUDIT_FORGOT_PASSWORD,
     AUDIT_KNOWLEDGE_FAILED,
@@ -86,6 +94,8 @@ from backend.models.widget import (
 )
 
 __all__ = [
+    "AUDIT_API_KEY_CREATED",
+    "AUDIT_API_KEY_REVOKED",
     "AUDIT_EMAIL_VERIFIED",
     "AUDIT_FORGOT_PASSWORD",
     "AUDIT_KNOWLEDGE_FAILED",
@@ -104,6 +114,10 @@ __all__ = [
     "AUDIT_CRAWL_COMPLETED",
     "AUDIT_CRAWL_FAILED",
     "AuditLog",
+    "API_KEY_STATUS_ACTIVE",
+    "API_KEY_STATUS_REVOKED",
+    "API_KEY_STATUSES",
+    "ApiKey",
     "CHAT_ROLE_ASSISTANT",
     "CHAT_ROLE_SYSTEM",
     "CHAT_ROLE_USER",

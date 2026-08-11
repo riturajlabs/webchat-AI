@@ -14,6 +14,7 @@ from backend.api.middleware import (
     WidgetCORSHeadersMiddleware,
 )
 from backend.api.routes.analytics import router as analytics_router
+from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.chat import router as chat_router
 from backend.api.routes.conversations import router as conversations_router
@@ -104,6 +105,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api")
     app.include_router(conversations_router, prefix="/api")
     app.include_router(analytics_router, prefix="/api")
+    app.include_router(api_keys_router, prefix="/api")
     app.include_router(widget_router, prefix="/api")
 
     return app

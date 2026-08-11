@@ -28,6 +28,7 @@ from backend.core.redis import get_redis
 from backend.core.security import csrf_tokens_match, decode_widget_session_token
 from backend.repositories import (
     MongoAnalyticsRepository,
+    MongoApiKeyRepository,
     MongoAuditLogRepository,
     MongoChatMessageRepository,
     MongoChatSessionRepository,
@@ -42,6 +43,7 @@ from backend.repositories import (
     get_vector_repository,
 )
 from backend.services.analytics import AnalyticsService
+from backend.services.api_keys import ApiKeyService
 from backend.services.auth import AuthService, Principal
 from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
@@ -147,6 +149,16 @@ def get_analytics_service(
     (ADR-005 §5.5) - no new write path.
     """
     return AnalyticsService(analytics=MongoAnalyticsRepository(db))
+
+
+def get_api_key_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> ApiKeyService:
+    """Build the API key service with MongoDB-backed repositories (docs/05 §12)."""
+    return ApiKeyService(
+        keys=MongoApiKeyRepository(db),
+        audit=MongoAuditLogRepository(db),
+    )
 
 
 class _RedisWidgetStore:
@@ -295,6 +307,8 @@ crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
 conversations_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 11.3 analytics read abuse protection (summary/timeseries/top-websites/performance).
 analytics_limiter = RateLimitDependency(limit=600, window_seconds=3600)
+# API key management abuse protection (create/list/revoke, docs/05 §12).
+api_keys_limiter = RateLimitDependency(limit=60, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)

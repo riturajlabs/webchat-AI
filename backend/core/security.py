@@ -25,6 +25,10 @@ _argon2 = PasswordHasher(memory_cost=19 * 1024, time_cost=2, parallelism=1)
 # SHA-256 for opaque refresh tokens (ADR-003: hashed in DB, never stored raw).
 _SHA256 = hashlib.sha256
 
+# Recognizable prefix for tenant-issued API keys (docs/05 §12). The full raw
+# value is shown once at creation; only its hash is persisted (ADR-004).
+API_KEY_PREFIX = "wc_"
+
 
 def utcnow() -> datetime:
     """Return the current UTC time as a timezone-aware datetime."""
@@ -181,6 +185,20 @@ def generate_widget_secret() -> str:
 def hash_widget_secret(secret: str) -> str:
     """Return the SHA-256 hex digest persisted on the widget document."""
     return _SHA256(secret.encode("utf-8")).hexdigest()
+
+
+def generate_api_key() -> str:
+    """Return a new tenant-issued API key (docs/05 §12).
+
+    The raw value is returned to the tenant exactly once; only its hash is
+    stored so a DB leak never exposes usable secrets (ADR-004).
+    """
+    return f"{API_KEY_PREFIX}{secrets.token_urlsafe(32)}"
+
+
+def hash_api_key(raw_key: str) -> str:
+    """Return the SHA-256 hex digest persisted on the api_key document."""
+    return _SHA256(raw_key.encode("utf-8")).hexdigest()
 
 
 def generate_csrf_token() -> str:

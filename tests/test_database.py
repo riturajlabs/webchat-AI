@@ -213,3 +213,17 @@ async def test_init_indexes_declares_usage_record_indexes(monkeypatch) -> None:
         kwargs for keys, kwargs in db["usage_records"].indexes if kwargs.get("expireAfterSeconds")
     ]
     assert ttl == [{"expireAfterSeconds": USAGE_TTL}]
+
+
+async def test_init_indexes_declares_api_key_indexes(monkeypatch) -> None:
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["api_keys"])
+    assert ("tenant_id", False) in indexes  # tenant-scoped queries
+    # List + audit read sort: (tenant_id, created_at).
+    assert any(
+        keys == (("tenant_id", 1), ("created_at", -1)) and not unique for (keys, unique) in indexes
+    )

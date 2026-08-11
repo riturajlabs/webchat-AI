@@ -4,6 +4,7 @@ from datetime import datetime
 
 from backend.ai.gemini import GenerationUsage
 from backend.core.security import utcnow
+from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
 from backend.models.audit_log import AuditLog
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, ChatMessage
 from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED, ChatSession
@@ -132,6 +133,43 @@ class FakeAuditLogRepository:
 
     async def create(self, log: AuditLog) -> None:
         self._logs.append(log)
+
+
+class FakeApiKeyRepository:
+    """In-memory API key repository (tenant-scoped like the Mongo impl)."""
+
+    def __init__(self) -> None:
+        self._keys: dict[str, ApiKey] = {}
+
+    @property
+    def keys(self) -> dict[str, ApiKey]:
+        return self._keys
+
+    async def create(self, key: ApiKey) -> None:
+        self._keys[key.id] = key
+
+    async def find_by_id(self, tenant_id: str, key_id: str) -> ApiKey | None:
+        key = self._keys.get(key_id)
+        if key is not None and key.tenant_id == tenant_id and key.status == API_KEY_STATUS_ACTIVE:
+            return key
+        return None
+
+    async def list_by_tenant(self, tenant_id: str) -> list[ApiKey]:
+        return sorted(
+            (
+                key
+                for key in self._keys.values()
+                if key.tenant_id == tenant_id and key.status == API_KEY_STATUS_ACTIVE
+            ),
+            key=lambda key: key.created_at,
+            reverse=True,
+        )
+
+    async def revoke(self, tenant_id: str, key_id: str) -> None:
+        key = self._keys.get(key_id)
+        if key is not None and key.tenant_id == tenant_id:
+            key.status = API_KEY_STATUS_REVOKED
+            key.updated_at = utcnow()
 
 
 class FakeWebsiteRepository:
@@ -812,9 +850,7 @@ class FakeAnalyticsRepository:
             total_input_tokens=sum(r.counters.get("input_tokens", 0) for r in records),
             total_output_tokens=sum(r.counters.get("output_tokens", 0) for r in records),
             avg_response_time=(
-                round(sum(response_times) / len(response_times), 3)
-                if response_times
-                else None
+                round(sum(response_times) / len(response_times), 3) if response_times else None
             ),
         )
 
@@ -858,9 +894,9 @@ class FakeAnalyticsRepository:
                 chats + record.counters.get("chats", 0),
                 messages + record.counters.get("messages", 0),
             )
-        ranked = sorted(
-            groups.items(), key=lambda item: (-item[1][0], -item[1][1], item[0])
-        )[:limit]
+        ranked = sorted(groups.items(), key=lambda item: (-item[1][0], -item[1][1], item[0]))[
+            :limit
+        ]
         names = self._website_names(tenant_id)
         return [
             TopWebsiteRow(
@@ -898,9 +934,7 @@ class FakeAnalyticsRepository:
 
     # ------------------------------------------------------------- internals
 
-    def _conversations(
-        self, tenant_id: str, *, website_id: str | None, since: datetime
-    ) -> int:
+    def _conversations(self, tenant_id: str, *, website_id: str | None, since: datetime) -> int:
         return sum(
             1
             for session in self._sessions.sessions.values()

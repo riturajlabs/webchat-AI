@@ -179,3 +179,10 @@ class SpamRejectedError(AppError):
 
     status_code = 400
     code = "SPAM_REJECTED"
+
+
+class ApiKeyNotFoundError(AppError):
+    """API key does not exist or is already revoked (docs/05 §12)."""
+
+    status_code = 404
+    code = "API_KEY_NOT_FOUND"

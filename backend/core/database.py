@@ -153,6 +153,9 @@ class MongoDB:
         await db["usage_records"].create_index(
             "updated_at", expireAfterSeconds=_usage_ttl_seconds()
         )
+        # API key management (docs/05 §12).
+        await db["api_keys"].create_index("tenant_id")
+        await db["api_keys"].create_index([("tenant_id", 1), ("created_at", -1)])
 
     @classmethod
     async def close(cls) -> None:

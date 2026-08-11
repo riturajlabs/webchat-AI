@@ -13,6 +13,10 @@ from backend.repositories.analytics_repository import (
     TimeseriesRow,
     TopWebsiteRow,
 )
+from backend.repositories.api_key_repository import (
+    ApiKeyRepository,
+    MongoApiKeyRepository,
+)
 from backend.repositories.audit_log_repository import (
     AuditLogRepository,
     MongoAuditLogRepository,
@@ -65,6 +69,7 @@ from backend.repositories.widget_repository import MongoWidgetRepository, Widget
 __all__ = [
     "AnalyticsRepository",
     "AnalyticsSummaryRow",
+    "ApiKeyRepository",
     "AuditLogRepository",
     "ChatMessageRepository",
     "ChatSessionRepository",
@@ -73,6 +78,7 @@ __all__ = [
     "KnowledgeChunkRepository",
     "MongoAnalyticsRepository",
     "MongoAuditLogRepository",
+    "MongoApiKeyRepository",
     "MongoChatMessageRepository",
     "MongoChatSessionRepository",
     "MongoCrawlJobRepository",
