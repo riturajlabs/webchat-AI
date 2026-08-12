@@ -5,6 +5,7 @@ from backend.api.deps import get_auth_service, get_website_service
 from backend.core.config import get_settings
 from backend.main import create_app
 from fastapi.testclient import TestClient
+
 from tests.auth_helpers import VALID_PASSWORD, build_auth_env
 from tests.website_helpers import build_website_env
 
@@ -201,6 +202,30 @@ def test_delete_website_missing_returns_404(client) -> None:
     test_client, _ = client
     response = test_client.delete("/api/websites/missing-id", headers=_auth_headers(test_client))
     assert response.status_code == 404
+
+
+def test_recreate_website_after_delete_returns_201(client) -> None:
+    test_client, env = client
+    headers = _auth_headers(test_client)
+    first = _create_website(
+        test_client, headers, url="https://indirauniversity.edu.in", name="Indira"
+    )
+    assert (
+        test_client.delete(f"/api/websites/{first['website']['id']}", headers=headers).status_code
+        == 204
+    )
+
+    # Regression: a soft-deleted website's URL must be re-registerable.
+    response = test_client.post(
+        "/api/websites",
+        json={"name": "Indira Again", "url": "https://indirauniversity.edu.in"},
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["website"]["id"] != first["website"]["id"]
+    # The soft-deleted record persists for audit/recovery alongside the new one.
+    assert len(env.websites.websites) == 2
 
 
 def test_list_websites_filters_by_status(client) -> None:

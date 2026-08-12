@@ -38,6 +38,11 @@ class Website(BaseModel):
     name: str
     url: str
     status: str = WEBSITE_STATUS_PENDING
+    # Soft-delete index flag: mirrors `status == WEBSITE_STATUS_DELETED` so the
+    # (tenant_id, url) unique index can be *partial* (`deleted: false`).
+    # MongoDB partial filters only support equality, so a boolean (not `$ne`)
+    # drives URL re-registration after a website is deleted (docs/05 §5).
+    deleted: bool = False
     pages_indexed: int = 0
     last_crawled_at: datetime | None = None
     checksum: str | None = None

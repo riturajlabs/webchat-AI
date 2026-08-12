@@ -9,6 +9,7 @@ on audit_logs, and the unique constraints the app relies on for correctness.
 from collections import defaultdict
 
 from backend.core.database import MongoDB
+from backend.models.website import WEBSITE_STATUS_DELETED
 
 # ADR-005 §5.7 values (kept in sync with backend/core/database.py).
 REFRESH_TOKEN_TTL = 40 * 24 * 60 * 60
@@ -25,9 +26,17 @@ CHAT_SESSION_TTL = 0
 class _FakeCollection:
     def __init__(self) -> None:
         self.indexes: list[tuple[object, dict[str, object]]] = []
+        self.dropped: list[str] = []
+        self.updates: list[tuple[object, object]] = []
 
     async def create_index(self, keys: object, **kwargs: object) -> None:
         self.indexes.append((keys, kwargs))
+
+    async def drop_index(self, name: str) -> None:
+        self.dropped.append(name)
+
+    async def update_many(self, filter: object, update: object) -> None:
+        self.updates.append((filter, update))
 
 
 class _FakeDb:
@@ -108,10 +117,28 @@ async def test_init_indexes_declares_website_indexes(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["websites"])
-    # The unique (tenant_id, url) pair is the duplicate gatekeeper (Phase 3).
-    assert any(keys == (("tenant_id", 1), ("url", 1)) and unique for (keys, unique) in indexes)
+    # (tenant_id, url) is unique among *active* websites: the race-free
+    # duplicate gatekeeper. The partial filter (`deleted: false`, equality
+    # only - MongoDB partial indexes cannot express `$ne`) excludes
+    # soft-deleted records so a deleted website's URL can be re-registered.
+    partial_unique = [
+        kwargs
+        for (keys, unique), kwargs in indexes.items()
+        if keys == (("tenant_id", 1), ("url", 1)) and unique
+    ]
+    assert partial_unique == [{"unique": True, "partialFilterExpression": {"deleted": False}}]
     assert ("tenant_id", False) in indexes
     assert ("url", False) in indexes
+    # The `deleted` flag is backfilled from the legacy `status` marker and the
+    # legacy full-unique index is dropped so it no longer blocks URL reuse.
+    assert (
+        {"status": {"$ne": WEBSITE_STATUS_DELETED}},
+        {"$set": {"deleted": False}},
+    ) in db["websites"].updates
+    assert ({"status": WEBSITE_STATUS_DELETED}, {"$set": {"deleted": True}}) in db[
+        "websites"
+    ].updates
+    assert "tenant_id_1_url_1" in db["websites"].dropped
 
 
 async def test_init_indexes_declares_widget_indexes(monkeypatch) -> None:

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo.errors import OperationFailure
 from pymongo.monitoring import (
     CommandFailedEvent,
     CommandListener,
@@ -14,6 +15,7 @@ from pymongo.monitoring import (
 )
 
 from backend.core.config import get_settings
+from backend.models.website import WEBSITE_STATUS_DELETED
 
 logger = logging.getLogger("webchat_ai")
 
@@ -195,8 +197,32 @@ class MongoDB:
         await db["audit_logs"].create_index([("tenant_id", 1), ("created_at", -1)])
         await db["audit_logs"].create_index("created_at", expireAfterSeconds=_AUDIT_LOG_TTL_SECONDS)
         # Phase 3 website management (docs/05 §5-6, ADR-005 §5.3).
-        # (tenant_id, url) is unique: the race-free duplicate gatekeeper.
-        await db["websites"].create_index([("tenant_id", 1), ("url", 1)], unique=True)
+        # (tenant_id, url) is unique *among active websites*: the race-free
+        # duplicate gatekeeper. Soft-deleted websites must not block URL
+        # re-registration, so the uniqueness is enforced by a *partial* index
+        # filtered to `deleted: false` (MongoDB partial filters only support
+        # equality, hence the boolean flag on the model; `$ne` is not allowed).
+        #
+        # Migration (idempotent):
+        #  1. Backfill the `deleted` flag from the legacy `status` marker so
+        #     pre-flag documents participate in the partial index.
+        #  2. Drop the legacy full-unique index that reserved deleted URLs.
+        #  3. Create the partial unique index.
+        await db["websites"].update_many(
+            {"status": {"$ne": WEBSITE_STATUS_DELETED}}, {"$set": {"deleted": False}}
+        )
+        await db["websites"].update_many(
+            {"status": WEBSITE_STATUS_DELETED}, {"$set": {"deleted": True}}
+        )
+        try:
+            await db["websites"].drop_index("tenant_id_1_url_1")
+        except OperationFailure:
+            pass  # Fresh database: the legacy full-unique index never existed.
+        await db["websites"].create_index(
+            [("tenant_id", 1), ("url", 1)],
+            unique=True,
+            partialFilterExpression={"deleted": False},
+        )
         await db["websites"].create_index("tenant_id")
         await db["websites"].create_index("url")
         await db["widgets"].create_index("widget_id", unique=True)

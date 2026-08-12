@@ -194,11 +194,15 @@ class FakeWebsiteRepository:
         return None
 
     async def find_by_url(self, tenant_id: str, url: str) -> Website | None:
+        # Mirrors `MongoWebsiteRepository`: soft-deleted documents are excluded
+        # so a deleted website's URL can be re-registered.
         return next(
             (
                 website
                 for website in self._websites.values()
-                if website.tenant_id == tenant_id and website.url == url
+                if website.tenant_id == tenant_id
+                and website.url == url
+                and website.status != WEBSITE_STATUS_DELETED
             ),
             None,
         )
@@ -248,6 +252,7 @@ class FakeWebsiteRepository:
         website = self._websites.get(website_id)
         if website is not None and website.tenant_id == tenant_id:
             website.status = WEBSITE_STATUS_DELETED
+            website.deleted = True
             website.updated_at = utcnow()
 
 

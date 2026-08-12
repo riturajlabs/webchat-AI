@@ -13,6 +13,7 @@ from backend.models.audit_log import (
 )
 from backend.models.website import WEBSITE_STATUS_DELETED, WEBSITE_STATUS_PENDING
 from backend.utils.url_validator import normalize_url
+
 from tests.website_helpers import build_website_env, make_principal
 
 
@@ -284,6 +285,7 @@ async def test_delete_website_cascades_widget_and_audits() -> None:
     assert len(env.websites.websites) == 1
     remaining = next(iter(env.websites.websites.values()))
     assert remaining.status == WEBSITE_STATUS_DELETED
+    assert remaining.deleted is True
     assert len(env.widgets.widgets) == 0
     assert env.audit.logs[-1].action == AUDIT_WEBSITE_DELETED
 
@@ -316,6 +318,38 @@ async def test_delete_website_missing_raises() -> None:
             ip_address=None,
             user_agent=None,
         )
+
+
+async def test_create_website_allows_url_reuse_after_soft_delete() -> None:
+    env = build_website_env()
+    principal = make_principal()
+    first = await env.service.create_website(
+        principal=principal,
+        name="Indira",
+        url="https://indirauniversity.edu.in",
+        ip_address=None,
+        user_agent=None,
+    )
+    await env.service.delete_website(
+        principal=principal, website_id=first.website.id, ip_address=None, user_agent=None
+    )
+    with pytest.raises(WebsiteNotFoundError):
+        await env.service.get_website(principal.tenant_id, first.website.id)
+
+    # Regression: a soft-deleted website must not block re-registering its URL.
+    second = await env.service.create_website(
+        principal=principal,
+        name="Indira Again",
+        url="https://indirauniversity.edu.in",
+        ip_address=None,
+        user_agent=None,
+    )
+
+    assert second.website.id != first.website.id
+    assert second.website.url == "https://indirauniversity.edu.in/"
+    assert second.website.status == WEBSITE_STATUS_PENDING
+    # The soft-deleted record persists for audit/recovery alongside the new one.
+    assert len(env.websites.websites) == 2
 
 
 async def test_get_widget_returns_tenant_widget() -> None:

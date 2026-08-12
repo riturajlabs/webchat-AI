@@ -14,6 +14,22 @@ WebsiteSortField = Literal["created_at", "name"]
 WebsiteSortOrder = Literal["asc", "desc"]
 
 
+def find_by_url_filter(tenant_id: str, url: str) -> dict[str, Any]:
+    """Query for the active record holding `url` for `tenant_id`.
+
+    Soft-deleted documents are excluded so a deleted website's URL can be
+    re-registered by the same tenant; the partial unique index `(tenant_id,
+    url)` on `deleted: false` keeps the check race-free (docs/05 §5). The
+    `status` filter mirrors the index's `deleted` flag, which `delete()`
+    keeps in sync.
+    """
+    return {
+        "tenant_id": tenant_id,
+        "url": url,
+        "status": {"$ne": WEBSITE_STATUS_DELETED},
+    }
+
+
 class WebsiteRepository(Protocol):
     """Data access for the `websites` collection (tenant-scoped)."""
 
@@ -76,9 +92,7 @@ class MongoWebsiteRepository:
         return Website.from_doc(doc) if doc else None
 
     async def find_by_url(self, tenant_id: str, url: str) -> Website | None:
-        # Includes soft-deleted documents: the record persists, so the URL is
-        # still considered registered (consistent with the unique index).
-        doc = await self._collection.find_one({"tenant_id": tenant_id, "url": url})
+        doc = await self._collection.find_one(find_by_url_filter(tenant_id, url))
         return Website.from_doc(doc) if doc else None
 
     async def find_by_id_any(self, website_id: str) -> Website | None:
@@ -125,6 +139,7 @@ class MongoWebsiteRepository:
             return
         website = Website.from_doc(website)
         website.status = WEBSITE_STATUS_DELETED
+        website.deleted = True
         website.updated_at = utcnow()
         await self._collection.replace_one(
             {"_id": website.id, "tenant_id": website.tenant_id}, website.to_doc()

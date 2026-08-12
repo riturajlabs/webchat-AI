@@ -29,19 +29,19 @@ The database should be optimized for:
 
 # 2. Collections Overview
 
-| Collection | Purpose |
-|------------|----------|
-| users | Authentication & User Accounts |
-| tenants | Tenant Information |
-| websites | Registered Websites |
-| widgets | Widget Configuration |
-| knowledge_chunks | RAG Knowledge Base |
-| crawl_jobs | Crawl Queue Status |
-| chat_sessions | Visitor Sessions |
-| messages | Individual Chat Messages |
-| analytics | Dashboard Analytics |
-| api_keys | API Key Management |
-| audit_logs | Security & Activity Logs |
+| Collection       | Purpose                        |
+| ---------------- | ------------------------------ |
+| users            | Authentication & User Accounts |
+| tenants          | Tenant Information             |
+| websites         | Registered Websites            |
+| widgets          | Widget Configuration           |
+| knowledge_chunks | RAG Knowledge Base             |
+| crawl_jobs       | Crawl Queue Status             |
+| chat_sessions    | Visitor Sessions               |
+| messages         | Individual Chat Messages       |
+| analytics        | Dashboard Analytics            |
+| api_keys         | API Key Management             |
+| audit_logs       | Security & Activity Logs       |
 
 ---
 
@@ -130,6 +130,13 @@ Indexes
 tenant_id
 
 url
+
+(tenant_id, url) — unique among active (non-deleted) records via the partial
+filter deleted: false (the race-free duplicate gatekeeper). Soft-deleted
+websites do not block URL re-registration: soft delete sets `deleted: true`
+(alongside status "deleted"), and `MongoDB.init_indexes()` backfills the flag
+from legacy documents, drops the legacy full-unique (tenant_id, url) index,
+and creates the partial unique index.
 ```
 
 ---
@@ -436,14 +443,14 @@ crawl_jobs.status
 
 # 16. Data Retention
 
-| Collection | Retention |
-|------------|-----------|
-| Audit Logs | 1 Year |
-| Analytics | Unlimited |
-| Chat Sessions | 90 Days (Configurable) |
-| Crawl Jobs | 30 Days |
-| Knowledge Base | Until Deleted |
-| Websites | Until Deleted |
+| Collection     | Retention              |
+| -------------- | ---------------------- |
+| Audit Logs     | 1 Year                 |
+| Analytics      | Unlimited              |
+| Chat Sessions  | 90 Days (Configurable) |
+| Crawl Jobs     | 30 Days                |
+| Knowledge Base | Until Deleted          |
+| Websites       | Until Deleted          |
 
 ---
 
