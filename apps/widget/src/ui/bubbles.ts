@@ -19,6 +19,11 @@
 
 import { renderMarkdown } from '../markdown/render';
 import type { ChatMessage, ChatSource } from '../stream/chat';
+import {
+  createFeedbackControl,
+  type FeedbackControl,
+  type FeedbackSubmitPayload,
+} from './feedback';
 
 /** Assistant messages longer than this are collapsed behind "Show more". */
 export const LONG_MESSAGE_CHARS = 1200;
@@ -27,8 +32,16 @@ export const LONG_MESSAGE_CHARS = 1200;
 const renderedContent = new WeakMap<HTMLElement, string>();
 /** Signature of the sources currently rendered into a bubble. */
 const renderedSources = new WeakMap<HTMLElement, string>();
+/** Feedback control rendered under a bubble (keyed per bubble). */
+const renderedFeedback = new WeakMap<HTMLElement, FeedbackControl>();
 /** Message ids the user has expanded (sticky across re-renders). */
 const expanded = new Set<string>();
+
+/**
+ * Host-provided feedback submit handler, injected by `wireMessageActions`
+ * (same delegation pattern as copy/retry/show-more).
+ */
+let feedbackSubmit: (messageId: string, payload: FeedbackSubmitPayload) => void = () => {};
 
 function isSafeSourceUrl(href: string): boolean {
   return /^(https?:\/\/|#|\/|mailto:)/i.test(href);
@@ -120,6 +133,9 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
   // Sources + per-message retry (rebuilt only when their inputs change).
   syncSources(bubble, message);
   syncRetry(bubble, message);
+
+  // Visitor feedback (Phase 12.4): only for completed assistant answers.
+  syncFeedback(bubble, message);
 }
 
 function syncTypingIndicator(bubble: HTMLElement, message: ChatMessage): void {
@@ -196,6 +212,45 @@ function syncRetry(bubble: HTMLElement, message: ChatMessage): void {
     }
   } else if (retry) {
     retry.remove();
+  }
+}
+
+/**
+ * Render/update the visitor feedback control under a completed assistant
+ * answer. The control is created once per bubble and re-synced on feedback
+ * status transitions; the visitor's in-form input is never lost.
+ */
+function syncFeedback(bubble: HTMLElement, message: ChatMessage): void {
+  const rateable =
+    message.role === 'assistant' &&
+    !message.streaming &&
+    !message.error &&
+    Boolean(message.messageId);
+
+  const control = renderedFeedback.get(bubble);
+  if (!rateable) {
+    if (control) {
+      control.element.remove();
+      renderedFeedback.delete(bubble);
+    }
+    return;
+  }
+
+  if (!control) {
+    const next = createFeedbackControl({
+      onSubmit: (payload) => feedbackSubmit(message.id, payload),
+    });
+    renderedFeedback.set(bubble, next);
+    bubble.appendChild(next.element);
+    next.sync(message.feedback?.status ?? 'idle');
+    return;
+  }
+
+  const status = message.feedback?.status ?? 'idle';
+  const lastStatus = control.element.dataset.status;
+  if (lastStatus !== status) {
+    control.element.dataset.status = status;
+    control.sync(status);
   }
 }
 
@@ -304,8 +359,10 @@ export function wireMessageActions(
     onCopyCode: (code: string) => void;
     onRetry: (messageId: string) => void;
     onToggleMore: (messageId: string) => void;
+    onFeedbackSubmit?: (messageId: string, payload: FeedbackSubmitPayload) => void;
   },
 ): () => void {
+  feedbackSubmit = handlers.onFeedbackSubmit ?? (() => {});
   const onBubbleClick = (event: MouseEvent): void => {
     const target = event.target as HTMLElement | null;
     if (!target) {

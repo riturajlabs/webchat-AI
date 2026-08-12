@@ -8,8 +8,15 @@ import {
   useAnalyticsSummary,
   useAnalyticsTimeseries,
   useAnalyticsTopWebsites,
+  useFeedbackSummary,
 } from './hooks';
-import type { AnalyticsSummary, ResponseMetrics, TimeseriesPoint, TopWebsite } from './types';
+import type {
+  AnalyticsSummary,
+  FeedbackSummary,
+  ResponseMetrics,
+  TimeseriesPoint,
+  TopWebsite,
+} from './types';
 
 vi.mock('@/features/websites/hooks', () => ({
   useWebsites: vi.fn(),
@@ -20,6 +27,7 @@ vi.mock('./hooks', () => ({
   useAnalyticsTimeseries: vi.fn(),
   useAnalyticsTopWebsites: vi.fn(),
   useAnalyticsPerformance: vi.fn(),
+  useFeedbackSummary: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -38,15 +46,21 @@ vi.mock('recharts', () => {
     children?: React.ReactNode;
   }) => <div data-testid={testId}>{children}</div>;
   const Null = () => null;
+  // The dashboard renders two BarCharts (top websites + feedback
+  // distribution); both pass explicit `data-testid` props that the mock
+  // honors. Fall back to a rotating suffix if a future chart forgets one.
+  let barChartIndex = 0;
   return {
     ResponsiveContainer: MockResponsiveContainer,
     ComposedChart: (props: Record<string, unknown>) => (
       <Chart {...props} data-testid="activity-chart" />
     ),
     AreaChart: (props: Record<string, unknown>) => <Chart {...props} data-testid="token-chart" />,
-    BarChart: (props: Record<string, unknown>) => (
-      <Chart {...props} data-testid="top-websites-chart" />
-    ),
+    BarChart: (props: Record<string, unknown>) => {
+      const id = (props['data-testid'] as string | undefined) ?? `bar-chart-${barChartIndex}`;
+      barChartIndex += 1;
+      return <Chart {...props} data-testid={id} />;
+    },
     Area: Null,
     Bar: Null,
     Line: Null,
@@ -66,6 +80,7 @@ const mockedUseSummary = vi.mocked(useAnalyticsSummary);
 const mockedUseTimeseries = vi.mocked(useAnalyticsTimeseries);
 const mockedUseTopWebsites = vi.mocked(useAnalyticsTopWebsites);
 const mockedUsePerformance = vi.mocked(useAnalyticsPerformance);
+const mockedUseFeedback = vi.mocked(useFeedbackSummary);
 const mockedUseRouter = vi.mocked(useRouter);
 
 const WEBSITES = [
@@ -127,6 +142,18 @@ const PERFORMANCE: ResponseMetrics = {
   slowest_response_time: 4.5,
 };
 
+const FEEDBACK: FeedbackSummary = {
+  total: 42,
+  average_rating: 4.25,
+  distribution: {
+    '5': 22,
+    '4': 12,
+    '3': 4,
+    '2': 2,
+    '1': 2,
+  },
+};
+
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -177,6 +204,13 @@ function mockData() {
     error: null,
     refetch: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReturnType<typeof useAnalyticsPerformance>);
+  mockedUseFeedback.mockReturnValue({
+    data: FEEDBACK,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn().mockResolvedValue(undefined),
+  } as unknown as ReturnType<typeof useFeedbackSummary>);
 }
 
 beforeEach(() => {
@@ -293,5 +327,36 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('400ms')).toBeInTheDocument();
     expect(screen.getByText('Slowest')).toBeInTheDocument();
     expect(screen.getByText('4.50s')).toBeInTheDocument();
+  });
+
+  it('renders the user satisfaction card with the average rating and total count', () => {
+    renderPage();
+    // Both the StatCard (description) and the ChartShell (title) use the
+    // label "User satisfaction"; assert on the unique value + hint instead.
+    expect(screen.getByText('4.3 / 5')).toBeInTheDocument();
+    expect(screen.getByText('42 ratings')).toBeInTheDocument();
+  });
+
+  it('renders the 1-5 star distribution chart when ratings exist', () => {
+    renderPage();
+    // The BarChart inside the FeedbackDistributionChart carries the test id.
+    expect(screen.getByTestId('feedback-distribution-chart')).toBeInTheDocument();
+    // Empty case is suppressed — the EmptyState should not appear here.
+    expect(screen.queryByText('Awaiting first rating')).not.toBeInTheDocument();
+  });
+
+  it('shows an empty state for the satisfaction chart when there are no ratings', () => {
+    mockedUseFeedback.mockReturnValue({
+      data: { total: 0, average_rating: null, distribution: {} },
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useFeedbackSummary>);
+    renderPage();
+    // The card still renders, with a friendly hint and an em-dash for the value.
+    expect(screen.getAllByText('User satisfaction').length).toBeGreaterThan(0);
+    expect(screen.getByText('Awaiting first rating')).toBeInTheDocument();
+    expect(screen.queryByTestId('feedback-distribution-chart')).not.toBeInTheDocument();
   });
 });

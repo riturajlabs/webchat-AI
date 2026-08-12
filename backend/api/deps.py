@@ -33,6 +33,7 @@ from backend.repositories import (
     MongoChatMessageRepository,
     MongoChatSessionRepository,
     MongoCrawlJobRepository,
+    MongoFeedbackRepository,
     MongoMemberRepository,
     MongoRefreshTokenRepository,
     MongoTenantRepository,
@@ -48,6 +49,7 @@ from backend.services.auth import AuthService, Principal
 from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
+from backend.services.feedback import FeedbackService
 from backend.services.website import WebsiteService
 from backend.services.widget import WidgetConfigService, WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
@@ -158,6 +160,21 @@ def get_api_key_service(
     return ApiKeyService(
         keys=MongoApiKeyRepository(db),
         audit=MongoAuditLogRepository(db),
+    )
+
+
+def get_feedback_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> FeedbackService:
+    """Build the feedback service with MongoDB-backed repositories (Phase 12.4).
+
+    The submit path re-validates the untrusted message/session ids against the
+    authenticated widget's tenant/website via `MongoChatMessageRepository`
+    (ADR-004 never-trust-claims rule).
+    """
+    return FeedbackService(
+        feedback=MongoFeedbackRepository(db),
+        messages=MongoChatMessageRepository(db),
     )
 
 
@@ -431,6 +448,14 @@ widget_session_issue_limiter = WidgetRateLimitDependency(
     key_factory=_session_issue_rate_limit_key,
     window_seconds=60,
     limit_setting="widget_session_issue_limit",
+)
+# Phase 12.4 visitor-feedback abuse protection: a per-visitor sliding window
+# for the write-once feedback endpoint (ADR-005 §5.6). Keyed on the widget
+# session's anonymous visitor id, not the IP.
+widget_feedback_limiter = WidgetRateLimitDependency(
+    key_factory=_visitor_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_feedback_limit",
 )
 
 

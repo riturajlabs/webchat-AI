@@ -20,6 +20,21 @@ export interface ChatSource {
   citation?: string;
 }
 
+/**
+ * Visitor feedback state on a completed assistant turn (Phase 12.4).
+ * The widget only ever sends 5 (thumbs up) or 1 (thumbs down) on the backend's
+ * 1-5 scale (ADR-005 §5.6). `status` drives the control: idle → submitting →
+ * submitted, or error (with a retry path).
+ */
+export type FeedbackStatus = 'idle' | 'submitting' | 'submitted' | 'error';
+
+export interface FeedbackState {
+  status: FeedbackStatus;
+  rating: 1 | 5;
+  category: string;
+  comment: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -30,6 +45,10 @@ export interface ChatMessage {
   stopped?: boolean;
   /** Citation list attached to an assistant turn (Phase 10). */
   sources?: ChatSource[];
+  /** Backend `message_id` from the SSE `done` event (Phase 12.4). */
+  messageId?: string;
+  /** Visitor feedback state (Phase 12.4). */
+  feedback?: FeedbackState;
 }
 
 export interface ConversationState {
@@ -104,6 +123,24 @@ export class Conversation {
     const message = this.messages.find((m) => m.id === id);
     if (message) {
       message.sources = sources;
+      this.emit();
+    }
+  }
+
+  /** Bind the backend `message_id` to an assistant turn (SSE `done`). */
+  setMessageId(id: string, messageId: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.messageId = messageId;
+      this.emit();
+    }
+  }
+
+  /** Record the feedback state of an assistant turn (Phase 12.4). */
+  setFeedback(id: string, feedback: FeedbackState): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.feedback = feedback;
       this.emit();
     }
   }

@@ -1,5 +1,5 @@
 /**
- * Analytics domain types mirrored from the backend API (Phase 11.3).
+ * Analytics domain types mirrored from the backend API (Phase 11.3 + 12.4).
  */
 
 export interface AnalyticsSummary {
@@ -33,6 +33,16 @@ export interface ResponseMetrics {
   avg_response_time: number | null;
   fastest_response_time: number | null;
   slowest_response_time: number | null;
+}
+
+/**
+ * User-satisfaction breakdown (UI/UX §12, Phase 12.4).
+ * `distribution` keys are 1-5 stars (JSON object keys are always strings).
+ */
+export interface FeedbackSummary {
+  total: number;
+  average_rating: number | null;
+  distribution: Record<string, number>;
 }
 
 export type AnalyticsRange = 7 | 30 | 90;

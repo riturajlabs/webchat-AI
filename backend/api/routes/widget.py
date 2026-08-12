@@ -1,10 +1,11 @@
-"""Public widget API (Phase 8, ADR-004): config, sessions, and streaming chat.
+"""Public widget API (Phase 8, ADR-004): config, sessions, streaming chat, feedback.
 
-Mounted at `/api/widget/v1`. Three surfaces:
+Mounted at `/api/widget/v1`. Four surfaces:
 
     GET  /api/widget/v1/config/{widget_id}   public, Redis-cached (5 min)
     POST /api/widget/v1/sessions             public, rate-limited token mint
     POST /api/widget/v1/chat                 Bearer widget-session token, SSE
+    POST /api/widget/v1/feedback             Bearer widget-session token (Phase 12.4)
 
 The chat endpoint adapts `RagService.stream_answer` with widget-derived
 principal and limits - the pipeline itself is untouched (plan §2.3). Widget
@@ -22,14 +23,17 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
 from backend.api.deps import (
+    get_feedback_service,
     get_rag_service,
     get_widget_service,
     widget_chat_limiter,
+    widget_feedback_limiter,
     widget_session_claims,
     widget_session_issue_limiter,
     widget_visitor_limiter,
 )
 from backend.core.errors import AppError, SpamRejectedError
+from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
     CreateWidgetSessionRequest,
     WidgetChatRequest,
@@ -37,6 +41,7 @@ from backend.schemas.widget import (
     WidgetSessionResponse,
 )
 from backend.services.chat.rag_service import RagService
+from backend.services.feedback.feedback_service import FeedbackService
 from backend.services.widget.spam_filter import is_spam
 from backend.services.widget.widget_service import WidgetService
 
@@ -137,6 +142,33 @@ async def widget_chat(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/feedback", status_code=204)
+async def submit_feedback(
+    body: WidgetFeedbackRequest,
+    claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
+    service: Annotated[FeedbackService, Depends(get_feedback_service)],
+    _: Annotated[None, Depends(widget_feedback_limiter)],
+) -> None:
+    """Record a visitor rating for an assistant answer.
+
+    Requires `Authorization: Bearer <widget_session_token>`. The token's
+    tenant/website are authoritative: the untrusted `message_id`/`session_id`
+    are validated against them before anything is persisted (the service
+    verifies the message exists and belongs to this tenant/website/session).
+    A repeat rating for the same message is idempotent. A per-visitor
+    sliding-window budget (`WIDGET_FEEDBACK_LIMIT`) bounds abuse.
+    """
+    await service.submit(
+        tenant_id=claims["tenant_id"],
+        website_id=claims["website_id"],
+        session_id=body.session_id,
+        message_id=body.message_id,
+        rating=body.rating,
+        category=body.category,
+        comment=body.comment,
     )
 
 

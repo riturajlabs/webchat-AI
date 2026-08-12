@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { BarChart3, CircleDollarSign, Gauge, MessagesSquare, Timer } from 'lucide-react';
+import { BarChart3, CircleDollarSign, Gauge, MessagesSquare, Star, Timer } from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -30,6 +30,7 @@ import {
   formatCost,
   formatDay,
   formatNumber,
+  formatRating,
   formatSeconds,
 } from './format';
 import {
@@ -37,6 +38,7 @@ import {
   useAnalyticsSummary,
   useAnalyticsTimeseries,
   useAnalyticsTopWebsites,
+  useFeedbackSummary,
 } from './hooks';
 import type { AnalyticsRange } from './types';
 
@@ -74,8 +76,8 @@ function StatCard({
 
 function StatGridSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-      {[0, 1, 2, 3, 4, 5].map((index) => (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {[0, 1, 2, 3, 4, 5, 6].map((index) => (
         <Card key={index}>
           <CardHeader>
             <Skeleton className="h-4 w-24" />
@@ -248,7 +250,12 @@ function TopWebsitesChart({
   return (
     <div className="h-80 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={sorted} layout="vertical" margin={{ top: 4, right: 8, left: 8, bottom: 0 }}>
+        <BarChart
+          data={sorted}
+          layout="vertical"
+          margin={{ top: 4, right: 8, left: 8, bottom: 0 }}
+          data-testid="top-websites-chart"
+        >
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" horizontal={false} />
           <XAxis type="number" tick={AxisLabelStyle()} tickLine={false} axisLine={false} />
           <YAxis
@@ -269,6 +276,59 @@ function TopWebsitesChart({
             fill={SERIES_COLORS.conversations}
             radius={[0, 4, 4, 0]}
           />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
+ * Star-rating distribution chart (Phase 12.4, UI/UX §12).
+ * Renders 5 horizontal bars (1★ → 5★). When no ratings exist yet the
+ * component stays mounted so the empty state is legible.
+ */
+function FeedbackDistributionChart({
+  data,
+  mounted,
+}: {
+  data: { stars: number; count: number }[];
+  mounted: boolean;
+}) {
+  if (!mounted) {
+    return <ChartPlaceholder height={220} />;
+  }
+  return (
+    <div className="h-56 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={{ top: 4, right: 8, left: 8, bottom: 0 }}
+          data-testid="feedback-distribution-chart"
+        >
+          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" horizontal={false} />
+          <XAxis
+            type="number"
+            tick={AxisLabelStyle()}
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+          />
+          <YAxis
+            type="category"
+            dataKey="stars"
+            width={48}
+            tick={AxisLabelStyle()}
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(value) => `${value}★`}
+          />
+          <Tooltip
+            labelFormatter={(label) => `${label}★`}
+            formatter={(value) => [formatNumber(Number(value)), 'Ratings']}
+            contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }}
+          />
+          <Bar dataKey="count" name="Ratings" fill={SERIES_COLORS.messages} radius={[0, 4, 4, 0]} />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -298,6 +358,7 @@ export function AnalyticsPage() {
   const { data: timeseries } = useAnalyticsTimeseries(days, websiteId);
   const { data: topWebsites } = useAnalyticsTopWebsites(days);
   const { data: performance } = useAnalyticsPerformance(days, websiteId);
+  const { data: feedback } = useFeedbackSummary(days, websiteId);
 
   const activityData = useMemo(
     () =>
@@ -317,6 +378,15 @@ export function AnalyticsPage() {
         output_tokens: point.output_tokens,
       })),
     [timeseries],
+  );
+
+  const feedbackDistribution = useMemo(
+    () =>
+      [5, 4, 3, 2, 1].map((stars) => ({
+        stars,
+        count: feedback?.distribution[String(stars)] ?? 0,
+      })),
+    [feedback],
   );
 
   const rangeLabel = RANGE_OPTIONS.find((option) => option.value === days)?.label.toLowerCase();
@@ -392,7 +462,7 @@ export function AnalyticsPage() {
 
       {!summaryPending && !isError && summary ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard
               label="Conversations"
               value={formatNumber(summary.total_conversations)}
@@ -431,6 +501,16 @@ export function AnalyticsPage() {
               hint="Assistant latency"
               icon={Timer}
             />
+            <StatCard
+              label="User satisfaction"
+              value={formatRating(feedback?.average_rating ?? null)}
+              hint={
+                feedback && feedback.total > 0
+                  ? `${formatNumber(feedback.total)} rating${feedback.total === 1 ? '' : 's'}`
+                  : 'No ratings yet'
+              }
+              icon={Star}
+            />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
@@ -463,6 +543,17 @@ export function AnalyticsPage() {
                 fastest={performance?.fastest_response_time ?? null}
                 slowest={performance?.slowest_response_time ?? null}
               />
+              <ChartShell title="User satisfaction" description="How visitors rated the assistant.">
+                {feedback && feedback.total > 0 ? (
+                  <FeedbackDistributionChart data={feedbackDistribution} mounted={mounted} />
+                ) : (
+                  <EmptyState
+                    icon={Star}
+                    title="Awaiting first rating"
+                    description="Once visitors rate answers, the 1-5 star breakdown shows up here."
+                  />
+                )}
+              </ChartShell>
             </div>
           </div>
         </>

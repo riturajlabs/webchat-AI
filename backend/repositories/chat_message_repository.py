@@ -52,6 +52,8 @@ class ChatMessageRepository(Protocol):
 
     async def create(self, message: ChatMessage) -> None: ...
 
+    async def find_by_id(self, tenant_id: str, message_id: str) -> ChatMessage | None: ...
+
     async def list_recent(
         self,
         tenant_id: str,
@@ -89,6 +91,10 @@ class MongoChatMessageRepository:
     async def create(self, message: ChatMessage) -> None:
         await self._collection.insert_one(message.to_doc())
 
+    async def find_by_id(self, tenant_id: str, message_id: str) -> ChatMessage | None:
+        doc = await self._collection.find_one({"_id": message_id, "tenant_id": tenant_id})
+        return ChatMessage.from_doc(doc) if doc else None
+
     async def list_recent(
         self,
         tenant_id: str,
@@ -113,9 +119,8 @@ class MongoChatMessageRepository:
         )
 
     async def list_by_session(self, tenant_id: str, session_id: str) -> list[ChatMessage]:
-        cursor = (
-            self._collection.find({"tenant_id": tenant_id, "session_id": session_id})
-            .sort("created_at", ASCENDING)
+        cursor = self._collection.find({"tenant_id": tenant_id, "session_id": session_id}).sort(
+            "created_at", ASCENDING
         )
         return [ChatMessage.from_doc(doc) async for doc in cursor]
 

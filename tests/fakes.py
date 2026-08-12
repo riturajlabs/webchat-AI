@@ -13,6 +13,7 @@ from backend.models.crawl_job import (
     CrawlJob,
 )
 from backend.models.document import Document
+from backend.models.feedback import Feedback
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
@@ -28,6 +29,7 @@ from backend.repositories.analytics_repository import (
     TopWebsiteRow,
 )
 from backend.repositories.chat_message_repository import MessageSummary
+from backend.repositories.feedback_repository import FeedbackSummary
 from backend.repositories.vector.base import VectorSearchResult
 from backend.services.mail.base import EmailMessage
 
@@ -698,6 +700,16 @@ class FakeChatMessageRepository:
     async def create(self, message: ChatMessage) -> None:
         self._messages.append(message)
 
+    async def find_by_id(self, tenant_id: str, message_id: str) -> ChatMessage | None:
+        return next(
+            (
+                message
+                for message in self._messages
+                if message.tenant_id == tenant_id and message.id == message_id
+            ),
+            None,
+        )
+
     async def list_recent(
         self,
         tenant_id: str,
@@ -792,6 +804,92 @@ class FakeChatMessageRepository:
         deleted = len(self._messages) - len(remaining)
         self._messages = remaining
         return deleted
+
+
+class FakeFeedbackRepository:
+    """In-memory feedback repository (tenant-scoped like the Mongo impl)."""
+
+    def __init__(self) -> None:
+        self._feedback: dict[str, Feedback] = {}
+
+    @property
+    def feedback(self) -> list[Feedback]:
+        return list(self._feedback.values())
+
+    async def create(self, feedback: Feedback) -> None:
+        self._feedback[feedback.id] = feedback
+
+    async def find_by_message(self, tenant_id: str, message_id: str) -> Feedback | None:
+        return next(
+            (
+                item
+                for item in self._feedback.values()
+                if item.tenant_id == tenant_id and item.message_id == message_id
+            ),
+            None,
+        )
+
+    async def list_by_tenant(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        category: str | None = None,
+        rating: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Feedback]:
+        candidates = sorted(
+            (
+                item
+                for item in self._feedback.values()
+                if item.tenant_id == tenant_id
+                and (website_id is None or item.website_id == website_id)
+                and (category is None or item.category == category)
+                and (rating is None or item.rating == rating)
+            ),
+            key=lambda item: item.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_by_tenant(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        category: str | None = None,
+        rating: int | None = None,
+    ) -> int:
+        return len(
+            [
+                item
+                for item in self._feedback.values()
+                if item.tenant_id == tenant_id
+                and (website_id is None or item.website_id == website_id)
+                and (category is None or item.category == category)
+                and (rating is None or item.rating == rating)
+            ]
+        )
+
+    async def summary_by_tenant(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime | None = None,
+    ) -> FeedbackSummary:
+        items = [
+            item
+            for item in self._feedback.values()
+            if item.tenant_id == tenant_id
+            and (website_id is None or item.website_id == website_id)
+            and (since is None or item.created_at >= since)
+        ]
+        distribution: dict[int, int] = {}
+        for item in items:
+            distribution[item.rating] = distribution.get(item.rating, 0) + 1
+        return FeedbackSummary(total=len(items), average_rating=None, distribution=distribution)
 
 
 class FakeUsageRecordRepository:

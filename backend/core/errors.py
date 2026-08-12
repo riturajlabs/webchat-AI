@@ -186,3 +186,10 @@ class ApiKeyNotFoundError(AppError):
 
     status_code = 404
     code = "API_KEY_NOT_FOUND"
+
+
+class FeedbackMessageNotFoundError(AppError):
+    """No assistant message exists for the feedback target (Phase 12.4)."""
+
+    status_code = 404
+    code = "MESSAGE_NOT_FOUND"

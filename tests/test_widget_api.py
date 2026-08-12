@@ -9,6 +9,7 @@ import json
 
 import pytest
 from backend.api.deps import (
+    get_feedback_service,
     get_rag_service,
     get_widget_service,
 )
@@ -17,10 +18,13 @@ from backend.core.security import create_widget_session_token
 from backend.main import create_app
 from backend.models.tenant import Tenant
 from backend.models.widget import Widget
+from backend.services.feedback.feedback_service import FeedbackService
 from backend.services.widget.widget_service import WidgetService
 from fastapi.testclient import TestClient
+
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.fakes import (
+    FakeFeedbackRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
     FakeWidgetRepository,
@@ -64,11 +68,18 @@ def client(monkeypatch):
     get_settings.cache_clear()
     chat_env = build_chat_env()
     widget_service = _build_widget_service(chat_env.websites)
+    # The feedback service shares the chat message repo so a visitor can rate a
+    # message the chat flow actually produced.
+    feedback_service = FeedbackService(
+        feedback=FakeFeedbackRepository(),
+        messages=chat_env.messages,
+    )
     app = create_app()
     app.dependency_overrides[get_widget_service] = lambda: widget_service
     app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
+    app.dependency_overrides[get_feedback_service] = lambda: feedback_service
     with TestClient(app) as test_client:
-        yield test_client, widget_service, chat_env
+        yield test_client, widget_service, chat_env, feedback_service
     get_settings.cache_clear()
 
 
@@ -100,7 +111,7 @@ def _event_map(events: list[tuple[str, dict]]) -> dict[str, list[dict]]:
 
 
 async def test_widget_config_returns_public_shape(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}")
     assert response.status_code == 200
     body = response.json()
@@ -115,7 +126,7 @@ async def test_widget_config_returns_public_shape(client) -> None:
 
 
 async def test_widget_config_unknown_returns_404(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.get("/api/widget/v1/config/does-not-exist")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "WIDGET_NOT_FOUND"
@@ -125,7 +136,7 @@ async def test_widget_config_unknown_returns_404(client) -> None:
 
 
 async def test_widget_sessions_mints_token(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
@@ -137,7 +148,7 @@ async def test_widget_sessions_mints_token(client) -> None:
 
 
 async def test_widget_sessions_rejects_unknown_widget(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": "nope", "visitor_id": "visitor-1"},
@@ -176,7 +187,7 @@ def _chat_headers(visitor_id: str = "visitor-1") -> dict[str, str]:
 
 
 async def test_widget_chat_streams_answer(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     await _ready_website(chat_env)
 
     response = test_client.post(
@@ -196,14 +207,14 @@ async def test_widget_chat_streams_answer(client) -> None:
 
 
 async def test_widget_chat_requires_bearer_token(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     await _ready_website(chat_env)
     response = test_client.post("/api/widget/v1/chat", json={"question": "Hi"})
     assert response.status_code == 401
 
 
 async def test_widget_chat_rejects_foreign_website_token(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     await _ready_website(chat_env)
     foreign_token, _ = create_widget_session_token(
         widget_id=WIDGET_ID,
@@ -222,7 +233,7 @@ async def test_widget_chat_rejects_foreign_website_token(client) -> None:
 
 
 async def test_widget_chat_rejects_not_ready_website(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     website = await make_website(
         chat_env,
         tenant_id=TENANT_ID,
@@ -241,7 +252,7 @@ async def test_widget_chat_rejects_not_ready_website(client) -> None:
 
 
 async def test_widget_chat_rejects_spam(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     await _ready_website(chat_env)
     response = test_client.post(
         "/api/widget/v1/chat",
@@ -263,7 +274,7 @@ def _cors_assertions(response) -> None:
 
 
 async def test_widget_cors_preflight_allows_any_origin(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.options(
         "/api/widget/v1/config/widget-1",
         headers={
@@ -277,7 +288,7 @@ async def test_widget_cors_preflight_allows_any_origin(client) -> None:
 
 
 async def test_widget_cors_actual_response_has_public_origin(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.get(
         "/api/widget/v1/config/widget-1",
         headers={"Origin": "https://customer.example"},
@@ -287,7 +298,7 @@ async def test_widget_cors_actual_response_has_public_origin(client) -> None:
 
 
 async def test_dashboard_cors_unchanged_for_disallowed_origin(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     # A health/API path on the dashboard surface from a non-allowed origin must
     # not receive any CORS headers (no wildcard, no credentials).
     response = test_client.get(
@@ -298,7 +309,7 @@ async def test_dashboard_cors_unchanged_for_disallowed_origin(client) -> None:
 
 
 async def test_widget_and_dashboard_cors_do_not_bleed(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     widget = test_client.get(
         "/api/widget/v1/config/widget-1",
         headers={"Origin": "https://localhost:3000"},
@@ -310,3 +321,176 @@ async def test_widget_and_dashboard_cors_do_not_bleed(client) -> None:
         headers={"Origin": "https://localhost:3000"},
     )
     assert dashboard.headers.get("access-control-allow-origin") != "*"
+
+
+# ------------------------------------------------------------- feedback
+
+
+def _feedback_headers(visitor_id: str = "visitor-1") -> dict[str, str]:
+    token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id=WEBSITE_ID,
+        visitor_id=visitor_id,
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def test_widget_feedback_accepts_rating(client) -> None:
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(),
+    )
+    grouped = _event_map(_sse_events(response.text))
+    message_id = grouped["done"][0]["message_id"]
+    session_id = grouped["done"][0]["session_id"]
+
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 5,
+            "category": "helpful",
+            "comment": "Really useful",
+        },
+        headers=_feedback_headers(),
+    )
+
+    assert result.status_code == 204
+    stored = feedback_service._feedback.feedback  # noqa: SLF001
+    assert len(stored) == 1
+    assert stored[0].message_id == message_id
+    assert stored[0].rating == 5
+    assert stored[0].category == "helpful"
+    assert stored[0].comment == "Really useful"
+
+
+async def test_widget_feedback_requires_bearer_token(client) -> None:
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    response = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": "s",
+            "message_id": "m",
+            "rating": 4,
+            "category": "helpful",
+        },
+    )
+    assert response.status_code == 401
+
+
+async def test_widget_feedback_rejects_unknown_message(client) -> None:
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": "session-1",
+            "message_id": "missing-message",
+            "rating": 4,
+            "category": "helpful",
+        },
+        headers=_feedback_headers(),
+    )
+    assert result.status_code == 404
+    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    assert feedback_service._feedback.feedback == []  # noqa: SLF001
+
+
+async def test_widget_feedback_rejects_foreign_website_token(client) -> None:
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(),
+    )
+    grouped = _event_map(_sse_events(response.text))
+    message_id = grouped["done"][0]["message_id"]
+    session_id = grouped["done"][0]["session_id"]
+
+    foreign_token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id="other-website",
+        visitor_id="visitor-1",
+    )
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 4,
+            "category": "helpful",
+        },
+        headers={"Authorization": f"Bearer {foreign_token}"},
+    )
+
+    assert result.status_code == 404
+    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    assert feedback_service._feedback.feedback == []  # noqa: SLF001
+
+
+async def test_widget_feedback_validates_rating_and_category(client) -> None:
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(),
+    )
+    grouped = _event_map(_sse_events(response.text))
+    payload = {
+        "session_id": grouped["done"][0]["session_id"],
+        "message_id": grouped["done"][0]["message_id"],
+        "rating": 4,
+        "category": "helpful",
+    }
+    headers = _feedback_headers()
+
+    assert (
+        test_client.post(
+            "/api/widget/v1/feedback",
+            json={**payload, "rating": 6},
+            headers=headers,
+        ).status_code
+        == 422
+    )
+    assert (
+        test_client.post(
+            "/api/widget/v1/feedback",
+            json={**payload, "category": "bogus"},
+            headers=headers,
+        ).status_code
+        == 422
+    )
+
+
+async def test_widget_feedback_is_idempotent_per_message(client) -> None:
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(),
+    )
+    grouped = _event_map(_sse_events(response.text))
+    payload = {
+        "session_id": grouped["done"][0]["session_id"],
+        "message_id": grouped["done"][0]["message_id"],
+        "rating": 3,
+        "category": "incomplete",
+    }
+
+    for _ in range(2):
+        result = test_client.post(
+            "/api/widget/v1/feedback", json=payload, headers=_feedback_headers()
+        )
+        assert result.status_code == 204
+
+    assert len(feedback_service._feedback.feedback) == 1  # noqa: SLF001

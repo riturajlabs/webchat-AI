@@ -94,7 +94,14 @@ export const WIDGET_STYLES = `
   .wc-more-toggle:focus-visible,
   .wc-code-copy:focus-visible,
   .wc-chip:focus-visible,
-  .wc-composer-input:focus-visible {
+  .wc-composer-input:focus-visible,
+  .wc-thumb:focus-visible,
+  .wc-feedback-submit:focus-visible,
+  .wc-feedback-cancel:focus-visible,
+  .wc-feedback-retry:focus-visible,
+  .wc-feedback-dismiss:focus-visible,
+  .wc-feedback-chip:focus-visible,
+  .wc-feedback-comment:focus-visible {
     outline: 2px solid var(--wc-accent);
     outline-offset: 2px;
   }
@@ -337,6 +344,187 @@ export const WIDGET_STYLES = `
 
   .wc-sources-list a {
     color: var(--wc-primary);
+  }
+
+  /* Visitor feedback control under completed answers (Phase 12.4). */
+  .wc-feedback {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--wc-border);
+    font-size: 0.82em;
+  }
+
+  .wc-feedback-prompt {
+    display: block;
+    color: var(--wc-muted);
+    margin-bottom: 6px;
+  }
+
+  .wc-feedback-thumbs {
+    display: flex;
+    gap: 8px;
+  }
+
+  .wc-thumb {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--wc-border);
+    border-radius: 8px;
+    background: var(--wc-surface-elevated);
+    color: var(--wc-muted);
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  .wc-thumb:hover {
+    color: var(--wc-text);
+    border-color: var(--wc-primary);
+  }
+
+  .wc-thumb[aria-pressed='true'] {
+    color: var(--wc-primary);
+    border-color: var(--wc-primary);
+    background: color-mix(in srgb, var(--wc-primary) 12%, transparent);
+  }
+
+  .wc-thumb:disabled,
+  .wc-feedback-submit:disabled,
+  .wc-feedback-chip:disabled,
+  .wc-feedback-comment:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .wc-feedback-panel {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .wc-feedback-panel-label {
+    display: block;
+    font-weight: 600;
+    color: var(--wc-text);
+  }
+
+  .wc-feedback-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .wc-feedback-chip {
+    border: 1px solid var(--wc-border);
+    background: var(--wc-surface-elevated);
+    color: var(--wc-text);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 0.85em;
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  .wc-feedback-chip[aria-pressed='true'] {
+    border-color: var(--wc-primary);
+    color: var(--wc-primary);
+  }
+
+  .wc-feedback-comment-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .wc-feedback-comment-label {
+    font-size: 0.85em;
+    color: var(--wc-muted);
+  }
+
+  .wc-feedback-comment {
+    resize: vertical;
+    border: 1px solid var(--wc-border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.9em;
+    font-family: inherit;
+    color: var(--wc-text);
+    background: var(--wc-surface-elevated);
+    min-height: 40px;
+  }
+
+  .wc-feedback-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .wc-feedback-submit {
+    border: none;
+    background: var(--wc-primary);
+    color: #ffffff;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.9em;
+    cursor: pointer;
+    min-height: 32px;
+  }
+
+  .wc-feedback-cancel {
+    border: 1px solid var(--wc-border);
+    background: transparent;
+    color: var(--wc-muted);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.9em;
+    cursor: pointer;
+    min-height: 32px;
+  }
+
+  .wc-feedback-status {
+    color: var(--wc-muted);
+    margin-top: 6px;
+  }
+
+  .wc-feedback-error {
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #991b1b;
+  }
+
+  :host([data-dark='1']) .wc-feedback-error {
+    color: #fecaca;
+  }
+
+  .wc-feedback-retry {
+    border: 1px solid #fca5a5;
+    background: transparent;
+    color: inherit;
+    border-radius: 6px;
+    padding: 2px 10px;
+    font-size: 0.85em;
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  .wc-feedback-dismiss {
+    border: none;
+    background: transparent;
+    color: var(--wc-muted);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 0.85em;
+    cursor: pointer;
+    min-height: 24px;
+  }
+
+  .wc-feedback-thanks {
+    color: var(--wc-primary);
+    font-weight: 600;
   }
 
   .wc-bubble-content h3,

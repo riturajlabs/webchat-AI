@@ -63,6 +63,7 @@
 - Conversation memory: `chat_sessions` (unique `session_id`, `expires_at` TTL) + `messages` (tenant/session index, `created_at` TTL); `CHAT_MEMORY_TURNS` last turns fed to prompt.
 - Versioned prompts: `backend/prompts/rag.py` catalog keyed by `RAG_PROMPT_VERSION`; `sanitize_question` strips control chars; reference material delimited and labeled untrusted (prompt-injection defense).
 - Token usage capture (ADR-005 §5.8): per-message `input_tokens`/`output_tokens` + atomic `$inc` rollups in `usage_records`.
+- **Feedback system (Phase 12.4, ADR-005 §5.6)** — `POST /api/widget/v1/feedback` (Bearer widget-session token, 204) + `GET /api/feedback` + `GET /api/feedback/summary` (owner/admin RBAC). 1–5 rating + Literal category + comment (max 1000 chars, server-side `.strip()`), idempotent per message, tenant/website/message-ownership re-validated against the widget-session JWT claims. Per-visitor sliding-window rate limit (`WIDGET_FEEDBACK_LIMIT=30/min`), 2-year TTL on `created_at`, four indexes (`tenant_id`, `(tenant_id, created_at -1)`, `rating`, TTL on `created_at`). Widget renders a keyboard-accessible thumbs + category + comment control under completed answers (`aria-pressed`, focus-visible, `data-status`, `wc-feedback*` styles). Dashboard analytics page exposes a 7th "User satisfaction" stat card + a 1–5 distribution chart backed by `useFeedbackSummary`.
 
 ### 1.7 Dashboard (Phase 7)
 
@@ -183,6 +184,11 @@
 - **Status:** Partial — `mypy backend` green at locked mypy 2.3.0 (Phase 8.1); audit-01 baseline of 98 `untyped-decorator` errors is toolchain-dependent and not reproducible today.
 - **Gap:** No `disallow_untyped_decorators = true`; strict mode not enforced.
 
+### 2.6 Feedback endpoint + UI (ADR-005 §5.6, UI/UX §12 "User Satisfaction")
+
+- **Status:** ✅ Complete — `feedback` model + `FeedbackRepository` Protocol + `MongoFeedbackRepository` (create, find_by_message idempotency, list_by_tenant, count_by_tenant, summary_by_tenant via `$match`/`$group`) + `FeedbackService` (validates message ownership against `tenant_id`/`website_id`/`session_id`/`role=assistant` from the widget-session JWT, 30-day default summary window, 90-day max). `POST /api/widget/v1/feedback` (Bearer widget-session token, 204) with `widget_feedback_limiter` (per-visitor sliding window, 30/min). `GET /api/feedback` + `GET /api/feedback/summary` (owner/admin RBAC, `conversations_limiter`). `feedback` collection indexes: `tenant_id`, `(tenant_id, created_at -1)`, `rating`, TTL on `created_at` of 2 years. Widget exposes `submitFeedback` (POST + 401 single-retry + 10s timeout) + `createFeedbackControl` (thumbs → category → comment → submit, `aria-pressed`, focus-visible, `data-status`). Dashboard analytics page now shows a "User satisfaction" stat card + 1-5 distribution chart driven by `useFeedbackSummary`. Closed in Phase 12.4.
+- **Verification:** 50 backend tests (`tests/test_feedback_api.py` + `test_feedback_service.py` + `test_feedback_repository.py` + `tests/test_widget_api.py` feedback section) + 11 widget UI tests (`apps/widget/src/ui/feedback.test.ts`) + 3 dashboard tests (`apps/dashboard/src/features/analytics/analytics-page.test.tsx`) cover the public submit, idempotency, owner-only listing, summary windowing, rate limiting, ownership re-validation, and the empty / submitted / error / thanks UX paths.
+
 ### 2.6 Coverage threshold enforcement
 
 - **Status:** Partial — `pytest --cov=backend --cov-report=term-missing` runs in CI; no `--cov-fail-under` value set (Phase 12 target ≥ 90% critical path not pinned).
@@ -206,15 +212,13 @@
 - **Implementation:** `apps/dashboard/src/features/admin/` contains only `.gitkeep`; no `backend/api/routes/admin/` directory; no admin UI page; `users.role = "admin"` field not used by any router.
 - **Status:** 0% implemented.
 
-### 3.2 Feedback endpoint + UI (ADR-005 §5.6, UI/UX §12 "User Satisfaction")
+### 3.2 ~~Feedback endpoint + UI (ADR-005 §5.6, UI/UX §12 "User Satisfaction")~~
 
-- **Spec:** `feedback` collection, 1–5 rating + category + comment, TTL 2 y, dashboard chart "User Satisfaction".
-- **Implementation:** `feedback` model present in `models/usage_record.py` constants list only (no `models/feedback.py`); no repository; no route; no UI; widget does not surface a feedback widget.
-- **Status:** Schema reserved, collection not created; no API or UI.
+- **Status:** ✅ Complete — see §2.6 (Phase 12.4). Removed from "Missing features".
 
 ### 3.3 User satisfaction chart (UI/UX §12)
 
-- No feedback data → no chart. Depends on §3.2.
+- **Status:** ✅ Complete — backed by `/api/feedback/summary` and `useFeedbackSummary` (Phase 12.4); renders an "Awaiting first rating" EmptyState when `total === 0` so the surface is always legible.
 
 ### 3.4 "Active Visitors" + "Token Usage" live counters (UI/UX §12)
 
@@ -283,7 +287,7 @@
 
 ### 4.6 Schema deltas — ADR-005 supersedes docs/05
 
-- Widget fields, onboarding flags, `refresh_tokens`, `usage_records`, `feedback`, `schema_version`, TTL indexes per ADR-005 §5.7. `feedback` is reserved-but-not-created (§3.2 above). ⚠️ Partial deviation: 7/8 deltas applied.
+- Widget fields, onboarding flags, `refresh_tokens`, `usage_records`, `feedback`, `schema_version`, TTL indexes per ADR-005 §5.7. `feedback` collection created and exercised (Phase 12.4 — see §2.6). ✅ 8/8 deltas applied.
 
 ### 4.7 Production hosting
 
@@ -325,7 +329,7 @@
 | Observability             | **Partial**                 | Structured logging, request ID, request timing, worker timing. No OTel/Grafana/Prometheus/Sentry (§3.9).            |
 | Deployment                | **Partial**                 | Dockerfiles + compose.dev complete; no Vercel/Render manifests; no IaC (§4.7).                                      |
 | Admin panel               | **Not started**             | (§3.1)                                                                                                              |
-| Feedback                  | **Not started**             | Schema reserved, no collection/route/UI (§3.2).                                                                     |
+| Feedback                  | **Production-ready**        | Phase 12.4 (§2.6). Widget submit + dashboard summary + 2 y TTL, per-visitor rate limit, idempotent per message.     |
 | E2E coverage              | **Partial**                 | Widget E2E happy-path exists; no admin E2E, no auth E2E.                                                            |
 | Load / performance SLO    | **Partial**                 | Instrumented; budgets not measured end-to-end (§2.7).                                                               |
 | Source citation in widget | **✅ Done**                 | SSE `sources` → `Conversation.setSources` → `syncSources`/`renderSources` (§2.1, commit `3287fc0`).                 |
@@ -356,7 +360,7 @@
 
 ### 5.4 Bottom-line
 
-The platform is **production-ready for the v1 feature set** that has been built (auth → websites → ingestion → knowledge → RAG → dashboard → widget → conversations → analytics → API keys → AI provider fallback). It is **not production-ready** for the v1 spec in full because the **Admin Panel (Phase 10 / ADR-006)** and **Feedback (ADR-005 §5.6)** are unimplemented, the **onboarding wizard (UI/UX §7)** is not a flow, and **observability** stops short of OTel/Prometheus/Sentry. Deployment to Render/Vercel is not IaC-automated.
+The platform is **production-ready for the v1 feature set** that has been built (auth → websites → ingestion → knowledge → RAG → dashboard → widget → conversations → analytics → API keys → AI provider fallback → visitor feedback). It is **not production-ready** for the v1 spec in full because the **Admin Panel (Phase 10 / ADR-006)** is unimplemented, the **onboarding wizard (UI/UX §7)** is not a flow, and **observability** stops short of OTel/Prometheus/Sentry. Deployment to Render/Vercel is not IaC-automated.
 
 ---
 
@@ -364,22 +368,22 @@ The platform is **production-ready for the v1 feature set** that has been built 
 
 ### 6.1 To close PRD §15 Definition of Success
 
-| #   | Item                                                                                             | Doc                        | Effort | Depends on                                                                        |
-| --- | ------------------------------------------------------------------------------------------------ | -------------------------- | ------ | --------------------------------------------------------------------------------- |
-| 1   | Admin panel backend (`/api/admin/*`)                                                             | ADR-006                    | M      | `users.role` field, `tenants.status`, `audit_logs`, `usage_records` already exist |
-| 2   | Admin panel UI                                                                                   | ADR-006                    | M      | (1)                                                                               |
-| 3   | Feedback collection + `POST /api/feedback` + widget rating widget + dashboard satisfaction chart | ADR-005 §5.6 / UI/UX §12   | M      | `feedback` collection create                                                      |
-| 4   | Onboarding wizard (Welcome → Connect → Index → Embed → Done)                                     | UI/UX §7 / PRD §7          | M      | `onboarding_completed` / `onboarding_step` already on user                        |
-| 5   | ~~Source citation as default widget UI (render below AI bubble)~~                                | PRD §11 future / UI/UX §16 | ~~S~~  | **Done** — Phase 12.2 commit `3287fc0` (5 tests, 23.41 kB gzip)                   |
-| 6   | ~~`embeddings_created` + `crawl_pages` usage rollups~~                                           | ADR-005 §5.5               | ~~S~~  | **Done** — Phase 12.3 commit `19ab1c5` (10 tests, both counters tenant-scoped)    |
-| 7   | Cross-embedding duplicate detection                                                              | Phase 5/6 deferred         | M      | None                                                                              |
-| 8   | Performance SLO dashboard + Redis hot-read cache                                                 | TRD §12 / Phase 11         | M      | `RequestTimingMiddleware`, `timed_job` already instrumented                       |
-| 9   | OTel exporter + Prometheus metrics endpoint + Sentry SDK                                         | TRD §14 future             | M      | Logging in place                                                                  |
-| 10  | IaC: Render `render.yaml` / Vercel config / Atlas index scripts                                  | TRD §3 / Phase 13          | M      | Docker images already build                                                       |
-| 11  | Coverage threshold (`--cov-fail-under=85`) in CI                                                 | Phase 12                   | XS     | Tests already green                                                               |
-| 12  | Hybrid search (vector + keyword), reranking, context compression                                 | TRD §7 future              | L      | None                                                                              |
-| 13  | Backup automation script + disaster recovery runbook                                             | TRD §15                    | S      | Atlas-native                                                                      |
-| 14  | Auth-flow E2E (Playwright)                                                                       | Phase 12                   | M      | `e2e-widget.sh` exists                                                            |
+| #   | Item                                                                                                 | Doc                        | Effort | Depends on                                                                                                         |
+| --- | ---------------------------------------------------------------------------------------------------- | -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
+| 1   | Admin panel backend (`/api/admin/*`)                                                                 | ADR-006                    | M      | `users.role` field, `tenants.status`, `audit_logs`, `usage_records` already exist                                  |
+| 2   | Admin panel UI                                                                                       | ADR-006                    | M      | (1)                                                                                                                |
+| 3   | ~~Feedback collection + `POST /api/feedback` + widget rating widget + dashboard satisfaction chart~~ | ADR-005 §5.6 / UI/UX §12   | ~~M~~  | **Done** — Phase 12.4 (§2.6): 50 backend tests + 11 widget tests + 3 dashboard tests; 2 y TTL; per-visitor limiter |
+| 4   | Onboarding wizard (Welcome → Connect → Index → Embed → Done)                                         | UI/UX §7 / PRD §7          | M      | `onboarding_completed` / `onboarding_step` already on user                                                         |
+| 5   | ~~Source citation as default widget UI (render below AI bubble)~~                                    | PRD §11 future / UI/UX §16 | ~~S~~  | **Done** — Phase 12.2 commit `3287fc0` (5 tests, 23.41 kB gzip)                                                    |
+| 6   | ~~`embeddings_created` + `crawl_pages` usage rollups~~                                               | ADR-005 §5.5               | ~~S~~  | **Done** — Phase 12.3 commit `19ab1c5` (10 tests, both counters tenant-scoped)                                     |
+| 7   | Cross-embedding duplicate detection                                                                  | Phase 5/6 deferred         | M      | None                                                                                                               |
+| 8   | Performance SLO dashboard + Redis hot-read cache                                                     | TRD §12 / Phase 11         | M      | `RequestTimingMiddleware`, `timed_job` already instrumented                                                        |
+| 9   | OTel exporter + Prometheus metrics endpoint + Sentry SDK                                             | TRD §14 future             | M      | Logging in place                                                                                                   |
+| 10  | IaC: Render `render.yaml` / Vercel config / Atlas index scripts                                      | TRD §3 / Phase 13          | M      | Docker images already build                                                                                        |
+| 11  | Coverage threshold (`--cov-fail-under=85`) in CI                                                     | Phase 12                   | XS     | Tests already green                                                                                                |
+| 12  | Hybrid search (vector + keyword), reranking, context compression                                     | TRD §7 future              | L      | None                                                                                                               |
+| 13  | Backup automation script + disaster recovery runbook                                                 | TRD §15                    | S      | Atlas-native                                                                                                       |
+| 14  | Auth-flow E2E (Playwright)                                                                           | Phase 12                   | M      | `e2e-widget.sh` exists                                                                                             |
 
 ### 6.2 Out-of-scope-for-v1 roadmap (PRD §13)
 
@@ -398,7 +402,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 ### P0 — Blockers for "production-ready" claim vs PRD §15
 
 1. **Admin panel (backend + UI)** — ADR-006; PRD §6 explicitly lists Super Admin role; missing entirely. Without it, "Manage tenants / Suspend accounts / View logs" (PRD §6) are unmet.
-2. **Feedback endpoint + widget + dashboard chart** — PRD §6 Visitor "Submit feedback" + UI/UX §12 "User Satisfaction" chart. Schema reserved but unused.
+2. ~~**Feedback endpoint + widget + dashboard chart** — PRD §6 Visitor "Submit feedback" + UI/UX §12 "User Satisfaction" chart. Schema reserved but unused.~~ **Closed in Phase 12.4** (see §2.6).
 3. **IaC + staging deploy** — Phase 13 has no committed manifests. The "production-ready" claim is unverifiable without a deployable target.
 4. ~~**Source citation in widget** — explicitly noted as deferred in Phase 8 verification; trivial to ship.~~ **Closed in Phase 12.2** (commit `3287fc0`).
 5. **Coverage threshold enforcement** — pin `--cov-fail-under` in CI to protect the 354-test green.
@@ -432,7 +436,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 | ------------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
 | §6 Super Admin                 | Manage tenants, suspend, view logs                                                                    | **No**                                                   | §3.1                                                                   |
 | §6 Tenant                      | Register, add website, manage chatbot, analytics, configure widget, API keys, conversations, re-index | **Yes**                                                  | auth + websites + widget + conversations + analytics + api_keys routes |
-| §6 Visitor                     | Ask questions, view responses, submit feedback                                                        | Partial — chat yes, feedback **No**                      | §3.2                                                                   |
+| §6 Visitor                     | Ask questions, view responses, submit feedback                                                        | **Yes**                                                  | chat routes + §2.6 (Phase 12.4) — widget submit + dashboard summary    |
 | §7 Authentication              | Secure signup, login, forgot, verify, JWT, refresh                                                    | **Yes**                                                  | `backend/api/routes/auth.py`                                           |
 | §7 Website Mgmt                | Add, verify, edit, delete, multiple (Future)                                                          | **Yes** (multiple not yet)                               | `backend/api/routes/websites.py`                                       |
 | §7 Knowledge Base              | Crawl, SPA, chunk, embed, vector, re-index                                                            | **Yes**                                                  | ingestion + knowledge modules                                          |
@@ -472,7 +476,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 | §14 Logging & Monitoring | API logs, error logs, auth logs, crawl logs; health, perf, queue, AI latency, DB metrics                                                                         | Partial — logs + health + queue timing; no metrics export                                                                                                              |
 | §15 Backup & Recovery    | Daily, PIT, soft delete, audit logs                                                                                                                              | Partial — soft delete + audit logs implemented; backup automation not committed                                                                                        |
 | §16 Coding Standards     | Frontend strict TS, backend async-first, modular, DI, repo pattern, SOLID/DRY/KISS                                                                               | **Yes**                                                                                                                                                                |
-| §18 Definition of Done   | Frontend↔backend comms, crawl works, embeddings generated, RAG accurate, widget functional, multi-tenant, security passes, perf targets, all critical tests pass | **Yes** (perf targets not measured continuously; admin + feedback open)                                                                                                |
+| §18 Definition of Done   | Frontend↔backend comms, crawl works, embeddings generated, RAG accurate, widget functional, multi-tenant, security passes, perf targets, all critical tests pass | **Yes** (perf targets not measured continuously; admin panel + onboarding wizard + IaC open)                                                                           |
 
 ## Appendix C — Files inspected
 

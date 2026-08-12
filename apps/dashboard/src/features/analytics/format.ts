@@ -49,3 +49,14 @@ export function formatSeconds(seconds: number | null | undefined): string {
   }
   return `${seconds.toFixed(2)}s`;
 }
+
+/**
+ * `4.27` -> `"4.3 / 5"`. Null/undefined collapses to an em-dash so an empty
+ * satisfaction card still renders (Phase 12.4).
+ */
+export function formatRating(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return '—';
+  }
+  return `${value.toFixed(1)} / 5`;
+}

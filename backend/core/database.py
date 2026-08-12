@@ -25,6 +25,8 @@ _REFRESH_TOKEN_TTL_SECONDS = 40 * 24 * 60 * 60
 _AUDIT_LOG_TTL_SECONDS = 365 * 24 * 60 * 60
 # ADR-005 §5.7: crawl job records are retained 30 days.
 _CRAWL_JOB_TTL_SECONDS = 30 * 24 * 60 * 60
+# ADR-005 §5.7: visitor feedback is retained 2 years.
+_FEEDBACK_TTL_SECONDS = 2 * 365 * 24 * 60 * 60
 # ADR-005 §5.7: chat sessions are deleted exactly at `expires_at` (the Mongo
 # "deadline" pattern, expireAfterSeconds=0). `expires_at` is already set to
 # now + CHAT_RETENTION_DAYS by ChatSession.new, so this yields the configured
@@ -181,7 +183,8 @@ class MongoDB:
         crawl_jobs.created_at (30 days, ADR-005 §5.7),
         chat_sessions.expires_at (deadline, expireAfterSeconds=0; §5.7),
         messages.created_at (90 days, configurable, §5.7),
-        usage_records.updated_at (3 years, configurable, §5.7).
+        usage_records.updated_at (3 years, configurable, §5.7),
+        feedback.created_at (2 years, ADR-005 §5.7).
         """
         db = cls.db()
         await db["users"].create_index("email", unique=True)
@@ -281,6 +284,12 @@ class MongoDB:
         # API key management (docs/05 §12).
         await db["api_keys"].create_index("tenant_id")
         await db["api_keys"].create_index([("tenant_id", 1), ("created_at", -1)])
+        # Phase 12.4 visitor feedback (docs/05 §19, ADR-005 §5.6): tenant reads,
+        # created_at sorting, rating/category filters, 2-year TTL.
+        await db["feedback"].create_index("tenant_id")
+        await db["feedback"].create_index([("tenant_id", 1), ("created_at", -1)])
+        await db["feedback"].create_index("rating")
+        await db["feedback"].create_index("created_at", expireAfterSeconds=_FEEDBACK_TTL_SECONDS)
 
     @classmethod
     async def close(cls) -> None:

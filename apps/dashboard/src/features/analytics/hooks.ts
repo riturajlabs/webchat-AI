@@ -1,5 +1,5 @@
 /**
- * React Query hooks for the analytics feature (Phase 11.3,
+ * React Query hooks for the analytics feature (Phase 11.3 + 12.4,
  * 00-AI-Development-Rules §14).
  */
 
@@ -10,6 +10,7 @@ import { api } from '@/lib/api';
 import type {
   AnalyticsRange,
   AnalyticsSummary,
+  FeedbackSummary,
   ResponseMetrics,
   TimeseriesPoint,
   TopWebsite,
@@ -24,6 +25,8 @@ export const analyticsKeys = {
   topWebsites: (days: number) => ['analytics', 'top-websites', { days }] as const,
   performance: (days: number, websiteId: string) =>
     ['analytics', 'performance', { days, websiteId }] as const,
+  feedback: (days: number, websiteId: string) =>
+    ['analytics', 'feedback', { days, websiteId }] as const,
 };
 
 export interface AnalyticsFilters {
@@ -65,5 +68,17 @@ export function useAnalyticsPerformance(days: number, websiteId: string) {
     queryKey: analyticsKeys.performance(days, websiteId),
     queryFn: () =>
       api.get<ResponseMetrics>(`/api/analytics/performance?days=${days}${websiteQuery(websiteId)}`),
+  });
+}
+
+/**
+ * Visitor satisfaction (Phase 12.4, UI/UX §12).
+ * Returns the average rating + the 1-5 star distribution for the window.
+ */
+export function useFeedbackSummary(days: number, websiteId: string) {
+  return useQuery({
+    queryKey: analyticsKeys.feedback(days, websiteId),
+    queryFn: () =>
+      api.get<FeedbackSummary>(`/api/feedback/summary?days=${days}${websiteQuery(websiteId)}`),
   });
 }

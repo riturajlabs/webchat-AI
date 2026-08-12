@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     widget_per_widget_limit: int = 60
     widget_per_visitor_limit: int = 20
     widget_session_issue_limit: int = 30
+    # Per-visitor feedback submissions per minute (Phase 12.4). Feedback is
+    # write-once per message, so a modest budget bounds abuse without getting
+    # in the way of legitimate ratings.
+    widget_feedback_limit: int = 30
     widget_max_messages_per_session: int = 50
     # Master switch for the widget rate limits; `None` inherits the global
     # `rate_limit_enabled` (resolved in the validator below).

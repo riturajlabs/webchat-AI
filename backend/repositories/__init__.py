@@ -37,6 +37,11 @@ from backend.repositories.document_repository import (
     DocumentRepository,
     MongoDocumentRepository,
 )
+from backend.repositories.feedback_repository import (
+    FeedbackRepository,
+    FeedbackSummary,
+    MongoFeedbackRepository,
+)
 from backend.repositories.knowledge_chunk_repository import (
     KnowledgeChunkRepository,
     MongoKnowledgeChunkRepository,
@@ -75,6 +80,8 @@ __all__ = [
     "ChatSessionRepository",
     "CrawlJobRepository",
     "DocumentRepository",
+    "FeedbackRepository",
+    "FeedbackSummary",
     "KnowledgeChunkRepository",
     "MongoAnalyticsRepository",
     "MongoAuditLogRepository",
@@ -83,6 +90,7 @@ __all__ = [
     "MongoChatSessionRepository",
     "MongoCrawlJobRepository",
     "MongoDocumentRepository",
+    "MongoFeedbackRepository",
     "MongoKnowledgeChunkRepository",
     "MongoMemberRepository",
     "MongoRefreshTokenRepository",

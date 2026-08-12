@@ -29,6 +29,9 @@ import {
   toggleExpanded,
   wireMessageActions,
 } from '../ui/bubbles';
+import { submitFeedback } from '../feedback/api';
+import type { FeedbackSubmitPayload } from '../ui/feedback';
+import type { FeedbackState } from '../stream/chat';
 import { WIDGET_STYLES } from '../ui/styles';
 import { streamChat } from '../stream/client';
 import { Conversation, type ChatMessage } from '../stream/chat';
@@ -198,6 +201,9 @@ export function mount(options: WidgetHostOptions): WidgetController {
         toggleExpanded(messageList, message);
       }
     },
+    onFeedbackSubmit(messageId: string, payload: FeedbackSubmitPayload): void {
+      void submitFeedbackFor(messageId, payload);
+    },
   });
 
   // --- Send path -----------------------------------------------------------
@@ -226,9 +232,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
         }
       },
       onDelta: (delta: string) => conversation.appendDelta(turnId, delta),
-      onDone: (done: { session_id?: string }) => {
+      onDone: (done: { session_id?: string; message_id?: string }) => {
         if (done.session_id) {
           conversation.setSessionId(done.session_id);
+        }
+        if (done.message_id) {
+          conversation.setMessageId(turnId, done.message_id);
         }
         conversation.endTurn(turnId);
       },
@@ -277,6 +286,54 @@ export function mount(options: WidgetHostOptions): WidgetController {
         void send(messages[i].content);
         return;
       }
+    }
+  }
+
+  // --- Feedback submission (Phase 12.4) -----------------------------------
+
+  async function submitFeedbackFor(
+    messageId: string,
+    payload: FeedbackSubmitPayload,
+  ): Promise<void> {
+    const state = conversation.getState();
+    const message = state.messages.find((m) => m.id === messageId);
+    // A backend message id is required (bound from the SSE `done` event).
+    if (!message?.messageId || !state.sessionId) {
+      conversation.setFeedback(messageId, {
+        status: 'error',
+        rating: payload.rating,
+        category: payload.category,
+        comment: payload.comment,
+      });
+      return;
+    }
+    const feedback: FeedbackState = {
+      status: 'submitting',
+      rating: payload.rating,
+      category: payload.category,
+      comment: payload.comment,
+    };
+    conversation.setFeedback(messageId, feedback);
+    try {
+      await submitFeedback(
+        { widgetId, apiBaseUrl },
+        {
+          sessionId: state.sessionId,
+          messageId: message.messageId,
+          rating: payload.rating,
+          category: payload.category as 'helpful' | 'wrong' | 'incomplete' | 'offensive' | 'other',
+          comment: payload.comment,
+        },
+        {
+          getToken: () => session.ensureFresh(),
+          reissueToken: () => session.reissue(),
+        },
+        fetchImpl,
+      );
+      conversation.setFeedback(messageId, { ...feedback, status: 'submitted' });
+      announce('Feedback sent');
+    } catch {
+      conversation.setFeedback(messageId, { ...feedback, status: 'error' });
     }
   }
 
