@@ -191,7 +191,8 @@
 
 ### 2.6 Coverage threshold enforcement
 
-- **Status:** Partial — `pytest --cov=backend --cov-report=term-missing` runs in CI; no `--cov-fail-under` value set (Phase 12 target ≥ 90% critical path not pinned).
+- **Status:** ✅ Complete — CI test step now runs `uv run pytest --cov=backend --cov-report=term-missing --cov-fail-under=85`. Closed in Phase 12.6 (commit `5f10f9e`).
+- **Verification:** `uv run pytest --cov=backend --cov-report=term-missing --cov-fail-under=85` → "Required test coverage of 85% reached. Total coverage: 86.21%", `542 passed, 1 skipped`; `ruff check .` and `mypy backend` clean.
 
 ### 2.7 Performance instrumentation (Phase 11)
 
@@ -385,7 +386,7 @@ The platform is **production-ready for the v1 feature set** that has been built 
 | 8   | Performance SLO dashboard + Redis hot-read cache                                                     | TRD §12 / Phase 11         | M      | `RequestTimingMiddleware`, `timed_job` already instrumented                                                        |
 | 9   | OTel exporter + Prometheus metrics endpoint + Sentry SDK                                             | TRD §14 future             | M      | Logging in place                                                                                                   |
 | 10  | IaC: Render `render.yaml` / Vercel config / Atlas index scripts                                      | TRD §3 / Phase 13          | M      | Docker images already build                                                                                        |
-| 11  | Coverage threshold (`--cov-fail-under=85`) in CI                                                     | Phase 12                   | XS     | Tests already green                                                                                                |
+| 11  | ~~Coverage threshold (`--cov-fail-under=85`) in CI~~                                                 | Phase 12                   | ~~XS~~ | **Done** — Phase 12.6 commit `5f10f9e`; gated in CI, 86.21% total coverage                                         |
 | 12  | Hybrid search (vector + keyword), reranking, context compression                                     | TRD §7 future              | L      | None                                                                                                               |
 | 13  | Backup automation script + disaster recovery runbook                                                 | TRD §15                    | S      | Atlas-native                                                                                                       |
 | 14  | Auth-flow E2E (Playwright)                                                                           | Phase 12                   | M      | `e2e-widget.sh` exists                                                                                             |
@@ -410,7 +411,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 2. ~~**Feedback endpoint + widget + dashboard chart** — PRD §6 Visitor "Submit feedback" + UI/UX §12 "User Satisfaction" chart. Schema reserved but unused.~~ **Closed in Phase 12.4** (see §2.6).
 3. **IaC + staging deploy** — Phase 13 has no committed manifests. The "production-ready" claim is unverifiable without a deployable target.
 4. ~~**Source citation in widget** — explicitly noted as deferred in Phase 8 verification; trivial to ship.~~ **Closed in Phase 12.2** (commit `3287fc0`).
-5. **Coverage threshold enforcement** — pin `--cov-fail-under` in CI to protect the 354-test green.
+5. ~~**Coverage threshold enforcement** — pin `--cov-fail-under` in CI to protect the 354-test green.~~ **Closed in Phase 12.6** (commit `5f10f9e`; `--cov-fail-under=85`, 86.21% total).
 6. **Onboarding wizard** — PRD §7 / UI/UX §7; reduces time-to-first-chat from "no flow" to <5 min (matches UI/UX target experience §3).
 
 ### P1 — Strengthens production quality (no block)
