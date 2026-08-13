@@ -24,11 +24,13 @@ from backend.core.errors import (
     WebsiteNotReadyError,
     WidgetDisabledError,
     WidgetNotFoundError,
+    WidgetOriginNotAllowedError,
 )
 from backend.core.security import create_widget_session_token, utcnow
 from backend.models.website import WEBSITE_STATUS_READY
 from backend.repositories import TenantRepository, WebsiteRepository, WidgetRepository
 from backend.schemas.widget import WidgetPublicConfig
+from backend.utils.origin import origin_allowed, origin_hostname
 
 logger = logging.getLogger("webchat_ai")
 
@@ -76,6 +78,41 @@ class WidgetService:
         self._settings = settings or get_settings()
 
     # ------------------------------------------------------------ config
+
+    async def validate_origin(self, widget_id: str, origin: str | None) -> None:
+        """Reject browser embeds from domains outside the widget allowlist.
+
+        Policy (production hardening):
+          * no `Origin` header → allowed (non-browser clients; curl/SSE are
+            not an embed and cannot be validated anyway);
+          * widget has an empty allowlist → allowed (legacy permissive mode);
+          * otherwise the `Origin` hostname must be in the allowlist, or be a
+            configured dashboard origin (widget-builder previews are always
+            permitted). `Origin: null` (sandboxed iframe) is never allowed
+            once a allowlist is configured.
+        """
+        if origin is None:
+            return
+        widget = await self._widgets.find_by_widget_id(widget_id)
+        if widget is None:
+            raise WidgetNotFoundError("Widget not found.")
+        allowed = list(widget.allowed_domains or [])
+        if not allowed:
+            return
+        # Dashboard origins (widget-builder preview, local dev) are always
+        # permitted so the tenant can preview without editing the allowlist.
+        allowed.extend(self._dashboard_origins())
+        if not origin_allowed(origin, allowed):
+            raise WidgetOriginNotAllowedError(
+                "This domain is not allowed to embed this widget."
+            )
+
+    def _dashboard_origins(self) -> list[str]:
+        return [
+            host
+            for origin in self._settings.cors_origins
+            if (host := origin_hostname(str(origin))) is not None
+        ]
 
     async def get_public_config(self, widget_id: str) -> WidgetPublicConfig:
         """Return the public config, serving from Redis when available.

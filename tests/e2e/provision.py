@@ -101,8 +101,14 @@ def provision_widget(
     mailpit_url: str,
     widget_script_url: str,
     email: str,
+    allowed_domains: list[str] | None = None,
 ) -> ProvisionedWidget:
-    """Provision a real tenant + widget and return the embed page HTML."""
+    """Provision a real tenant + widget and return the embed page HTML.
+
+    `allowed_domains` extends the widget's embed-origin allowlist (seeded from
+    the website URL at creation) so the browser test page - served from a
+    random `127.0.0.1` port - is permitted to embed the widget.
+    """
     client = httpx.Client(base_url=api_base_url, timeout=30)
 
     # 1. Register (real user row in MongoDB).
@@ -149,6 +155,19 @@ def provision_widget(
     body = website.json()
     widget_id = body["widget"]["widget_id"]
     website_id = body["website"]["id"]
+
+    # The widget allowlist was seeded from `https://example.com`; add any extra
+    # origins (e.g. the local test page) via the dashboard widget-builder API.
+    if allowed_domains:
+        _expect(
+            client.patch(
+                f"/api/websites/{website_id}/widget",
+                json={"allowed_domains": allowed_domains},
+                headers=headers,
+            ),
+            f"PATCH /api/websites/{website_id}/widget",
+            200,
+        )
 
     # 5. Start a real crawl (worker crawls, then enqueues per-document
     #    embedding jobs; embeddings need a real GEMINI_API_KEY).

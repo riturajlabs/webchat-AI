@@ -19,9 +19,10 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-assets.mjs",
     "build:size": "tsc --noEmit && vite build && node scripts/check-size.mjs",
     "check:size": "node scripts/check-size.mjs",
+    "check:assets": "node scripts/check-assets.mjs",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

@@ -35,10 +35,25 @@ describe('autoUpgrade', () => {
     expect(document.querySelector('webchat-widget')).toBeTruthy();
   });
 
-  it('uses the api-base-url from the script tag', () => {
-    installCurrentScript({ widgetId: 'widget_abc', apiBaseUrl: 'https://cdn.example.com/api' });
+  it('resolves a host-only api-base-url from the script tag', () => {
+    installCurrentScript({ widgetId: 'widget_abc', apiBaseUrl: 'https://cdn.example.com' });
     const result = autoUpgrade();
-    expect(result?.controller?.apiBaseUrl).toBe('https://cdn.example.com/api');
+    expect(result?.controller?.apiBaseUrl).toBe('https://cdn.example.com/api/widget/v1');
+  });
+
+  it('keeps an already-versioned api-base-url unchanged', () => {
+    installCurrentScript({
+      widgetId: 'widget_abc',
+      apiBaseUrl: 'https://cdn.example.com/api/widget/v1',
+    });
+    const result = autoUpgrade();
+    expect(result?.controller?.apiBaseUrl).toBe('https://cdn.example.com/api/widget/v1');
+  });
+
+  it('falls back to the same-origin base when data-api-base-url is empty', () => {
+    installCurrentScript({ widgetId: 'widget_abc', apiBaseUrl: '' });
+    const result = autoUpgrade();
+    expect(result?.controller?.apiBaseUrl).toBe('/api/widget/v1');
   });
 });
 

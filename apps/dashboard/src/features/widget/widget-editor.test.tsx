@@ -35,6 +35,7 @@ const CONFIG: WidgetConfig = {
   dark_mode: false,
   auto_open: false,
   enabled: true,
+  allowed_domains: [],
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
 };
@@ -77,6 +78,10 @@ describe('WidgetEditor', () => {
     expect(screen.getByLabelText('Enabled')).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByLabelText('Suggested question 1')).toHaveValue('What is your pricing?');
     expect(screen.getByText('Powered by WebChat AI')).toBeInTheDocument();
+    expect(screen.getAllByText('Allowed domains').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('No allowed domains — any website can embed this widget.'),
+    ).toBeInTheDocument();
   });
 
   it('updates the preview instantly as the welcome message changes', () => {
@@ -130,6 +135,51 @@ describe('WidgetEditor', () => {
 
     await vi.waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('Request failed with status 422');
+    });
+  });
+
+  it('saves added allowed domains as a single normalized change', async () => {
+    const { mutation } = setup();
+
+    const save = screen.getByRole('button', { name: 'Save changes' });
+    expect(save).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Allowed domains'), {
+      target: { value: 'Acme.Example.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(screen.getByText('acme.example')).toBeInTheDocument();
+    expect(save).toBeEnabled();
+
+    fireEvent.click(save);
+
+    expect(mutation).toHaveBeenCalledTimes(1);
+    expect(mutation).toHaveBeenCalledWith({
+      websiteId: 'site-1',
+      changes: { allowed_domains: ['acme.example'] },
+    });
+  });
+
+  it('saves removal of an allowed domain', async () => {
+    const mutation = vi.fn().mockResolvedValue(RESPONSE);
+    mockedUseUpdateWidgetConfig.mockReturnValue({
+      mutateAsync: mutation,
+      isPending: false,
+    } as never);
+    const withDomains = { ...CONFIG, allowed_domains: ['example.com', 'store.example.com'] };
+
+    render(<WidgetEditor config={withDomains} embedScript={RESPONSE.embed_script} />);
+
+    expect(screen.getByText('example.com')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove example.com' }));
+
+    expect(screen.queryByText('example.com')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    expect(mutation).toHaveBeenCalledWith({
+      websiteId: 'site-1',
+      changes: { allowed_domains: ['store.example.com'] },
     });
   });
 });

@@ -43,11 +43,15 @@ def widget_env(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[str, 
 
     assert E2E_BASE_URL, "E2E_BASE_URL must be set (see scripts/e2e-widget.sh)"
     email = f"e2e-{uuid.uuid4().hex[:10]}@example.com"
+    # The widget allowlist is seeded from the website URL (`example.com`); add
+    # the local test page's origin so the browser page may embed the widget.
+    served_host = "127.0.0.1"
     provisioned = provision_widget(
         api_base_url=E2E_BASE_URL,
         mailpit_url=E2E_MAILPIT_URL,
         widget_script_url=E2E_WIDGET_SCRIPT_URL,
         email=email,
+        allowed_domains=["example.com", served_host],
     )
     (served_dir / "index.html").write_text(provisioned.page_html, encoding="utf-8")
     page_url = f"{origin}/index.html"

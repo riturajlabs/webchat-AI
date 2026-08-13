@@ -160,6 +160,18 @@ class WidgetDisabledError(AppError):
     code = "WIDGET_DISABLED"
 
 
+class WidgetOriginNotAllowedError(AppError):
+    """The embedding page's origin is not in the widget's allowed_domains.
+
+    Raised when a browser embeds a widget on a domain the tenant has not
+    authorized. A `403` keeps the rejection loud while revealing nothing
+    about the widget's existence beyond what the tenant configured.
+    """
+
+    status_code = 403
+    code = "WIDGET_ORIGIN_NOT_ALLOWED"
+
+
 class WebsiteNotReadyError(AppError):
     """Website has not finished indexing, so it cannot answer (Phase 8)."""
 

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.core.security import new_id, utcnow
 
@@ -42,6 +42,11 @@ class Widget(BaseModel):
     auto_open: bool = False
     enabled: bool = True
     widget_secret_hash: str | None = None
+    # Embed-origin allowlist (production hardening). Empty = any origin may
+    # embed (legacy default); non-empty = browser requests whose `Origin` host
+    # is not listed are rejected. Seeded from the website host at creation and
+    # editable via the dashboard widget builder.
+    allowed_domains: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     schema_version: int = 1

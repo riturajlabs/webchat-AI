@@ -19,6 +19,7 @@ from backend.models.widget import (
     WIDGET_POSITIONS,
     WIDGET_THEMES,
 )
+from backend.utils.origin import normalize_allowed_domains
 
 MAX_WIDGET_ID_LENGTH = 128
 MAX_VISITOR_ID_LENGTH = 128
@@ -31,6 +32,9 @@ MAX_PLACEHOLDER_LENGTH = 120
 MAX_SUGGESTED_QUESTIONS = 5
 MAX_SUGGESTED_QUESTION_LENGTH = 200
 MAX_WIDGET_URL_LENGTH = 2048
+# Embed-origin allowlist bounds (production hardening).
+MAX_ALLOWED_DOMAINS = 50
+MAX_ALLOWED_DOMAIN_LENGTH = 253
 
 _HTML_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
@@ -66,6 +70,8 @@ class WidgetConfigUpdate(BaseModel):
     dark_mode: bool | None = None
     auto_open: bool | None = None
     enabled: bool | None = None
+    # Restrict which browser origins may embed the widget. Empty = any origin.
+    allowed_domains: list[str] | None = None
 
     @field_validator("primary_color", "accent_color")
     @classmethod
@@ -113,6 +119,25 @@ class WidgetConfigUpdate(BaseModel):
             if len(stripped) > MAX_SUGGESTED_QUESTION_LENGTH:
                 raise ValueError("a suggested question is too long")
             cleaned.append(stripped)
+        return cleaned
+
+    @field_validator("allowed_domains")
+    @classmethod
+    def _validate_allowed_domains(cls, value: list[str] | None) -> list[str] | None:
+        """Validate + normalize the embed-origin allowlist.
+
+        Entries are bare hostnames or `*.`-prefixed wildcards; schemes, ports
+        and paths are rejected (embedding is matched on the hostname only).
+        """
+        if value is None:
+            return None
+        if len(value) > MAX_ALLOWED_DOMAINS:
+            raise ValueError(f"no more than {MAX_ALLOWED_DOMAINS} domains are allowed")
+        cleaned = normalize_allowed_domains(value)
+        if len(cleaned) != len(value):
+            raise ValueError(
+                "allowed domains must be bare hostnames (optionally *.wildcards)"
+            )
         return cleaned
 
     @model_validator(mode="after")

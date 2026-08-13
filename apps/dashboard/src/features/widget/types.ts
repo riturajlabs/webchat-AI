@@ -27,6 +27,7 @@ export type WidgetConfigChanges = Pick<
   | 'dark_mode'
   | 'auto_open'
   | 'enabled'
+  | 'allowed_domains'
 >;
 
 export interface WidgetConfig {
@@ -46,6 +47,8 @@ export interface WidgetConfig {
   dark_mode: boolean;
   auto_open: boolean;
   enabled: boolean;
+  /** Embed-origin allowlist; empty = any origin may embed. */
+  allowed_domains: string[];
   created_at: string;
   updated_at: string;
 }

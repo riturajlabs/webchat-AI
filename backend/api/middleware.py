@@ -126,7 +126,6 @@ class WidgetCORSHeadersMiddleware:
         async def send_with_cors(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
-                existing = {name.decode("latin1").lower() for name, _ in headers}
                 # The inner CORSMiddleware may have emitted credentials-scoped
                 # headers when the origin happens to be a dashboard origin;
                 # the widget surface must never carry them.
@@ -136,10 +135,12 @@ class WidgetCORSHeadersMiddleware:
                     if name.decode("latin1").lower()
                     not in {"access-control-allow-origin", "access-control-allow-credentials"}
                 ]
+                # Always re-apply the public widget policy after stripping, so a
+                # widget request from any origin (incl. ones listed in the
+                # dashboard `cors_origins`) still gets `ACAO: *`.
                 headers.extend(
                     (name.lower().encode("latin1"), value.encode("latin1"))
                     for name, value in _WIDGET_CORS_HEADERS.items()
-                    if name.lower() not in existing
                 )
                 message["headers"] = headers
             await send(message)

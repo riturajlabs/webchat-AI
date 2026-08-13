@@ -9,7 +9,7 @@
  * `WidgetError` taxonomy.
  */
 
-import { sanitizeApiBaseUrl, type WidgetOptions } from '../config/types';
+import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
 import { WidgetError, errorFromStatus } from '../core/errors';
 import { fetchWithTimeout } from '../core/network';
 import type { SessionToken } from '../core/session';
@@ -47,7 +47,7 @@ export async function submitFeedback(
   client: FeedbackClientOptions,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-  const apiBaseUrl = sanitizeApiBaseUrl(options.apiBaseUrl ?? '/api/widget/v1');
+  const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
 
   let token: SessionToken;
   try {

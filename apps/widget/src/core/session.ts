@@ -7,7 +7,7 @@
  * renewal margin (plan §9 clock skew).
  */
 
-import { sanitizeApiBaseUrl, type WidgetOptions } from '../config/types';
+import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
 import { WidgetError } from './errors';
 import { fetchWithTimeout } from './network';
 
@@ -54,7 +54,7 @@ export async function mintSessionToken(
   visitorId: string,
   fetchImpl?: typeof fetch,
 ): Promise<SessionResult> {
-  const apiBaseUrl = sanitizeApiBaseUrl(options.apiBaseUrl ?? '/api/widget/v1');
+  const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
   let response: Response;
   try {
     response = await fetchWithTimeout(

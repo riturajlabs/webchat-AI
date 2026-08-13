@@ -22,10 +22,25 @@ has run.
 
 ### Script data attributes
 
-| Attribute           | Required | Purpose                                                                                                              |
-| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `data-widget-id`    | yes      | Public widget identifier (dashboard → widget page).                                                                  |
-| `data-api-base-url` | no       | Override the API base URL, e.g. `https://api.example.com/api/widget/v1`. Defaults to `/api/widget/v1` (same origin). |
+| Attribute           | Required | Purpose                                                                                                                                                                                                                                                        |
+| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-widget-id`    | yes      | Public widget identifier (dashboard → widget page).                                                                                                                                                                                                            |
+| `data-api-base-url` | no       | Override the API origin, e.g. `https://api.example.com`. The SDK appends `/api/widget/v1`. A fully versioned base (`.../api/widget/v1`) is also accepted. Defaults to the build-time `VITE_WIDGET_API_BASE_URL`, falling back to same-origin `/api/widget/v1`. |
+
+### API base resolution
+
+The widget resolves its API base in this order:
+
+1. `data-api-base-url` (or `apiBaseUrl` in `init()`/`mount()`), given as either a
+   host origin or a fully versioned path.
+2. `VITE_WIDGET_API_BASE_URL`, baked in at build time — the SaaS host ships the
+   bundle with this set to the public API domain, so customers only provide
+   `data-widget-id`.
+3. Same-origin `/api/widget/v1` (local development where the site and API share
+   an origin).
+
+The resolved base always ends in `/api/widget/v1`, so requests hit
+`/config/{widget_id}`, `/sessions`, `/chat` and `/feedback` under that prefix.
 
 ## Programmatic use (frameworks)
 

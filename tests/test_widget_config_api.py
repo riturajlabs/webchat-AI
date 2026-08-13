@@ -247,3 +247,107 @@ def test_update_widget_config_requires_authentication(client) -> None:
         "/api/websites/some-id/widget", json={"welcome_message": "Hi"}
     )
     assert response.status_code == 401
+
+
+def test_update_widget_allowed_domains_normalizes_and_stores(client) -> None:
+    test_client, env, invalidated = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    response = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={
+            "allowed_domains": [
+                "Acme.Example",
+                "*.Sub.Example",
+                "example.com:8080",  # port rejected -> entry dropped
+            ]
+        },
+        headers=headers,
+    )
+    assert response.status_code == 422  # dropped entries fail loudly
+
+
+async def test_widget_allowed_domains_stored_after_patch(client) -> None:
+    test_client, env, invalidated = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    response = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"allowed_domains": ["acme.example", "*.store.example"]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["widget"]["allowed_domains"] == ["acme.example", "*.store.example"]
+    stored = next(iter(env.widgets.widgets.values()))
+    assert stored.allowed_domains == ["acme.example", "*.store.example"]
+    assert invalidated == [created["website"]["widget_id"]]
+
+
+def test_get_widget_exposes_allowed_domains(client) -> None:
+    test_client, env, _ = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    # The widget is seeded with the website's host, so the GET response must
+    # expose the current allowlist for the dashboard to render it.
+    response = test_client.get(f"/api/websites/{website_id}/widget", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert "allowed_domains" in body["widget"]
+    assert body["widget"]["allowed_domains"] == ["example.com"]
+
+    patched = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"allowed_domains": ["acme.example", "*.store.example"]},
+        headers=headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["widget"]["allowed_domains"] == ["acme.example", "*.store.example"]
+
+
+async def test_widget_allowed_domains_cleared_by_empty_list(client) -> None:
+    test_client, env, _ = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    seeded = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"allowed_domains": ["acme.example"]},
+        headers=headers,
+    )
+    assert seeded.status_code == 200
+
+    cleared = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"allowed_domains": []},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["widget"]["allowed_domains"] == []
+    assert next(iter(env.widgets.widgets.values())).allowed_domains == []
+
+
+def test_update_widget_allowed_domains_validation(client) -> None:
+    test_client, _, _ = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    cases = [
+        ({"allowed_domains": [f"a{i}.example.com" for i in range(51)]}, "too many domains"),
+        ({"allowed_domains": ["https://example.com"]}, "scheme not a hostname"),
+        ({"allowed_domains": ["example.com/path"]}, "path in hostname"),
+        ({"allowed_domains": ["example.com:8080"]}, "port in hostname"),
+        ({"allowed_domains": ["not a hostname"]}, "spaces in hostname"),
+    ]
+    for payload, _label in cases:
+        response = test_client.patch(
+            f"/api/websites/{website_id}/widget", json=payload, headers=headers
+        )
+        assert response.status_code == 422, f"expected 422 for {payload}"

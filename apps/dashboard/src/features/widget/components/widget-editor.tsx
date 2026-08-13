@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
+import { AllowedDomainsEditor } from './allowed-domains-editor';
 import { ColorPicker } from './color-picker';
 import { QuestionEditor } from './question-editor';
 import { WidgetPreview } from './widget-preview';
@@ -31,6 +32,7 @@ const EDITABLE_FIELDS: (keyof WidgetConfigChanges)[] = [
   'dark_mode',
   'auto_open',
   'enabled',
+  'allowed_domains',
 ];
 
 function Section({
@@ -108,9 +110,9 @@ export function WidgetEditor({
     for (const field of EDITABLE_FIELDS) {
       const next = draft[field];
       const current = config[field];
-      if (field === 'suggested_questions') {
+      if (Array.isArray(next)) {
         if (JSON.stringify(next) !== JSON.stringify(current)) {
-          diff.suggested_questions = next as string[];
+          (diff as Record<string, unknown>)[field] = next;
         }
       } else if (next !== current) {
         (diff as Record<string, unknown>)[field] = next;
@@ -295,6 +297,16 @@ export function WidgetEditor({
             description="Disable to hide the widget from your site entirely."
             checked={draft.enabled}
             onChange={(enabled) => patch({ enabled })}
+          />
+        </Section>
+
+        <Section
+          title="Allowed domains"
+          description="Restrict which websites may embed this widget."
+        >
+          <AllowedDomainsEditor
+            domains={draft.allowed_domains}
+            onChange={(allowed_domains) => patch({ allowed_domains })}
           />
         </Section>
 

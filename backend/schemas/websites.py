@@ -79,6 +79,8 @@ class WidgetOut(BaseModel):
     dark_mode: bool
     auto_open: bool
     enabled: bool
+    # Embed-origin allowlist (empty = any origin may embed).
+    allowed_domains: list[str]
     created_at: datetime
     updated_at: datetime
 
@@ -101,6 +103,7 @@ class WidgetOut(BaseModel):
             dark_mode=widget.dark_mode,
             auto_open=widget.auto_open,
             enabled=widget.enabled,
+            allowed_domains=list(widget.allowed_domains or []),
             created_at=widget.created_at,
             updated_at=widget.updated_at,
         )

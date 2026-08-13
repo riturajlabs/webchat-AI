@@ -7,6 +7,7 @@ tenant-scoped by the caller-provided `tenant_id`, never by request input.
 """
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
@@ -99,6 +100,12 @@ class WebsiteService:
             website_id=website.id,
             widget_secret_hash=hash_widget_secret(widget_secret),
         )
+        # Seed the embed-origin allowlist from the registered website host so
+        # new widgets are protected-by-default against embedding elsewhere;
+        # tenants extend it from the dashboard widget builder.
+        seed_domain = self._embed_domain(normalized_url)
+        if seed_domain:
+            widget.allowed_domains = [seed_domain]
         try:
             await self._widgets.create(widget)
         except Exception:
@@ -238,6 +245,18 @@ class WebsiteService:
         )
 
     # ------------------------------------------------------------- internals
+
+    @staticmethod
+    def _embed_domain(url: str) -> str | None:
+        """Hostname of the registered website URL, or None when unusable."""
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return None
+        host = parsed.hostname
+        if not host:
+            return None
+        return host.lower().rstrip(".")
 
     def build_embed_script(self, widget_id: str) -> str:
         return (

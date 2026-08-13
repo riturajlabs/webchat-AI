@@ -9,7 +9,7 @@
 
 import {
   defaultConfig,
-  sanitizeApiBaseUrl,
+  resolveApiBaseUrl,
   type WidgetPublicConfig,
   type WidgetOptions,
 } from './types';
@@ -51,7 +51,7 @@ export async function fetchPublicConfig(
   fetchImpl: typeof fetch = fetch,
   store: ConfigStore = memoryConfigStore,
 ): Promise<WidgetPublicConfig | null> {
-  const apiBaseUrl = sanitizeApiBaseUrl(options.apiBaseUrl ?? '/api/widget/v1');
+  const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
   const cached = store.get(options.widgetId);
   if (cached && Date.now() - cached.cachedAt < CONFIG_CACHE_TTL_MS) {
     return cached.config;

@@ -27,7 +27,13 @@ export interface WidgetPublicConfig {
 export interface WidgetOptions {
   /** Public widget identifier generated in the dashboard. */
   widgetId: string;
-  /** Backend base URL for the public widget API (see WIDGET_API_BASE_URL). */
+  /**
+   * Backend origin for the public widget API, e.g. `https://api.example.com`
+   * (the SDK appends `/api/widget/v1`). A fully versioned base such as
+   * `https://api.example.com/api/widget/v1` is also accepted. When omitted,
+   * the build-time `VITE_WIDGET_API_BASE_URL` env is used, falling back to a
+   * same-origin `/api/widget/v1`.
+   */
   apiBaseUrl?: string;
 }
 
@@ -56,7 +62,35 @@ export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   auto_open: false,
 };
 
-export const DEFAULT_API_BASE_URL = '/api/widget/v1';
+/** Versioned public widget API prefix (ADR-004). */
+export const WIDGET_API_VERSION = '/api/widget/v1';
+
+/** Same-origin fallback used when no API base is configured (local dev). */
+export const DEFAULT_API_BASE_URL = WIDGET_API_VERSION;
+
+/**
+ * Build-time configured widget API base (`VITE_WIDGET_API_BASE_URL`), e.g.
+ * `https://api.webchat-ai.example` or a fully versioned path. The SaaS host
+ * bakes this into the served bundle so customers only provide `data-widget-id`.
+ * Unset → same-origin `/api/widget/v1` (never a hardcoded localhost).
+ */
+export function defaultApiBaseUrl(): string {
+  const configured = import.meta.env?.VITE_WIDGET_API_BASE_URL;
+  return configured ? sanitizeApiBaseUrl(configured) : DEFAULT_API_BASE_URL;
+}
+
+/**
+ * Resolve the full versioned widget API base used for every request.
+ *
+ * Accepts either a host origin (`https://api.example.com`) or an already
+ * versioned path (`https://api.example.com/api/widget/v1`) and always returns
+ * a base ending in `/api/widget/v1`. The default comes from the build-time env
+ * config, so an embed that only carries `data-widget-id` still reaches the API.
+ */
+export function resolveApiBaseUrl(apiBaseUrl?: string): string {
+  const base = sanitizeApiBaseUrl(apiBaseUrl ?? defaultApiBaseUrl());
+  return base.endsWith(WIDGET_API_VERSION) ? base : `${base}${WIDGET_API_VERSION}`;
+}
 
 export function defaultConfig(widgetId: string): WidgetPublicConfig {
   return { widget_id: widgetId, ...DEFAULT_CONFIG };

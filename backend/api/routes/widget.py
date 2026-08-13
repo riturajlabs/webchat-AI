@@ -27,9 +27,13 @@ from backend.api.deps import (
     get_rag_service,
     get_widget_service,
     widget_chat_limiter,
+    widget_claims_origin_guard,
+    widget_config_origin_guard,
     widget_feedback_limiter,
+    widget_ip_limiter,
     widget_session_claims,
     widget_session_issue_limiter,
+    widget_session_origin_guard,
     widget_visitor_limiter,
 )
 from backend.core.errors import AppError, SpamRejectedError
@@ -61,11 +65,14 @@ def _sse(event: str, data: dict[str, Any]) -> str:
 async def get_widget_config(
     widget_id: str,
     service: Annotated[WidgetService, Depends(get_widget_service)],
+    _: Annotated[None, Depends(widget_config_origin_guard)],
+    __: Annotated[None, Depends(widget_ip_limiter)],
 ) -> WidgetPublicConfig:
     """Return the public widget configuration (theme, branding, suggestions).
 
     Anonymous and cheap to serve; Redis-cached for 5 minutes. A suspended
     tenant's widget returns `enabled: false` rather than 403 (ADR-005).
+    Browser embeds from domains outside the widget allowlist get a 403.
     """
     return await service.get_public_config(widget_id)
 
@@ -74,7 +81,9 @@ async def get_widget_config(
 async def create_widget_session(
     body: CreateWidgetSessionRequest,
     service: Annotated[WidgetService, Depends(get_widget_service)],
-    _: Annotated[None, Depends(widget_session_issue_limiter)],
+    _: Annotated[None, Depends(widget_session_origin_guard)],
+    __: Annotated[None, Depends(widget_session_issue_limiter)],
+    ___: Annotated[None, Depends(widget_ip_limiter)],
 ) -> WidgetSessionResponse:
     """Mint a short-lived widget-session token for an anonymous visitor.
 
@@ -96,6 +105,8 @@ async def widget_chat(
     rag: Annotated[RagService, Depends(get_rag_service)],
     _: Annotated[None, Depends(widget_chat_limiter)],
     __: Annotated[None, Depends(widget_visitor_limiter)],
+    ___: Annotated[None, Depends(widget_claims_origin_guard)],
+    ____: Annotated[None, Depends(widget_ip_limiter)],
 ) -> StreamingResponse:
     """Stream an answer for the visitor's question (SSE).
 
@@ -151,6 +162,8 @@ async def submit_feedback(
     claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
     service: Annotated[FeedbackService, Depends(get_feedback_service)],
     _: Annotated[None, Depends(widget_feedback_limiter)],
+    __: Annotated[None, Depends(widget_claims_origin_guard)],
+    ___: Annotated[None, Depends(widget_ip_limiter)],
 ) -> None:
     """Record a visitor rating for an assistant answer.
 

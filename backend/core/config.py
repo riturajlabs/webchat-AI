@@ -56,8 +56,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379"
     redis_prefix: str = "webchat_ai"
 
-    # CORS / public URLs
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+    # CORS / public URLs. Local dev sites commonly serve the widget embed from
+    # Live Server (port 5500); production origins are set via CORS_ORIGINS.
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+    ]
     public_base_url: str = "http://localhost:3000"
     # Where the built widget SDK bundle is served from (embed-script generation).
     widget_script_url: str = "http://localhost:8080/webchat-widget.iife.min.js"
@@ -73,6 +79,11 @@ class Settings(BaseSettings):
     # write-once per message, so a modest budget bounds abuse without getting
     # in the way of legitimate ratings.
     widget_feedback_limit: int = 30
+    # Per-IP budget per widget endpoint / minute (production hardening). The
+    # entity-keyed limits (widget/visitor) can be rotated by a hostile client -
+    # `visitor_id` is client-supplied - so an IP-shaped budget that a bot farm
+    # cannot trivially rotate backs them up.
+    widget_ip_limit: int = 120
     widget_max_messages_per_session: int = 50
     # Master switch for the widget rate limits; `None` inherits the global
     # `rate_limit_enabled` (resolved in the validator below).
@@ -195,6 +206,16 @@ class Settings(BaseSettings):
                 raise ValueError("EMBEDDING_PROVIDER_ORDER must not be empty in production.")
             if not self.embedding_provider_order or self.embedding_dimensions <= 0:
                 raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer in production.")
+            # The embed script URL is baked into the dashboard embed code and
+            # into customer pages; a localhost default would break every embed.
+            if any(
+                marker in self.widget_script_url.lower()
+                for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+            ):
+                raise ValueError(
+                    "WIDGET_SCRIPT_URL must point at a real CDN/host in production "
+                    "(got a localhost value)."
+                )
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled
         return self

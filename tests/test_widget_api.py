@@ -323,6 +323,19 @@ async def test_widget_and_dashboard_cors_do_not_bleed(client) -> None:
     assert dashboard.headers.get("access-control-allow-origin") != "*"
 
 
+async def test_widget_cors_for_origin_listed_in_cors_origins(client) -> None:
+    # A dev site origin in `cors_origins` (e.g. Live Server on :5500) makes the
+    # inner dashboard CORSMiddleware emit a credentials-scoped origin; the
+    # widget surface must still answer with the public `ACAO: *` and never a
+    # credential header, so the browser shows no CORS errors.
+    test_client, _, _, _ = client
+    widget = test_client.get(
+        "/api/widget/v1/config/widget-1",
+        headers={"Origin": "http://localhost:5500"},
+    )
+    _cors_assertions(widget)
+
+
 # ------------------------------------------------------------- feedback
 
 

@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Path, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
@@ -44,6 +44,7 @@ from backend.repositories import (
     MongoWidgetRepository,
     get_vector_repository,
 )
+from backend.schemas.widget import CreateWidgetSessionRequest
 from backend.services.admin import AdminService
 from backend.services.analytics import AnalyticsService
 from backend.services.api_keys import ApiKeyService
@@ -483,6 +484,60 @@ widget_feedback_limiter = WidgetRateLimitDependency(
     window_seconds=60,
     limit_setting="widget_feedback_limit",
 )
+# Per-IP backup budget per widget endpoint (production hardening). The
+# entity-keyed limits above derive from a client-supplied visitor_id / body
+# widget_id, so a hostile client can rotate them; an IP-shaped budget cannot
+# be trivially rotated and also bounds the previously-unlimited `/config`.
+def _widget_ip_rate_limit_key(request: Request) -> str:
+    return f"rl:ip:{request.method}:{request.url.path}:{client_ip(request)}"
+
+
+widget_ip_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_ip_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_ip_limit",
+)
+
+
+async def _widget_origin_guard(
+    request: Request,
+    widget_id: str,
+    service: Annotated[WidgetService, Depends(get_widget_service)],
+) -> None:
+    """Reject browser embeds from origins outside the widget allowlist."""
+    await service.validate_origin(widget_id, request.headers.get("origin"))
+
+
+async def widget_config_origin_guard(
+    request: Request,
+    widget_id: Annotated[str, Path()],
+    service: Annotated[WidgetService, Depends(get_widget_service)],
+) -> None:
+    """Origin guard for `GET /api/widget/v1/config/{widget_id}`."""
+    await _widget_origin_guard(request, widget_id, service)
+
+
+async def widget_session_origin_guard(
+    request: Request,
+    body: CreateWidgetSessionRequest,
+    service: Annotated[WidgetService, Depends(get_widget_service)],
+) -> None:
+    """Origin guard for `POST /api/widget/v1/sessions` (widget_id in body)."""
+    await _widget_origin_guard(request, body.widget_id, service)
+
+
+async def widget_claims_origin_guard(
+    request: Request,
+    service: Annotated[WidgetService, Depends(get_widget_service)],
+) -> None:
+    """Origin guard for token-authenticated widget routes (widget_id in claims).
+
+    Must be declared after `widget_session_claims` so `request.state.widget_claims`
+    is populated; the session token is bound to a widget, so the origin must
+    match that widget's allowlist on every chat/feedback request.
+    """
+    claims = getattr(request.state, "widget_claims", None) or {}
+    await _widget_origin_guard(request, str(claims.get("widget_id") or "unknown"), service)
 
 
 async def widget_session_claims(

@@ -68,7 +68,11 @@ def test_readable_formatter_carries_request_id() -> None:
 def test_configure_logging_is_environment_aware(monkeypatch) -> None:
     monkeypatch.setattr(
         "backend.core.logging.get_settings",
-        lambda: Settings(environment="production", jwt_secret="a" * 32),
+        lambda: Settings(
+            environment="production",
+            jwt_secret="a" * 32,
+            widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        ),
     )
     configure_logging()
     assert isinstance(logging.getLogger().handlers[-1].formatter, JsonFormatter)

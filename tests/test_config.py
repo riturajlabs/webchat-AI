@@ -23,6 +23,7 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
         environment="production",
         jwt_secret="a" * 32,
         gemini_api_key="test-key",
+        widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
     )
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
@@ -63,8 +64,41 @@ def test_production_accepts_groq_as_generation_provider() -> None:
         environment="production",
         jwt_secret="a" * 32,
         groq_api_key="test-key",
+        widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
     )
     assert settings.groq_api_key == "test-key"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:8080/webchat-widget.iife.min.js",
+        "http://127.0.0.1:8080/webchat-widget.iife.min.js",
+        "https://0.0.0.0/webchat-widget.iife.min.js",
+    ],
+)
+def test_production_rejects_localhost_widget_script_url(url: str) -> None:
+    # The embed URL is baked into customer pages; a localhost default would
+    # break every production embed, so fail fast at boot (audit finding #6).
+    with pytest.raises(ValueError, match="WIDGET_SCRIPT_URL"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            jwt_secret="a" * 32,
+            groq_api_key="test-key",
+            widget_script_url=url,
+        )
+
+
+def test_production_accepts_cdn_widget_script_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        groq_api_key="test-key",
+        widget_script_url="https://assets.example.com/widget.js",
+    )
+    assert "localhost" not in settings.widget_script_url
 
 
 def test_production_rejects_empty_embedding_order() -> None:

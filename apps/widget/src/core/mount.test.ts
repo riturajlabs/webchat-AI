@@ -10,12 +10,12 @@ describe('mount', () => {
     controller.destroy();
   });
 
-  it('honours an explicit api base url', () => {
+  it('resolves a host-only api base url to the versioned path', () => {
     const controller = mount({
       widgetId: 'widget_123',
       apiBaseUrl: 'https://api.example.com',
     });
-    expect(controller.apiBaseUrl).toBe('https://api.example.com');
+    expect(controller.apiBaseUrl).toBe('https://api.example.com/api/widget/v1');
     controller.destroy();
   });
 

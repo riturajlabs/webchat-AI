@@ -14,7 +14,12 @@
  */
 
 import { loadConfig, type ConfigStore } from '../config/fetch';
-import { defaultConfig, type WidgetOptions, type WidgetPublicConfig } from '../config/types';
+import {
+  defaultConfig,
+  resolveApiBaseUrl,
+  type WidgetOptions,
+  type WidgetPublicConfig,
+} from '../config/types';
 import { SessionManager } from './session';
 import { getVisitorId } from './visitor';
 import { isOffline } from './network';
@@ -112,7 +117,7 @@ async function copyText(text: string): Promise<boolean> {
  */
 export function mount(options: WidgetHostOptions): WidgetController {
   const widgetId = options.widgetId;
-  const apiBaseUrl = options.apiBaseUrl ?? '/api/widget/v1';
+  const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
   const fetchImpl = options.fetchImpl ?? fetch;
   const configStore = options.configStore;
 

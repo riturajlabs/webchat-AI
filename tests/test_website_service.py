@@ -56,6 +56,20 @@ async def test_create_website_returns_secret_once_and_embed_script() -> None:
     assert result.widget.widget_id in result.embed_script
 
 
+async def test_create_website_seeds_allowed_domains_from_url_host() -> None:
+    env = build_website_env()
+    await env.service.create_website(
+        principal=make_principal(),
+        name="Example",
+        url="https://store.example.com:8443",
+        ip_address=None,
+        user_agent=None,
+    )
+    widget = next(iter(env.widgets.widgets.values()))
+    # Scheme + port stripped; the hostname is the seeded embed allowlist entry.
+    assert widget.allowed_domains == ["store.example.com"]
+
+
 async def test_create_website_duplicate_url_raises() -> None:
     env = build_website_env()
     principal = make_principal()

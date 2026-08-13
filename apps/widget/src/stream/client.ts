@@ -8,7 +8,7 @@
  * terminal-event idempotency.
  */
 
-import { sanitizeApiBaseUrl, type WidgetOptions } from '../config/types';
+import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
 import { WidgetError, errorFromSseCode, errorFromStatus } from '../core/errors';
 import { fetchWithTimeout } from '../core/network';
 import { readSseStream, type SseEvent } from '../core/sse';
@@ -75,7 +75,7 @@ export async function streamChat(
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
 ): Promise<StreamResult> {
-  const apiBaseUrl = sanitizeApiBaseUrl(options.apiBaseUrl ?? '/api/widget/v1');
+  const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
 
   let token: SessionToken;
   try {
