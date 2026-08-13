@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils';
 
 import { AllowedDomainsEditor } from './allowed-domains-editor';
 import { ColorPicker } from './color-picker';
+import { EmbedCode } from './embed-code';
 import { QuestionEditor } from './question-editor';
 import { WidgetPreview } from './widget-preview';
 import { useUpdateWidgetConfig } from '../hooks';
@@ -103,7 +104,6 @@ export function WidgetEditor({
 }) {
   const [draft, setDraft] = useState<WidgetConfig>(config);
   const updateWidget = useUpdateWidgetConfig();
-  const [copied, setCopied] = useState(false);
 
   const changes = useMemo(() => {
     const diff: Partial<WidgetConfigChanges> = {};
@@ -134,16 +134,6 @@ export function WidgetEditor({
       toast.success('Widget settings saved');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save widget settings.');
-    }
-  }
-
-  async function copyEmbed() {
-    try {
-      await navigator.clipboard.writeText(embedScript);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      toast.error('Could not copy embed script.');
     }
   }
 
@@ -310,22 +300,7 @@ export function WidgetEditor({
           />
         </Section>
 
-        <Card>
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-base">Embed</CardTitle>
-            <CardDescription className="text-sm">
-              Paste this script on your site to activate the widget.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 p-4 pt-2">
-            <pre className="max-h-32 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">
-              {embedScript}
-            </pre>
-            <Button variant="outline" onClick={copyEmbed}>
-              {copied ? 'Copied!' : 'Copy embed script'}
-            </Button>
-          </CardContent>
-        </Card>
+        <EmbedCode widgetId={config.widget_id} embedScript={embedScript} />
       </div>
 
       <div className="flex items-start justify-center lg:sticky lg:top-6">

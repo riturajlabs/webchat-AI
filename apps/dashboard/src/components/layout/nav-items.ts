@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
+  BookOpen,
   Bot,
   CircleUser,
   KeyRound,
@@ -28,6 +29,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/widget', label: 'Widget', icon: Puzzle },
   { href: '/api-keys', label: 'API Keys', icon: KeyRound },
+  { href: '/docs', label: 'Documentation', icon: BookOpen },
   { href: '/profile', label: 'Profile', icon: CircleUser },
   { href: '/settings', label: 'Settings', icon: Settings },
   { href: '/admin', label: 'Admin', icon: ShieldCheck, adminOnly: true },
