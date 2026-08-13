@@ -1,12 +1,15 @@
 """Crawl job data access (Protocol + MongoDB implementation).
 
 Every query is scoped by `tenant_id` (00-AI-Development-Rules §7) so a tenant
-can never observe another tenant's crawl history.
+can never observe another tenant's crawl history. The Phase 12.5 admin surface
+(`list_any`/`count_any`) is deliberately unscoped - it backs the global crawl
+queue monitor in ADR-006 and is reachable only via `role=admin`.
 """
 
 from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import DESCENDING
 
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
@@ -24,6 +27,19 @@ class CrawlJobRepository(Protocol):
     async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None: ...
 
     async def update(self, job: CrawlJob) -> None: ...
+
+    # Phase 12.5 admin surface (ADR-006 §Crawl Monitoring).
+    async def list_any(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CrawlJob]: ...
+
+    async def count_any(self, *, status: str | None = None) -> int: ...
+
+    async def count_active_for_tenant(self, tenant_id: str) -> int: ...
 
 
 class MongoCrawlJobRepository:
@@ -63,4 +79,33 @@ class MongoCrawlJobRepository:
     async def update(self, job: CrawlJob) -> None:
         await self._collection.replace_one(
             {"_id": job.id, "tenant_id": job.tenant_id}, job.to_doc()
+        )
+
+    async def list_any(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CrawlJob]:
+        query: dict[str, Any] = {}
+        if status is not None:
+            query["status"] = status
+        cursor = (
+            self._collection.find(query).sort("created_at", DESCENDING).skip(offset).limit(limit)
+        )
+        return [CrawlJob.from_doc(doc) async for doc in cursor]
+
+    async def count_any(self, *, status: str | None = None) -> int:
+        query: dict[str, Any] = {}
+        if status is not None:
+            query["status"] = status
+        return await self._collection.count_documents(query)
+
+    async def count_active_for_tenant(self, tenant_id: str) -> int:
+        return await self._collection.count_documents(
+            {
+                "tenant_id": tenant_id,
+                "status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)},
+            }
         )

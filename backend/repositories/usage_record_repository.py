@@ -7,12 +7,23 @@ typos fail fast instead of creating stray fields.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from backend.core.security import new_id, utcnow
 from backend.models.usage_record import USAGE_COUNTERS, UsageRecord
+
+
+@dataclass(frozen=True)
+class TenantUsageSummary:
+    """All-time platform totals for one tenant (Phase 12.5, ADR-006)."""
+
+    chats: int
+    messages: int
+    input_tokens: int
+    output_tokens: int
 
 
 class UsageRecordRepository(Protocol):
@@ -28,6 +39,9 @@ class UsageRecordRepository(Protocol):
     ) -> None: ...
 
     async def get(self, tenant_id: str, website_id: str, date: str) -> UsageRecord | None: ...
+
+    # Phase 12.5 admin surface (ADR-006 §Tenant Management / detail).
+    async def sum_by_tenant(self, tenant_id: str) -> TenantUsageSummary: ...
 
 
 class MongoUsageRecordRepository:
@@ -70,5 +84,39 @@ class MongoUsageRecordRepository:
         )
         return UsageRecord.from_doc(doc) if doc else None
 
+    async def sum_by_tenant(self, tenant_id: str) -> TenantUsageSummary:
+        doc = await self._first(
+            self._collection.aggregate(
+                [
+                    {"$match": {"tenant_id": tenant_id}},
+                    {
+                        "$group": {
+                            "_id": None,
+                            "chats": {"$sum": "$counters.chats"},
+                            "messages": {"$sum": "$counters.messages"},
+                            "input_tokens": {"$sum": "$counters.input_tokens"},
+                            "output_tokens": {"$sum": "$counters.output_tokens"},
+                        }
+                    },
+                ]
+            )
+        )
+        return TenantUsageSummary(
+            chats=int(doc.get("chats", 0)) if doc else 0,
+            messages=int(doc.get("messages", 0)) if doc else 0,
+            input_tokens=int(doc.get("input_tokens", 0)) if doc else 0,
+            output_tokens=int(doc.get("output_tokens", 0)) if doc else 0,
+        )
 
-__all__ = ["MongoUsageRecordRepository", "UsageRecordRepository"]
+    @staticmethod
+    async def _first(cursor: Any) -> dict[str, Any] | None:
+        async for doc in cursor:
+            return dict(doc)
+        return None
+
+
+__all__ = [
+    "MongoUsageRecordRepository",
+    "TenantUsageSummary",
+    "UsageRecordRepository",
+]

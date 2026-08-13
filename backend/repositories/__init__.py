@@ -5,6 +5,11 @@ Application code depends on the Protocol interfaces only, which keeps the data
 layer swappable and testable.
 """
 
+from backend.repositories.admin_repository import (
+    AdminRepository,
+    MongoAdminRepository,
+    PlatformStats,
+)
 from backend.repositories.analytics_repository import (
     AnalyticsRepository,
     AnalyticsSummaryRow,
@@ -54,6 +59,7 @@ from backend.repositories.refresh_token_repository import (
 from backend.repositories.tenant_repository import MongoTenantRepository, TenantRepository
 from backend.repositories.usage_record_repository import (
     MongoUsageRecordRepository,
+    TenantUsageSummary,
     UsageRecordRepository,
 )
 from backend.repositories.user_repository import MongoUserRepository, UserRepository
@@ -72,6 +78,7 @@ from backend.repositories.website_repository import (
 from backend.repositories.widget_repository import MongoWidgetRepository, WidgetRepository
 
 __all__ = [
+    "AdminRepository",
     "AnalyticsRepository",
     "AnalyticsSummaryRow",
     "ApiKeyRepository",
@@ -83,6 +90,7 @@ __all__ = [
     "FeedbackRepository",
     "FeedbackSummary",
     "KnowledgeChunkRepository",
+    "MongoAdminRepository",
     "MongoAnalyticsRepository",
     "MongoAuditLogRepository",
     "MongoApiKeyRepository",
@@ -101,6 +109,7 @@ __all__ = [
     "MongoWidgetRepository",
     "MongoVectorRepository",
     "MemberRepository",
+    "PlatformStats",
     "RefreshTokenRepository",
     "ResponseMetricsRow",
     "TenantRepository",
@@ -114,5 +123,6 @@ __all__ = [
     "WebsiteSortField",
     "WebsiteSortOrder",
     "WidgetRepository",
+    "TenantUsageSummary",
     "get_vector_repository",
 ]

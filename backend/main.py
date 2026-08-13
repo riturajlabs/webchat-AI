@@ -14,6 +14,7 @@ from backend.api.middleware import (
     SecurityHeadersMiddleware,
     WidgetCORSHeadersMiddleware,
 )
+from backend.api.routes.admin import router as admin_router
 from backend.api.routes.analytics import router as analytics_router
 from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
@@ -113,6 +114,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
     app.include_router(widget_router, prefix="/api")
+    app.include_router(admin_router, prefix="/api")
 
     return app
 

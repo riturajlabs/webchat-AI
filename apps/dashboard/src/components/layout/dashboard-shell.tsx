@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { useAuth } from '@/features/auth/auth-context';
 import { Button } from '@/components/ui/button';
 import { MobileNav } from '@/components/layout/mobile-nav';
-import { NAV_ITEMS } from '@/components/layout/nav-items';
+import { visibleNavItems } from '@/components/layout/nav-items';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { cn } from '@/lib/utils';
 
@@ -41,7 +41,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           WebChat AI
         </Link>
         <nav className="flex-1 space-y-1 px-3" aria-label="Main navigation">
-          {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+          {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
             const active = pathname === href;
             return (
               <Link

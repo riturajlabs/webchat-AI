@@ -27,6 +27,7 @@ from backend.core.rate_limit import SlidingWindowRateLimiter
 from backend.core.redis import get_redis
 from backend.core.security import csrf_tokens_match, decode_widget_session_token
 from backend.repositories import (
+    MongoAdminRepository,
     MongoAnalyticsRepository,
     MongoApiKeyRepository,
     MongoAuditLogRepository,
@@ -43,6 +44,7 @@ from backend.repositories import (
     MongoWidgetRepository,
     get_vector_repository,
 )
+from backend.services.admin import AdminService
 from backend.services.analytics import AnalyticsService
 from backend.services.api_keys import ApiKeyService
 from backend.services.auth import AuthService, Principal
@@ -175,6 +177,26 @@ def get_feedback_service(
     return FeedbackService(
         feedback=MongoFeedbackRepository(db),
         messages=MongoChatMessageRepository(db),
+    )
+
+
+def get_admin_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> AdminService:
+    """Build the platform admin service with MongoDB-backed repositories (Phase 12.5).
+
+    Reuses the same collections the tenant surfaces read/write (ADR-006: no new
+    collections). Mutations go through the shared audit system.
+    """
+    return AdminService(
+        tenants=MongoTenantRepository(db),
+        users=MongoUserRepository(db),
+        websites=MongoWebsiteRepository(db),
+        usage=MongoUsageRecordRepository(db),
+        crawl_jobs=MongoCrawlJobRepository(db),
+        audit=MongoAuditLogRepository(db),
+        refresh_tokens=MongoRefreshTokenRepository(db),
+        stats=MongoAdminRepository(db),
     )
 
 
@@ -348,6 +370,10 @@ analytics_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 api_keys_limiter = RateLimitDependency(limit=60, window_seconds=3600)
 # Phase 11.5 widget builder abuse protection (customization read + PATCH).
 widget_config_limiter = RateLimitDependency(limit=240, window_seconds=3600)
+# Phase 12.5 admin panel abuse protection (ADR-006: "Stricter rate limits and
+# a dedicated audit trail for admin actions"): bounded budget on admin reads
+# and mutations alike.
+admin_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)

@@ -1,4 +1,9 @@
-"""User data access (Protocol + MongoDB implementation)."""
+"""User data access (Protocol + MongoDB implementation).
+
+Phase 12.5 adds the admin-facing `list_users`/`count_users`/`count_by_tenant`/
+`set_status` surface (ADR-006). These queries are platform-wide by design and
+are consumed only through the admin service/router (`role=admin`).
+"""
 
 from datetime import datetime
 from typing import Any, Protocol
@@ -26,6 +31,22 @@ class UserRepository(Protocol):
     async def update_password(
         self, user_id: str, password_hash: str, pwd_token_version: int, at: datetime
     ) -> None: ...
+
+    # Phase 12.5 admin surface (ADR-006).
+    async def list_users(
+        self,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[User]: ...
+
+    async def count_users(self, *, search: str | None = None, status: str | None = None) -> int: ...
+
+    async def count_by_tenant(self, tenant_id: str) -> int: ...
+
+    async def set_status(self, user_id: str, status: str, at: datetime) -> None: ...
 
 
 class MongoUserRepository:
@@ -75,3 +96,39 @@ class MongoUserRepository:
                 }
             },
         )
+
+    async def list_users(
+        self,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[User]:
+        query = self._query(search=search, status=status)
+        cursor = self._collection.find(query).sort("created_at", -1).skip(offset).limit(limit)
+        return [User.from_doc(doc) async for doc in cursor]
+
+    async def count_users(self, *, search: str | None = None, status: str | None = None) -> int:
+        return await self._collection.count_documents(self._query(search=search, status=status))
+
+    async def count_by_tenant(self, tenant_id: str) -> int:
+        return await self._collection.count_documents({"tenant_id": tenant_id})
+
+    async def set_status(self, user_id: str, status: str, at: datetime) -> None:
+        await self._collection.update_one(
+            {"_id": user_id},
+            {"$set": {"status": status, "updated_at": at}},
+        )
+
+    @staticmethod
+    def _query(*, search: str | None, status: str | None) -> dict[str, Any]:
+        query: dict[str, Any] = {}
+        if search:
+            query["$or"] = [
+                {"name": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+            ]
+        if status is not None:
+            query["status"] = status
+        return query

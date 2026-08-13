@@ -202,15 +202,19 @@
 
 - **Status:** Documented; not implemented. Phase 5 completion notes §13 "cross-embedding duplicate detection remains open for the analytics phase."
 
+### 2.9 Admin panel (ADR-006, Phase 12.5)
+
+- **Status:** ✅ Complete — super-admin surface over the existing collections (no new collections). Backend: `backend/api/routes/admin.py` (prefix `/api/admin`, router-level `require_role("admin")`), `backend/services/admin/admin_service.py`, `backend/repositories/admin_repository.py` (platform KPI aggregation), `backend/schemas/admin.py`. Endpoints: `GET /api/admin/tenants` (search + pagination), `GET /api/admin/tenants/{id}` (websites/users/usage/status detail), `PATCH /api/admin/tenants/{id}` (suspend/activate/plan change), `GET /api/admin/users` (search + status filter), `POST /api/admin/tenants/{tenant_id}/users/{user_id}/suspend`, `POST /api/admin/tenants/{tenant_id}/users/{user_id}/force-logout`, `GET /api/admin/stats` (platform KPIs), `GET /api/admin/crawl-jobs` (global queue + status filter), `GET /api/admin/audit-logs` (filters + pagination). All mutations write audit logs (`TENANT_SUSPENDED`, `TENANT_ACTIVATED`, `TENANT_PLAN_CHANGED`, `USER_SUSPENDED`, `FORCE_LOGOUT`) and are rate-limited via `admin_limiter` (600/hr). Self-targeting is hard-guarded (admin cannot suspend/force-logout their own account or mutate their own tenant). Frontend: `apps/dashboard/src/app/(dashboard)/admin/page.tsx` + `apps/dashboard/src/features/admin/` (KPI cards, tenant table + detail dialog + suspend/activate confirm, user table + suspend/force-logout confirm, crawl queue, audit log, skeletons/empty/error states, toasts), admin nav item gated to `role=admin` via `visibleNavItems` in `nav-items.ts`.
+- **Verification:** 19 backend tests (`tests/test_admin_api.py`) + 18 dashboard tests (`admin-page.test.tsx`, `admin-guard.test.tsx`, `mobile-nav.test.tsx`) + full suite green (`542 passed, 1 skipped` backend; `129 passed` dashboard; `ruff`, `mypy backend`, `tsc --noEmit`, `eslint`, `next build` all pass). Closed in Phase 12.5 (commit `c1fe43a`).
+
 ---
 
 ## 3. Missing features
 
-### 3.1 Admin panel (ADR-006, Phase 10)
+### 3.1 ~~Admin panel (ADR-006, Phase 10)~~
 
 - **Spec:** `/api/admin/*` with `role=admin` guard — list/search/suspend tenants, platform KPIs, global crawl queue, audit log viewer, user suspend/force-logout.
-- **Implementation:** `apps/dashboard/src/features/admin/` contains only `.gitkeep`; no `backend/api/routes/admin/` directory; no admin UI page; `users.role = "admin"` field not used by any router.
-- **Status:** 0% implemented.
+- **Status:** ✅ Complete — see §2.9 (Phase 12.5). Removed from "Missing features".
 
 ### 3.2 ~~Feedback endpoint + UI (ADR-005 §5.6, UI/UX §12 "User Satisfaction")~~
 
@@ -328,7 +332,7 @@
 | Multi-tenant security     | **Production-ready**        | `tenant_id` on every query; widget session re-validation; suspended-tenant semantics.                               |
 | Observability             | **Partial**                 | Structured logging, request ID, request timing, worker timing. No OTel/Grafana/Prometheus/Sentry (§3.9).            |
 | Deployment                | **Partial**                 | Dockerfiles + compose.dev complete; no Vercel/Render manifests; no IaC (§4.7).                                      |
-| Admin panel               | **Not started**             | (§3.1)                                                                                                              |
+| Admin panel               | **Production-ready**        | ADR-006 Phase 12.5 (§2.9): /api/admin/* guarded by `role=admin`; tenant/user mgmt, KPIs, crawl queue, audit viewer. |
 | Feedback                  | **Production-ready**        | Phase 12.4 (§2.6). Widget submit + dashboard summary + 2 y TTL, per-visitor rate limit, idempotent per message.     |
 | E2E coverage              | **Partial**                 | Widget E2E happy-path exists; no admin E2E, no auth E2E.                                                            |
 | Load / performance SLO    | **Partial**                 | Instrumented; budgets not measured end-to-end (§2.7).                                                               |
@@ -336,20 +340,21 @@
 
 ### 5.2 Gate status (latest committed, Phase 8.1)
 
-| Gate                                                       | Status                                    |
-| ---------------------------------------------------------- | ----------------------------------------- |
-| Backend `ruff check .`                                     | ✅ Pass                                   |
-| Backend `ruff format --check .`                            | ✅ Pass (164/164)                         |
-| Backend `mypy backend` (CI)                                | ✅ Pass (97 files, locked mypy 2.3.0)     |
-| Backend `mypy .` (from `backend/`)                         | ✅ Pass                                   |
-| Backend `pytest`                                           | ✅ 354 passed, 1 skipped, 0 failed        |
-| Widget E2E (`tests/e2e`, live stack)                       | ✅ 1 passed (30.6 s)                      |
-| Frontend `pnpm lint`                                       | ✅ Pass                                   |
-| Frontend `pnpm typecheck`                                  | ✅ Pass                                   |
-| Frontend `pnpm test`                                       | ✅ 167 passed (58 dashboard + 109 widget) |
-| Frontend `pnpm build`                                      | ✅ Pass                                   |
-| Widget bundle (`pnpm --filter @webchat/widget build:size`) | ✅ 20.42 kB gzip (≤ 100 kB gate)          |
-| `/api/health/ready` fail-closed                            | ✅ 503 when MongoDB or Redis down         |
+| Gate                                                       | Status                                                                                                                                                     |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backend `ruff check .`                                     | ✅ Pass                                                                                                                                                    |
+| Backend `ruff format --check .`                            | ✅ Pass (164/164)                                                                                                                                          |
+| Backend `mypy backend` (CI)                                | ✅ Pass (97 files, locked mypy 2.3.0)                                                                                                                      |
+| Backend `mypy .` (from `backend/`)                         | ✅ Pass                                                                                                                                                    |
+| Backend `pytest`                                           | ✅ 354 passed, 1 skipped, 0 failed                                                                                                                         |
+| Widget E2E (`tests/e2e`, live stack)                       | ✅ 1 passed (30.6 s)                                                                                                                                       |
+| Frontend `pnpm lint`                                       | ✅ Pass                                                                                                                                                    |
+| Frontend `pnpm typecheck`                                  | ✅ Pass                                                                                                                                                    |
+| Frontend `pnpm test`                                       | ✅ 167 passed (58 dashboard + 109 widget)                                                                                                                  |
+| Frontend `pnpm build`                                      | ✅ Pass                                                                                                                                                    |
+| Widget bundle (`pnpm --filter @webchat/widget build:size`) | ✅ 20.42 kB gzip (≤ 100 kB gate)                                                                                                                           |
+| `/api/health/ready` fail-closed                            | ✅ 503 when MongoDB or Redis down                                                                                                                          |
+| Admin panel verification (Phase 12.5)                      | ✅ `test_admin_api.py` 19 passed; full backend `542 passed, 1 skipped`; dashboard `129 passed`; `ruff`, `mypy backend`, `tsc`, `eslint`, `next build` pass |
 
 ### 5.3 Known caveats
 
@@ -360,7 +365,7 @@
 
 ### 5.4 Bottom-line
 
-The platform is **production-ready for the v1 feature set** that has been built (auth → websites → ingestion → knowledge → RAG → dashboard → widget → conversations → analytics → API keys → AI provider fallback → visitor feedback). It is **not production-ready** for the v1 spec in full because the **Admin Panel (Phase 10 / ADR-006)** is unimplemented, the **onboarding wizard (UI/UX §7)** is not a flow, and **observability** stops short of OTel/Prometheus/Sentry. Deployment to Render/Vercel is not IaC-automated.
+The platform is **production-ready for the v1 feature set** that has been built (auth → websites → ingestion → knowledge → RAG → dashboard → widget → conversations → analytics → API keys → AI provider fallback → visitor feedback → admin panel). It is **not production-ready** for the v1 spec in full because the **onboarding wizard (UI/UX §7)** is not a flow, and **observability** stops short of OTel/Prometheus/Sentry. Deployment to Render/Vercel is not IaC-automated.
 
 ---
 
@@ -370,8 +375,8 @@ The platform is **production-ready for the v1 feature set** that has been built 
 
 | #   | Item                                                                                                 | Doc                        | Effort | Depends on                                                                                                         |
 | --- | ---------------------------------------------------------------------------------------------------- | -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------ |
-| 1   | Admin panel backend (`/api/admin/*`)                                                                 | ADR-006                    | M      | `users.role` field, `tenants.status`, `audit_logs`, `usage_records` already exist                                  |
-| 2   | Admin panel UI                                                                                       | ADR-006                    | M      | (1)                                                                                                                |
+| 1   | ~~Admin panel backend (`/api/admin/*`)~~                                                             | ADR-006                    | ~~M~~  | **Done** — Phase 12.5 (§2.9): tenant/user mgmt, KPIs, crawl queue, audit viewer; `role=admin` guarded              |
+| 2   | ~~Admin panel UI~~                                                                                   | ADR-006                    | ~~M~~  | **Done** — Phase 12.5 (§2.9): `/admin` route, KPI cards, tenant/user/crawl/audit panels, admin-only nav            |
 | 3   | ~~Feedback collection + `POST /api/feedback` + widget rating widget + dashboard satisfaction chart~~ | ADR-005 §5.6 / UI/UX §12   | ~~M~~  | **Done** — Phase 12.4 (§2.6): 50 backend tests + 11 widget tests + 3 dashboard tests; 2 y TTL; per-visitor limiter |
 | 4   | Onboarding wizard (Welcome → Connect → Index → Embed → Done)                                         | UI/UX §7 / PRD §7          | M      | `onboarding_completed` / `onboarding_step` already on user                                                         |
 | 5   | ~~Source citation as default widget UI (render below AI bubble)~~                                    | PRD §11 future / UI/UX §16 | ~~S~~  | **Done** — Phase 12.2 commit `3287fc0` (5 tests, 23.41 kB gzip)                                                    |
@@ -401,7 +406,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 
 ### P0 — Blockers for "production-ready" claim vs PRD §15
 
-1. **Admin panel (backend + UI)** — ADR-006; PRD §6 explicitly lists Super Admin role; missing entirely. Without it, "Manage tenants / Suspend accounts / View logs" (PRD §6) are unmet.
+1. ~~**Admin panel (backend + UI)** — ADR-006; PRD §6 explicitly lists Super Admin role; missing entirely. Without it, "Manage tenants / Suspend accounts / View logs" (PRD §6) are unmet.~~ **Closed in Phase 12.5** (see §2.9).
 2. ~~**Feedback endpoint + widget + dashboard chart** — PRD §6 Visitor "Submit feedback" + UI/UX §12 "User Satisfaction" chart. Schema reserved but unused.~~ **Closed in Phase 12.4** (see §2.6).
 3. **IaC + staging deploy** — Phase 13 has no committed manifests. The "production-ready" claim is unverifiable without a deployable target.
 4. ~~**Source citation in widget** — explicitly noted as deferred in Phase 8 verification; trivial to ship.~~ **Closed in Phase 12.2** (commit `3287fc0`).
@@ -432,24 +437,24 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 
 ## Appendix A — Spec coverage matrix (PRD → code)
 
-| PRD section                    | Feature                                                                                               | Implemented?                                             | Evidence                                                               |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------- |
-| §6 Super Admin                 | Manage tenants, suspend, view logs                                                                    | **No**                                                   | §3.1                                                                   |
-| §6 Tenant                      | Register, add website, manage chatbot, analytics, configure widget, API keys, conversations, re-index | **Yes**                                                  | auth + websites + widget + conversations + analytics + api_keys routes |
-| §6 Visitor                     | Ask questions, view responses, submit feedback                                                        | **Yes**                                                  | chat routes + §2.6 (Phase 12.4) — widget submit + dashboard summary    |
-| §7 Authentication              | Secure signup, login, forgot, verify, JWT, refresh                                                    | **Yes**                                                  | `backend/api/routes/auth.py`                                           |
-| §7 Website Mgmt                | Add, verify, edit, delete, multiple (Future)                                                          | **Yes** (multiple not yet)                               | `backend/api/routes/websites.py`                                       |
-| §7 Knowledge Base              | Crawl, SPA, chunk, embed, vector, re-index                                                            | **Yes**                                                  | ingestion + knowledge modules                                          |
-| §7 AI Chatbot                  | Streaming, context-aware, no-hallucination, source-aware (Future)                                     | **Yes** (source UI done Phase 12.2)                      | rag_service + Phase 12.2 commit `3287fc0`                              |
-| §7 Widget                      | One-line embed, responsive, mobile, theme, position, branding                                         | **Yes**                                                  | widget SDK + ADR-004                                                   |
-| §7 Dashboard                   | Status, crawl progress, analytics, widget config, conversations                                       | **Yes**                                                  | dashboard pages                                                        |
-| §7 Analytics                   | Total chats, active users, avg response time, popular Q, failed Q, crawl status                       | Partial — popular Q + failed Q **not surfaced**          | analytics module                                                       |
-| §10 RBAC                       | owner                                                                                                 | admin roles                                              | **Yes** (admin role unused, see §3.1)                                  | `users.role` |
-| §10 Tenant isolation           | Every query has `tenant_id`                                                                           | **Yes**                                                  | repositories + widget session re-validation                            |
-| §10 Attack Protection          | XSS, CSRF, SSRF, NoSQL injection, prompt injection, brute force, DDoS, API abuse                      | **Yes**                                                  | middleware + URL validator + sanitization + rate limits                |
-| §11 Cite source pages (Future) | Cite source below AI response                                                                         | Partial — backend + renderSources; **not in default UI** | §2.1                                                                   |
-| §13 Future Roadmap             | PDF, DOCX, image OCR, voice, integrations, handoff, agents, multi-language                            | **No**                                                   | §3.5                                                                   |
-| §14 OoS v1                     | Billing, multi-model select, fine-tuning, custom models, voice, image gen, mobile                     | **No** (correctly deferred)                              | §3.5                                                                   |
+| PRD section                    | Feature                                                                                               | Implemented?                                             | Evidence                                                                  |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| §6 Super Admin                 | Manage tenants, suspend, view logs                                                                    | **Yes**                                                  | §2.9 (Phase 12.5)                                                         |
+| §6 Tenant                      | Register, add website, manage chatbot, analytics, configure widget, API keys, conversations, re-index | **Yes**                                                  | auth + websites + widget + conversations + analytics + api_keys routes    |
+| §6 Visitor                     | Ask questions, view responses, submit feedback                                                        | **Yes**                                                  | chat routes + §2.6 (Phase 12.4) — widget submit + dashboard summary       |
+| §7 Authentication              | Secure signup, login, forgot, verify, JWT, refresh                                                    | **Yes**                                                  | `backend/api/routes/auth.py`                                              |
+| §7 Website Mgmt                | Add, verify, edit, delete, multiple (Future)                                                          | **Yes** (multiple not yet)                               | `backend/api/routes/websites.py`                                          |
+| §7 Knowledge Base              | Crawl, SPA, chunk, embed, vector, re-index                                                            | **Yes**                                                  | ingestion + knowledge modules                                             |
+| §7 AI Chatbot                  | Streaming, context-aware, no-hallucination, source-aware (Future)                                     | **Yes** (source UI done Phase 12.2)                      | rag_service + Phase 12.2 commit `3287fc0`                                 |
+| §7 Widget                      | One-line embed, responsive, mobile, theme, position, branding                                         | **Yes**                                                  | widget SDK + ADR-004                                                      |
+| §7 Dashboard                   | Status, crawl progress, analytics, widget config, conversations                                       | **Yes**                                                  | dashboard pages                                                           |
+| §7 Analytics                   | Total chats, active users, avg response time, popular Q, failed Q, crawl status                       | Partial — popular Q + failed Q **not surfaced**          | analytics module                                                          |
+| §10 RBAC                       | owner                                                                                                 | admin roles                                              | **Yes** (owner scoped to tenant; `role=admin` gates `/api/admin/*`, §2.9) | `users.role` |
+| §10 Tenant isolation           | Every query has `tenant_id`                                                                           | **Yes**                                                  | repositories + widget session re-validation                               |
+| §10 Attack Protection          | XSS, CSRF, SSRF, NoSQL injection, prompt injection, brute force, DDoS, API abuse                      | **Yes**                                                  | middleware + URL validator + sanitization + rate limits                   |
+| §11 Cite source pages (Future) | Cite source below AI response                                                                         | Partial — backend + renderSources; **not in default UI** | §2.1                                                                      |
+| §13 Future Roadmap             | PDF, DOCX, image OCR, voice, integrations, handoff, agents, multi-language                            | **No**                                                   | §3.5                                                                      |
+| §14 OoS v1                     | Billing, multi-model select, fine-tuning, custom models, voice, image gen, mobile                     | **No** (correctly deferred)                              | §3.5                                                                      |
 
 ## Appendix B — TRD coverage matrix
 
@@ -476,7 +481,7 @@ PDF/DOCX knowledge base, image OCR, voice chat, WhatsApp/Slack/Notion/GitHub/Goo
 | §14 Logging & Monitoring | API logs, error logs, auth logs, crawl logs; health, perf, queue, AI latency, DB metrics                                                                         | Partial — logs + health + queue timing; no metrics export                                                                                                              |
 | §15 Backup & Recovery    | Daily, PIT, soft delete, audit logs                                                                                                                              | Partial — soft delete + audit logs implemented; backup automation not committed                                                                                        |
 | §16 Coding Standards     | Frontend strict TS, backend async-first, modular, DI, repo pattern, SOLID/DRY/KISS                                                                               | **Yes**                                                                                                                                                                |
-| §18 Definition of Done   | Frontend↔backend comms, crawl works, embeddings generated, RAG accurate, widget functional, multi-tenant, security passes, perf targets, all critical tests pass | **Yes** (perf targets not measured continuously; admin panel + onboarding wizard + IaC open)                                                                           |
+| §18 Definition of Done   | Frontend↔backend comms, crawl works, embeddings generated, RAG accurate, widget functional, multi-tenant, security passes, perf targets, all critical tests pass | **Yes** (perf targets not measured continuously; onboarding wizard + IaC open)                                                                                         |
 
 ## Appendix C — Files inspected
 

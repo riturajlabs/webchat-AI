@@ -9,12 +9,15 @@ import {
   MessagesSquare,
   Puzzle,
   Settings,
+  ShieldCheck,
 } from 'lucide-react';
 
 export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
+  /** Shown only to platform admins (`role=admin`, ADR-006 §Admin UI). */
+  adminOnly?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -27,4 +30,10 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/api-keys', label: 'API Keys', icon: KeyRound },
   { href: '/profile', label: 'Profile', icon: CircleUser },
   { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/admin', label: 'Admin', icon: ShieldCheck, adminOnly: true },
 ];
+
+/** Nav items visible to the authenticated principal's role (ADR-006 §Admin UI). */
+export function visibleNavItems(role: string | undefined): NavItem[] {
+  return NAV_ITEMS.filter((item) => !item.adminOnly || role === 'admin');
+}

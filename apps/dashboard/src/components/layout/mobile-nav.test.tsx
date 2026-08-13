@@ -1,10 +1,16 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useAuth } from '@/features/auth/auth-context';
+
 import { MobileNav } from './mobile-nav';
 
 vi.mock('next/navigation', () => ({
   usePathname: vi.fn(),
+}));
+
+vi.mock('@/features/auth/auth-context', () => ({
+  useAuth: vi.fn(),
 }));
 
 vi.mock('next/link', () => ({
@@ -34,10 +40,14 @@ vi.mock('next/link', () => ({
 import { usePathname } from 'next/navigation';
 
 const mockedUsePathname = vi.mocked(usePathname);
+const mockedUseAuth = vi.mocked(useAuth);
 
 describe('MobileNav', () => {
   beforeEach(() => {
     mockedUsePathname.mockReturnValue('/');
+    mockedUseAuth.mockReturnValue({
+      user: { role: 'owner' },
+    } as never);
   });
 
   afterEach(() => {
@@ -108,6 +118,23 @@ describe('MobileNav', () => {
 
     expect(screen.getByRole('link', { name: 'Websites' })).toHaveAttribute('href', '/websites');
     expect(screen.getByRole('link', { name: 'API Keys' })).toHaveAttribute('href', '/api-keys');
+  });
+
+  it('hides the Admin link for non-admin roles', () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
+  });
+
+  it('shows the Admin link for admins', () => {
+    mockedUseAuth.mockReturnValue({
+      user: { role: 'admin' },
+    } as never);
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    expect(screen.getByRole('link', { name: 'Admin' })).toHaveAttribute('href', '/admin');
   });
 
   it('restores focus to the trigger after closing', () => {

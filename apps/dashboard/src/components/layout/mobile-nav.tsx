@@ -6,11 +6,13 @@ import { usePathname } from 'next/navigation';
 import { Bot, Menu, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { NAV_ITEMS } from '@/components/layout/nav-items';
+import { useAuth } from '@/features/auth/auth-context';
+import { visibleNavItems } from '@/components/layout/nav-items';
 import { cn } from '@/lib/utils';
 
 export function MobileNav() {
   const pathname = usePathname();
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -97,7 +99,7 @@ export function MobileNav() {
             </div>
 
             <nav className="flex-1 space-y-1 px-3" aria-label="Mobile navigation">
-              {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+              {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
                 const active = pathname === href;
                 return (
                   <Link

@@ -193,3 +193,17 @@ class FeedbackMessageNotFoundError(AppError):
 
     status_code = 404
     code = "MESSAGE_NOT_FOUND"
+
+
+class TenantNotFoundError(AppError):
+    """Tenant does not exist for the admin operation (Phase 12.5)."""
+
+    status_code = 404
+    code = "TENANT_NOT_FOUND"
+
+
+class UserNotFoundError(AppError):
+    """User does not exist for the admin operation (Phase 12.5)."""
+
+    status_code = 404
+    code = "USER_NOT_FOUND"

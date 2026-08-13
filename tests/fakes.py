@@ -22,6 +22,7 @@ from backend.models.usage_record import UsageRecord
 from backend.models.user import User
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.models.widget import Widget
+from backend.repositories.admin_repository import PlatformStats
 from backend.repositories.analytics_repository import (
     AnalyticsSummaryRow,
     ResponseMetricsRow,
@@ -30,6 +31,7 @@ from backend.repositories.analytics_repository import (
 )
 from backend.repositories.chat_message_repository import MessageSummary
 from backend.repositories.feedback_repository import FeedbackSummary
+from backend.repositories.usage_record_repository import TenantUsageSummary
 from backend.repositories.vector.base import VectorSearchResult
 from backend.services.mail.base import EmailMessage
 
@@ -69,6 +71,41 @@ class FakeUserRepository:
         user.pwd_token_version = pwd_token_version
         user.updated_at = at
 
+    async def list_users(
+        self,
+        *,
+        search: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[User]:
+        needle = search.casefold() if search else None
+        candidates = sorted(
+            (
+                user
+                for user in self._users.values()
+                if (status is None or user.status == status)
+                and (
+                    needle is None
+                    or needle in user.name.casefold()
+                    or needle in user.email.casefold()
+                )
+            ),
+            key=lambda user: user.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_users(self, *, search: str | None = None, status: str | None = None) -> int:
+        return len(await self.list_users(search=search, status=status, limit=10**9))
+
+    async def count_by_tenant(self, tenant_id: str) -> int:
+        return len([user for user in self._users.values() if user.tenant_id == tenant_id])
+
+    async def set_status(self, user_id: str, status: str, at: datetime) -> None:
+        self._users[user_id].status = status
+        self._users[user_id].updated_at = at
+
 
 class FakeTenantRepository:
     def __init__(self) -> None:
@@ -83,6 +120,31 @@ class FakeTenantRepository:
 
     async def find_by_id(self, tenant_id: str) -> Tenant | None:
         return self._tenants.get(tenant_id)
+
+    async def list_tenants(
+        self,
+        *,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Tenant]:
+        needle = search.casefold() if search else None
+        candidates = sorted(
+            (
+                tenant
+                for tenant in self._tenants.values()
+                if needle is None or needle in tenant.company_name.casefold()
+            ),
+            key=lambda tenant: tenant.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_tenants(self, *, search: str | None = None) -> int:
+        return len(await self.list_tenants(search=search, limit=10**9))
+
+    async def update(self, tenant: Tenant) -> None:
+        self._tenants[tenant.id] = tenant
 
 
 class FakeMemberRepository:
@@ -135,6 +197,52 @@ class FakeAuditLogRepository:
 
     async def create(self, log: AuditLog) -> None:
         self._logs.append(log)
+
+    async def list_audits(
+        self,
+        *,
+        action: str | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AuditLog]:
+        candidates = sorted(
+            (
+                log
+                for log in self._logs
+                if (action is None or log.action == action)
+                and (tenant_id is None or log.tenant_id == tenant_id)
+                and (user_id is None or log.user_id == user_id)
+                and (since is None or log.created_at >= since)
+                and (until is None or log.created_at <= until)
+            ),
+            key=lambda log: log.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_audits(
+        self,
+        *,
+        action: str | None = None,
+        tenant_id: str | None = None,
+        user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        return len(
+            await self.list_audits(
+                action=action,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                since=since,
+                until=until,
+                limit=10**9,
+            )
+        )
 
 
 class FakeApiKeyRepository:
@@ -389,6 +497,32 @@ class FakeCrawlJobRepository:
 
     async def update(self, job: CrawlJob) -> None:
         self._jobs[job.id] = job
+
+    async def list_any(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[CrawlJob]:
+        candidates = sorted(
+            (job for job in self._jobs.values() if status is None or job.status == status),
+            key=lambda job: job.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_any(self, *, status: str | None = None) -> int:
+        return len(await self.list_any(status=status, limit=10**9))
+
+    async def count_active_for_tenant(self, tenant_id: str) -> int:
+        return len(
+            [
+                job
+                for job in self._jobs.values()
+                if job.tenant_id == tenant_id and job.status in CRAWL_ACTIVE_STATUSES
+            ]
+        )
 
 
 class FakeDocumentRepository:
@@ -924,6 +1058,60 @@ class FakeUsageRecordRepository:
 
     async def get(self, tenant_id: str, website_id: str, date: str) -> UsageRecord | None:
         return self._records.get((tenant_id, website_id, date))
+
+    async def sum_by_tenant(self, tenant_id: str) -> TenantUsageSummary:
+        chats = messages = input_tokens = output_tokens = 0
+        for record in self._records.values():
+            if record.tenant_id != tenant_id:
+                continue
+            chats += record.counters.get("chats", 0)
+            messages += record.counters.get("messages", 0)
+            input_tokens += record.counters.get("input_tokens", 0)
+            output_tokens += record.counters.get("output_tokens", 0)
+        return TenantUsageSummary(
+            chats=chats,
+            messages=messages,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
+
+
+class FakeAdminRepository:
+    """In-memory platform stats over the tenant/user/usage/crawl fakes (Phase 12.5)."""
+
+    def __init__(
+        self,
+        *,
+        tenants: FakeTenantRepository,
+        users: FakeUserRepository,
+        usage: FakeUsageRecordRepository,
+        crawl_jobs: FakeCrawlJobRepository,
+    ) -> None:
+        self._tenants = tenants
+        self._users = users
+        self._usage = usage
+        self._crawl_jobs = crawl_jobs
+
+    async def platform_stats(self) -> PlatformStats:
+        tenants = self._tenants.tenants.values()
+        users = self._users.users.values()
+        usage_records = self._usage.records
+        jobs = self._crawl_jobs.jobs.values()
+        return PlatformStats(
+            total_tenants=len(tenants),
+            active_tenants=len([t for t in tenants if t.status == "active"]),
+            suspended_tenants=len([t for t in tenants if t.status == "suspended"]),
+            total_users=len(users),
+            active_users=len([u for u in users if u.status == "active"]),
+            suspended_users=len([u for u in users if u.status == "suspended"]),
+            total_conversations=sum(r.counters.get("chats", 0) for r in usage_records),
+            total_messages=sum(r.counters.get("messages", 0) for r in usage_records),
+            total_input_tokens=sum(r.counters.get("input_tokens", 0) for r in usage_records),
+            total_output_tokens=sum(r.counters.get("output_tokens", 0) for r in usage_records),
+            total_crawl_jobs=len(jobs),
+            active_crawl_jobs=len([j for j in jobs if j.status in CRAWL_ACTIVE_STATUSES]),
+            failed_crawl_jobs=len([j for j in jobs if j.status == "failed"]),
+        )
 
 
 class FakeAnalyticsRepository:
