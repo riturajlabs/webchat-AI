@@ -1,14 +1,284 @@
 <!DOCTYPE html>
 <html lang="en">
-  <body style="margin: 0; padding: 24px; font-family: Arial, sans-serif; color: #1a202c;">
-    <h2 style="margin-top: 0;">Confirm your email address</h2>
-    <p>Hi {{ name }},</p>
-    <p>Thanks for signing up for WebChat AI. Please confirm your email address to activate your account.</p>
-    <p><a href="{{ verification_url }}" style="background: #2563eb; color: #ffffff; padding: 10px 18px; border-radius: 6px; text-decoration: none;">Confirm email</a></p>
-    <p>Or open this link: <a href="{{ verification_url }}">{{ verification_url }}</a></p>
-    <p style="color: #6b7280; font-size: 13px;">
-      This link expires in 24 hours. If you did not create an account, you can safely ignore this email.
-    </p>
-    <p style="color: #6b7280; font-size: 13px;">- The WebChat AI Team</p>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <meta name="supported-color-schemes" content="light" />
+    <title>Verify your email address</title>
+    <style>
+      /* Responsive tweaks for narrow, mobile-first mail clients. */
+      @media only screen and (max-width: 480px) {
+        .email-wrap {
+          padding: 16px 8px !important;
+        }
+        .email-body {
+          padding: 32px 24px 8px !important;
+        }
+        .email-callout {
+          padding: 0 24px 32px !important;
+        }
+        .email-footer {
+          padding: 24px 24px 28px !important;
+        }
+        .email-cta a {
+          display: block !important;
+          width: 100% !important;
+          text-align: center !important;
+        }
+      }
+    </style>
+  </head>
+  <body
+    style="
+      margin: 0;
+      padding: 0;
+      background-color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial,
+        sans-serif;
+      color: #1e293b;
+      -webkit-font-smoothing: antialiased;
+    "
+  >
+    <!-- Hidden preheader: shown in the inbox preview pane -->
+    <div
+      style="
+        display: none;
+        max-height: 0;
+        overflow: hidden;
+        mso-hide: all;
+        font-size: 1px;
+        line-height: 1px;
+        color: transparent;
+      "
+    >
+      Confirm your WebChat AI account email address to finish setting up your account.
+    </div>
+
+    <table
+      role="presentation"
+      width="100%"
+      cellpadding="0"
+      cellspacing="0"
+      class="email-wrap"
+      style="background-color: #f1f5f9; padding: 40px 16px"
+    >
+      <tr>
+        <td align="center">
+          <table
+            role="presentation"
+            width="100%"
+            cellpadding="0"
+            cellspacing="0"
+            style="
+              max-width: 600px;
+              background-color: #ffffff;
+              border-radius: 16px;
+              overflow: hidden;
+              box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
+              border: 1px solid #e2e8f0;
+            "
+          >
+            <!-- Accent bar -->
+            <tr>
+              <td style="height: 6px; background-color: #2563eb; line-height: 0; font-size: 0">&nbsp;</td>
+            </tr>
+
+            <!-- Brand header -->
+            <tr>
+              <td align="center" style="background-color: #0f172a; padding: 40px 24px 32px">
+                <table role="presentation" cellpadding="0" cellspacing="0" align="center">
+                  <tr>
+                    <td align="center">
+                      <!-- Logo placeholder -->
+                      <table
+                        role="presentation"
+                        cellpadding="0"
+                        cellspacing="0"
+                        align="center"
+                        style="
+                          background-color: #2563eb;
+                          background-image: linear-gradient(135deg, #3b82f6, #1d4ed8);
+                          border-radius: 14px;
+                        "
+                      >
+                        <tr>
+                          <td
+                            align="center"
+                            style="
+                              width: 52px;
+                              height: 52px;
+                              font-size: 26px;
+                              font-weight: 800;
+                              color: #ffffff;
+                              line-height: 52px;
+                            "
+                          >
+                            W
+                          </td>
+                        </tr>
+                      </table>
+                      <p
+                        style="
+                          margin: 18px 0 0;
+                          font-size: 24px;
+                          font-weight: 700;
+                          color: #ffffff;
+                          letter-spacing: -0.02em;
+                        "
+                      >
+                        WebChat&nbsp;AI
+                      </p>
+                      <p
+                        style="
+                          margin: 8px 0 0;
+                          font-size: 13px;
+                          line-height: 1.5;
+                          color: #94a3b8;
+                          letter-spacing: 0.02em;
+                        "
+                      >
+                        AI assistants for your website
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td class="email-body" style="padding: 44px 44px 16px">
+                <h1
+                  style="
+                    margin: 0 0 24px;
+                    font-size: 28px;
+                    line-height: 1.25;
+                    color: #0f172a;
+                    letter-spacing: -0.03em;
+                  "
+                >
+                  Verify your email address
+                </h1>
+                <p style="margin: 0 0 12px; font-size: 15px; line-height: 1.7; color: #334155">
+                  Hi {{ name }},
+                </p>
+                <p style="margin: 0 0 32px; font-size: 15px; line-height: 1.7; color: #475569">
+                  Thanks for signing up for WebChat&nbsp;AI. Please confirm your email address to
+                  finish setting up your account and start building your first AI assistant.
+                </p>
+
+                <!-- Primary CTA -->
+                <table
+                  role="presentation"
+                  cellpadding="0"
+                  cellspacing="0"
+                  align="center"
+                  class="email-cta"
+                  style="margin: 0 auto 36px"
+                >
+                  <tr>
+                    <td
+                      align="center"
+                      style="
+                        border-radius: 12px;
+                        background-color: #2563eb;
+                        -webkit-border-radius: 12px;
+                        -moz-border-radius: 12px;
+                        mso-border-radius: 12px;
+                      "
+                    >
+                      <a
+                        href="{{ verification_url }}"
+                        target="_blank"
+                        style="
+                          display: inline-block;
+                          padding: 15px 40px;
+                          font-size: 15px;
+                          font-weight: 700;
+                          color: #ffffff;
+                          text-decoration: none;
+                          border-radius: 12px;
+                          letter-spacing: 0.01em;
+                        "
+                      >
+                        Verify Email
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin: 0 0 36px; font-size: 13px; line-height: 1.6; color: #64748b">
+                  If the button does not work, copy and paste this link into your browser:<br />
+                  <a href="{{ verification_url }}" style="color: #2563eb; word-break: break-all">
+                    {{ verification_url }}
+                  </a>
+                </p>
+              </td>
+            </tr>
+
+            <!-- Expiry + support -->
+            <tr>
+              <td class="email-callout" style="padding: 0 44px 44px">
+                <table
+                  role="presentation"
+                  width="100%"
+                  cellpadding="0"
+                  cellspacing="0"
+                  style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px"
+                >
+                  <tr>
+                    <td style="padding: 20px 24px">
+                      <p style="margin: 0 0 8px; font-size: 13px; line-height: 1.6; color: #475569">
+                        <strong>Heads up:</strong> this verification link expires in
+                        <strong>24 hours</strong>. If you did not create an account with
+                        WebChat&nbsp;AI, you can safely ignore this email.
+                      </p>
+                      <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #475569">
+                        Need help? Contact our team at
+                        <a href="mailto:support@webchatai.ai" style="color: #2563eb; font-weight: 600">
+                          support@webchatai.ai
+                        </a>
+                        and we will be happy to assist.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td
+                class="email-footer"
+                align="center"
+                style="
+                  background-color: #f8fafc;
+                  border-top: 1px solid #e2e8f0;
+                  padding: 28px 44px 32px;
+                "
+              >
+                <table role="presentation" cellpadding="0" cellspacing="0" align="center">
+                  <tr>
+                    <td align="center">
+                      <p style="margin: 0 0 4px; font-size: 12px; line-height: 1.6; color: #94a3b8">
+                        WebChat&nbsp;AI &middot; Build smarter conversations, everywhere.
+                      </p>
+                      <p style="margin: 0; font-size: 12px; line-height: 1.6; color: #94a3b8">
+                        You received this email because an account was created with this address on
+                        WebChat&nbsp;AI. If this was not you, you can safely ignore this message.
+                      </p>
+                      <p style="margin: 16px 0 0; font-size: 12px; line-height: 1.6; color: #94a3b8">
+                        &copy; 2026 WebChat&nbsp;AI. All rights reserved.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>

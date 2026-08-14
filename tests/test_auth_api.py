@@ -67,6 +67,25 @@ def test_register_weak_password_returns_422(client) -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize("email", ["abc", "test@", "test@gmail", "@gmail.com"])
+def test_register_invalid_email_rejected(client, email: str) -> None:
+    test_client, _ = client
+    response = test_client.post("/api/auth/register", json=dict(REGISTER_PAYLOAD, email=email))
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert response.json()["error"]["message"] == "Please enter a valid email address."
+
+
+@pytest.mark.parametrize("email", ["user@gmail.com", "name.lastname@domain.com"])
+def test_register_valid_email_accepted(client, email: str) -> None:
+    test_client, _ = client
+    response = test_client.post("/api/auth/register", json=dict(REGISTER_PAYLOAD, email=email))
+
+    assert response.status_code == 201
+    assert response.json()["user"]["email"] == email
+
+
 def test_login_success_returns_tokens(client) -> None:
     test_client, env = client
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
@@ -140,10 +159,11 @@ def test_me_requires_bearer_token(client) -> None:
     access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
         "access_token"
     ]
-    # The verification gate blocks unverified access-token use.
+    # Unverified accounts can use the dashboard/profile; the gate was removed.
     response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
+    assert response.status_code == 200
+    assert response.json()["email"] == "alice@example.com"
+    assert response.json()["email_verified"] is False
 
     _verify_registered(test_client, env)
     response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
@@ -164,7 +184,7 @@ def test_verify_email_endpoint(client) -> None:
     assert user.email_verified is True
 
 
-def test_login_unverified_email_is_rejected_with_403(client) -> None:
+def test_login_unverified_email_succeeds(client) -> None:
     test_client, _ = client
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
 
@@ -173,8 +193,9 @@ def test_login_unverified_email_is_rejected_with_403(client) -> None:
         json={"email": "alice@example.com", "password": VALID_PASSWORD},
     )
 
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+    assert response.json()["user"]["email_verified"] is False
 
 
 def test_login_after_verification_succeeds(client) -> None:

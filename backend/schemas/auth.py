@@ -4,7 +4,8 @@ import re
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+import email_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_BYTES = 72
@@ -14,6 +15,21 @@ _PASSWORD_CLASSES = (
     re.compile(r"\d"),
     re.compile(r"[^A-Za-z0-9]"),
 )
+
+
+def validate_email(value: str) -> str:
+    """Normalize and strictly validate an email address.
+
+    The backend is the source of truth for email format: the same
+    `email-validator` library Pydantic's `EmailStr` uses, but surfaced with a
+    single, user-facing message instead of library-specific wording.
+    """
+    normalized = value.strip().lower()
+    try:
+        email_validator.validate_email(normalized, check_deliverability=False)
+    except email_validator.EmailNotValidError as exc:
+        raise ValueError("Please enter a valid email address.") from exc
+    return normalized
 
 
 def validate_password_policy(password: str) -> str:
@@ -35,28 +51,28 @@ def validate_password_policy(password: str) -> str:
 
 class RegisterRequest(BaseModel):
     name: str = Field(min_length=2, max_length=100)
-    email: EmailStr
+    email: str
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=200)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _validate_email(cls, value: object) -> str:
+        return _validated_email(value)
 
     @field_validator("password")
     @classmethod
     def _password_policy(cls, value: str) -> str:
         return validate_password_policy(value)
 
-    @field_validator("email")
-    @classmethod
-    def _normalize_email(cls, value: EmailStr) -> str:
-        return value.lower().strip()
-
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
-    def _normalize_email(cls, value: EmailStr) -> str:
-        return value.lower().strip()
+    def _validate_email(cls, value: object) -> str:
+        return _validated_email(value)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -64,21 +80,28 @@ class VerifyEmailRequest(BaseModel):
 
 
 class ResendVerificationRequest(BaseModel):
-    email: EmailStr
+    email: str
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
-    def _normalize_email(cls, value: EmailStr) -> str:
-        return value.lower().strip()
+    def _validate_email(cls, value: object) -> str:
+        return _validated_email(value)
 
 
 class ForgotPasswordRequest(BaseModel):
-    email: EmailStr
+    email: str
 
-    @field_validator("email")
+    @field_validator("email", mode="before")
     @classmethod
-    def _normalize_email(cls, value: EmailStr) -> str:
-        return value.lower().strip()
+    def _validate_email(cls, value: object) -> str:
+        return _validated_email(value)
+
+
+def _validated_email(value: object) -> str:
+    """Shared email field validation for the auth request schemas."""
+    if not isinstance(value, str):
+        raise ValueError("Please enter a valid email address.")
+    return validate_email(value)
 
 
 class ResetPasswordRequest(BaseModel):

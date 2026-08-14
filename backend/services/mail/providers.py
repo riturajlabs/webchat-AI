@@ -2,12 +2,15 @@
 
 import asyncio
 import json
+import logging
 import urllib.request
 from collections.abc import Mapping
 from email.utils import parseaddr
 
 from backend.core.config import get_settings
 from backend.services.mail.base import EmailMessage
+
+logger = logging.getLogger(__name__)
 
 
 class MailpitProvider:
@@ -39,9 +42,13 @@ class MailpitProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            if response.status >= 400:
-                raise RuntimeError(f"Mailpit rejected email with status {response.status}")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                if response.status >= 400:
+                    raise RuntimeError(f"Mailpit rejected email with status {response.status}")
+        except Exception:
+            logger.exception("Mailpit email delivery failed (api_url=%s)", self._api_url)
+            raise
 
 
 class ResendProvider:
@@ -57,12 +64,23 @@ class ResendProvider:
         import resend  # imported lazily; only required in production
 
         resend.api_key = self._api_key
-        resend.Emails.send(
-            {
-                "from": get_settings().email_from,
-                "to": message.to,
-                "subject": message.subject,
-                "text": message.text,
-                "html": message.html,
-            }
-        )
+        try:
+            resend.Emails.send(
+                {
+                    "from": get_settings().email_from,
+                    "to": message.to,
+                    "subject": message.subject,
+                    "text": message.text,
+                    "html": message.html,
+                }
+            )
+        except Exception:
+            # Provider errors (invalid key, unverified sending domain, etc.) are
+            # logged with the relevant context and re-raised so the worker job
+            # records the failure and retries.
+            logger.exception(
+                "Resend email delivery failed (to=%s, from=%s)",
+                message.to,
+                get_settings().email_from,
+            )
+            raise

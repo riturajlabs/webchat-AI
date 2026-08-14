@@ -5,6 +5,7 @@ Business logic only - routes validate and translate. Implements ADR-003
 (signed email links delivered through the MailService abstraction).
 """
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -12,7 +13,6 @@ from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     AccountSuspendedError,
     DuplicateEmailError,
-    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidTokenError,
     TokenReuseError,
@@ -58,6 +58,8 @@ from backend.schemas.auth import validate_password_policy
 from backend.services.mail import build_email
 from backend.services.mail.base import EmailDispatcher
 from backend.workers.timing import chat_stage
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -221,10 +223,6 @@ class AuthService:
         tenant = await self._tenants.find_by_id(user.tenant_id)
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
-        if not user.email_verified:
-            raise EmailNotVerifiedError(
-                "Please verify your email before signing in. A new link can be sent below."
-            )
 
         role = await self._resolve_role(user)
         await self._users.update_last_login(user.id, utcnow())
@@ -259,10 +257,6 @@ class AuthService:
         tenant = await self._tenants.find_by_id(record.tenant_id)
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
-        if not user.email_verified:
-            raise EmailNotVerifiedError(
-                "Please verify your email before signing in. A new link can be sent below."
-            )
 
         role = await self._resolve_role(user)
         new_raw = generate_refresh_token()
@@ -373,10 +367,6 @@ class AuthService:
             tenant = await self._tenants.find_by_id(claims["tenant_id"])
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
-        if not user.email_verified:
-            raise EmailNotVerifiedError(
-                "Please verify your email before signing in. A new link can be sent below."
-            )
         async with chat_stage("auth.member"):
             role = await self._resolve_role(user)
         return Principal(
@@ -416,15 +406,25 @@ class AuthService:
     async def _send_verification_email(self, user: User) -> None:
         token = create_email_verification_token(user.id)
         verify_url = f"{self._settings.public_base_url}/verify-email?token={token}"
-        await self._mail(
-            build_email(
-                user.email,
-                "Verify your email address",
-                "verify_email",
-                name=user.name,
-                verification_url=verify_url,
+        try:
+            await self._mail(
+                build_email(
+                    user.email,
+                    "Verify your email address",
+                    "verify_email",
+                    name=user.name,
+                    verification_url=verify_url,
+                )
             )
-        )
+        except Exception:
+            # Verification is no longer required for access, so a mail-infra
+            # outage must not block signup/login. Log the provider error so it
+            # is visible in API logs; the user can resend from the dashboard.
+            logger.exception(
+                "Failed to enqueue verification email for user %s",
+                user.id,
+                extra={"user_id": user.id},
+            )
 
     async def _on_reuse_detected(
         self, record: RefreshToken, ip_address: str | None, user_agent: str | None

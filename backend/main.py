@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -90,6 +91,28 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message, **exc.extra}},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_handler(
+        _: FastAPI, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Surface request validation failures in the standard error envelope.
+
+        The frontend parses `error.message`; without this handler FastAPI's
+        default `{"detail": [...]}` body would fall back to a generic
+        "Request failed (422)" message (e.g. invalid email during signup).
+        """
+        errors = exc.errors()
+        message = str(errors[0]["msg"]) if errors else "Invalid request."
+        if message.startswith("Value error, "):
+            message = message[len("Value error, ") :]
+        logger.warning(
+            "Validation error: %s", message, extra={"error_code": "VALIDATION_ERROR", "status": 422}
+        )
+        return JSONResponse(
+            status_code=422,
+            content={"error": {"code": "VALIDATION_ERROR", "message": message}},
         )
 
     @app.exception_handler(Exception)

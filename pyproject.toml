@@ -29,6 +29,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.7",
 ]
 
@@ -43,6 +44,11 @@ packages = ["backend"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-q"
+# Fail fast instead of hanging forever when a test deadlocks or waits on an
+# unavailable dependency. `thread` works reliably with pytest-asyncio event
+# loops, unlike the default `signal` method.
+timeout = 60
+timeout_method = "thread"
 
 [tool.ruff]
 line-length = 100

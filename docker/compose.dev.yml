@@ -1,13 +1,8 @@
 # WebChat AI - local development stack
-# Usage: docker compose -f docker/compose.dev.yml up --build
-# See docs/07-Architecture-Decisions.md ADR-002 (ARQ + Redis) and ADR-001 (Mailpit).
+# MongoDB Atlas + local Redis + Mailpit
 
 name: webchat-ai
 
-# Docker's default bridge MTU (1500) breaks outbound HTTPS when the host's
-# egress link has a smaller path MTU (e.g. a VPN tunnel): oversized handshake
-# packets are silently dropped and TLS stalls. Set DOCKER_BRIDGE_MTU to the
-# host's path MTU (see .env.example) so container traffic matches the host.
 networks:
   webchat:
     driver: bridge
@@ -15,171 +10,277 @@ networks:
       com.docker.network.driver.mtu: ${DOCKER_BRIDGE_MTU:-1500}
 
 services:
-  mongo:
-    image: mongo:7
-    container_name: webchat-mongo
-    networks: [webchat]
-    restart: unless-stopped
-    # No host port: api/worker reach it via the compose network as "mongo".
-    # A native MongoDB (or other container) on 27017 does not collide.
-    volumes:
-      - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   redis:
     image: redis:7-alpine
     container_name: webchat-redis
     networks: [webchat]
     restart: unless-stopped
-    # No host port: see mongo note above (native redis often occupies 6379).
+
     volumes:
       - redis_data:/data
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+
   mailpit:
     image: axllent/mailpit:v1.20
     container_name: webchat-mailpit
     networks: [webchat]
     restart: unless-stopped
+
     ports:
       - "1025:1025"
       - "8025:8025"
+
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8025/api/v1/info"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "http://localhost:8025/api/v1/info"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+
 
   api:
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
       network: host
+
     container_name: webchat-api
     networks: [webchat]
     restart: unless-stopped
+
+
     environment:
+
       ENVIRONMENT: development
       DEBUG: "true"
-      MONGODB_URI: mongodb://mongo:27017
+
+      # MongoDB Atlas
+      MONGODB_URI: ${MONGODB_URI}
+      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
+
+
+      # Redis
       REDIS_URL: redis://redis:6379
+
+
       CORS_ORIGINS: '["http://localhost:3000"]'
+
+
       JWT_SECRET: dev-only-jwt-secret-change-me
+
       COOKIE_SECURE: "false"
-      PUBLIC_BASE_URL: http://localhost:3000
-      MAILPIT_API_URL: http://mailpit:8025
-      # Passed through from .env so the stack supports real chat + embeddings
-      # (required by scripts/e2e-widget.sh; empty when unset).
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # scripts/e2e-widget.sh sets this to false for the E2E stack.
-      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+
+      PUBLIC_BASE_URL:
+        http://localhost:3000
+
+
+      MAILPIT_API_URL:
+        http://mailpit:8025
+
+
+      GEMINI_API_KEY:
+        ${GEMINI_API_KEY:-}
+
+
+      RATE_LIMIT_ENABLED:
+        ${RATE_LIMIT_ENABLED:-true}
+
+
     ports:
       - "8000:8000"
+
+
     depends_on:
-      mongo:
-        condition: service_healthy
+
       redis:
         condition: service_healthy
+
+
     healthcheck:
+
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"
         ]
+
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
+
+
 
   worker:
+
     build:
       context: ..
       dockerfile: docker/Dockerfile.worker
       network: host
+
+
     container_name: webchat-worker
+
     networks: [webchat]
+
     restart: unless-stopped
+
+
     environment:
+
       ENVIRONMENT: development
-      MONGODB_URI: mongodb://mongo:27017
-      REDIS_URL: redis://redis:6379
-      MAILPIT_API_URL: http://mailpit:8025
-      # Passed through from .env for real embeddings (see api service).
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+
+      # MongoDB Atlas
+      MONGODB_URI: ${MONGODB_URI}
+
+      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
+
+
+      REDIS_URL:
+        redis://redis:6379
+
+
+      MAILPIT_API_URL:
+        http://mailpit:8025
+
+
+      GEMINI_API_KEY:
+        ${GEMINI_API_KEY:-}
+
+
+
     depends_on:
-      mongo:
-        condition: service_healthy
+
       redis:
         condition: service_healthy
 
-  dashboard:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.dashboard
-      network: host
-    container_name: webchat-dashboard
-    networks: [webchat]
-    restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      # Used in email verification / reset links generated by the API.
-      PUBLIC_BASE_URL: http://localhost:3000
-    ports:
-      - "3000:3000"
-    depends_on:
-      api:
-        condition: service_healthy
-    healthcheck:
-      # 127.0.0.1: `localhost` resolves to ::1 in Alpine, but the server
-      # listens on IPv4 only (0.0.0.0).
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
 
-  widget:
+
+  dashboard:
+
     build:
+
       context: ..
-      dockerfile: docker/Dockerfile.widget
+
+      dockerfile: docker/Dockerfile.dashboard
+
       network: host
-      args:
-        # Production builds bake the widget API origin (WIDGET_API_BASE_URL is
-        # the backend-side twin used for `data-api-base-url`). Dev builds leave
-        # it empty so the bundle falls back to same-origin / data-api-base-url.
-        VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL:-}
-    container_name: webchat-widget
+
+
+    container_name: webchat-dashboard
+
     networks: [webchat]
+
     restart: unless-stopped
+
+
+    environment:
+
+      NODE_ENV: production
+
+      PORT: 3000
+
+      PUBLIC_BASE_URL:
+        http://localhost:3000
+
+
+
     ports:
-      - "8080:80"
+
+      - "3000:3000"
+
+
+
+    depends_on:
+
+      api:
+
+        condition: service_healthy
+
+
+
     healthcheck:
-      # Serveable artifact check (no index.html in dist - only the bundles).
+
       test:
         [
           "CMD",
           "wget",
           "-qO-",
-          "--spider",
-          "http://127.0.0.1/webchat-widget.iife.min.js",
+          "http://127.0.0.1:3000"
         ]
+
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+
+
+
+  widget:
+
+    build:
+
+      context: ..
+
+      dockerfile: docker/Dockerfile.widget
+
+      network: host
+
+
+      args:
+
+        VITE_WIDGET_API_BASE_URL:
+          ${VITE_WIDGET_API_BASE_URL:-}
+
+
+
+    container_name: webchat-widget
+
+    networks: [webchat]
+
+    restart: unless-stopped
+
+
+    ports:
+
+      - "8080:80"
+
+
+
+    healthcheck:
+
+      test:
+
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "--spider",
+          "http://127.0.0.1/webchat-widget.iife.min.js"
+        ]
+
+      interval: 10s
+
+      timeout: 5s
+
+      retries: 5
+
+
 
 volumes:
-  mongo_data:
+
   redis_data:

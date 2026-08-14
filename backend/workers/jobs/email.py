@@ -4,6 +4,7 @@
 enqueue path used by services so API requests never block on SMTP/HTTP delivery.
 """
 
+import logging
 from typing import Any
 
 from arq.connections import ArqRedis
@@ -11,6 +12,8 @@ from redis.asyncio import ConnectionPool
 
 from backend.core.config import get_settings
 from backend.services.mail import EmailMessage, get_mail_service
+
+logger = logging.getLogger(__name__)
 
 _pool: ConnectionPool | None = None
 
@@ -31,7 +34,13 @@ async def send_email(ctx: dict[str, Any], payload: dict[str, str]) -> None:
         text=payload["text"],
         html=payload["html"],
     )
-    await get_mail_service().send(message)
+    try:
+        await get_mail_service().send(message)
+    except Exception:
+        logger.exception(
+            "Email delivery failed (to=%s, subject=%s)", payload["to"], payload["subject"]
+        )
+        raise
 
 
 async def enqueue_email(message: EmailMessage) -> None:

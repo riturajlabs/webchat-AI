@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { api, ApiError } from '@/lib/api';
+import { api } from '@/lib/api';
 import { clearSession, getAccessToken, setAccessToken, setCsrfToken } from '@/lib/session';
 
 import type { AuthResponse, MessageResponse, RefreshResponse, UserOut } from './types';
@@ -56,21 +56,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setStatus('ready');
             return;
           }
-        } catch (err) {
+        } catch {
           // The API client already performed a single silent refresh on a 401
           // and clears the session + redirects to /login when that refresh
-          // fails. Never trigger a second refresh here (R1). An unverified
-          // account gets a 403 EMAIL_NOT_VERIFIED (not 401, so no refresh
-          // retry): route to the verify-email screen so the user can resend.
-          if (
-            err instanceof ApiError &&
-            err.code === 'EMAIL_NOT_VERIFIED' &&
-            typeof window !== 'undefined' &&
-            window.location.pathname !== '/verify-email'
-          ) {
-            window.location.assign('/verify-email');
-            return;
-          }
+          // fails. Never trigger a second refresh here (R1).
         }
       } else {
         // No in-memory token: restore the session from the httpOnly refresh

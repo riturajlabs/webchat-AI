@@ -6,6 +6,7 @@ import { Bot, LogOut } from 'lucide-react';
 import { useState } from 'react';
 
 import { useAuth } from '@/features/auth/auth-context';
+import { VerificationReminder } from '@/features/auth/verification-reminder';
 import { Button } from '@/components/ui/button';
 import { MobileNav } from '@/components/layout/mobile-nav';
 import { visibleNavItems } from '@/components/layout/nav-items';
@@ -84,6 +85,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </Button>
           </div>
         </header>
+        <VerificationReminder />
         <div className="flex-1 px-4 py-8 md:px-10">{children}</div>
       </main>
     </div>

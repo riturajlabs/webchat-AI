@@ -9,6 +9,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmail(value: string): boolean {
+  return EMAIL_RE.test(value);
+}
+
 export function SignupForm() {
   const { register } = useAuth();
   const router = useRouter();
@@ -24,11 +30,16 @@ export function SignupForm() {
     if (!name.trim() || !email.trim() || !password || isPending) {
       return;
     }
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!isValidEmail(trimmedEmail)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
     setIsPending(true);
     setError(null);
     try {
-      await register(name.trim(), email.trim(), password);
-      router.replace(`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}`);
+      await register(name.trim(), trimmedEmail, password);
+      router.replace('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create your account.');
     } finally {

@@ -6,7 +6,6 @@ import pytest
 from backend.core.errors import (
     AccountSuspendedError,
     DuplicateEmailError,
-    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidTokenError,
     TokenReuseError,
@@ -511,7 +510,7 @@ async def test_authenticate_rejects_unknown_user() -> None:
 # ---------------------------------------------------- email-verification gate
 
 
-async def test_login_unverified_email_rejected() -> None:
+async def test_login_unverified_email_allowed() -> None:
     env = build_auth_env()
     await env.service.register(
         name="Alice",
@@ -520,15 +519,14 @@ async def test_login_unverified_email_rejected() -> None:
         ip_address=None,
         user_agent=None,
     )
-    with pytest.raises(EmailNotVerifiedError) as exc:
-        await env.service.login(
-            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
-        )
-    assert exc.value.status_code == 403
-    assert exc.value.code == "EMAIL_NOT_VERIFIED"
+    result = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    assert result.user.email_verified is False
+    assert result.access_token
 
 
-async def test_authenticate_unverified_token_rejected() -> None:
+async def test_authenticate_unverified_token_allowed() -> None:
     env = build_auth_env()
     result = await env.service.register(
         name="Alice",
@@ -537,11 +535,12 @@ async def test_authenticate_unverified_token_rejected() -> None:
         ip_address=None,
         user_agent=None,
     )
-    with pytest.raises(EmailNotVerifiedError):
-        await env.service.authenticate(result.access_token)
+    principal = await env.service.authenticate(result.access_token)
+    assert principal.email_verified is False
+    assert principal.email == "alice@example.com"
 
 
-async def test_refresh_unverified_session_rejected() -> None:
+async def test_refresh_unverified_session_allowed() -> None:
     env = build_auth_env()
     result = await env.service.register(
         name="Alice",
@@ -550,10 +549,11 @@ async def test_refresh_unverified_session_rejected() -> None:
         ip_address=None,
         user_agent=None,
     )
-    with pytest.raises(EmailNotVerifiedError):
-        await env.service.refresh(
-            raw_refresh_token=result.refresh_token, ip_address=None, user_agent=None
-        )
+    refreshed = await env.service.refresh(
+        raw_refresh_token=result.refresh_token, ip_address=None, user_agent=None
+    )
+    assert refreshed.access_token
+    assert refreshed.user.email_verified is False
 
 
 async def test_resend_verification_sends_link_and_audits() -> None:
