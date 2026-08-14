@@ -22,6 +22,12 @@ RUN pnpm config set fetch-timeout 600000 \
 
 FROM base AS builder
 WORKDIR /app
+# NEXT_PUBLIC_* variables are inlined into the client bundle at build time.
+# Production must pass the public API origin, e.g.
+# `--build-arg NEXT_PUBLIC_API_URL=https://api.example.com` (see
+# docker/compose.prod.yml). Defaults to the local dev fallback.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}"
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm --filter @webchat/dashboard build

@@ -1,0 +1,193 @@
+# WebChat AI - production stack
+# Usage:
+#   export TAG=v1.0.0
+#   docker compose -f docker/compose.prod.yml build
+#   docker compose -f docker/compose.prod.yml up -d
+#
+# Environment: every required variable must be provided (the `:?` marker makes
+# compose fail fast when one is missing). Load them from your secret manager /
+# CI environment - never commit a .env with production secrets.
+#
+# External dependencies (managed outside this stack):
+#   * MongoDB Atlas (M7+ with Vector Search)          -> MONGODB_URI
+#   * Redis (Upstash / Redis Cloud with TLS)          -> REDIS_URL
+#   * Resend (email delivery)                         -> RESEND_API_KEY
+#
+# TLS is terminated by the fronting proxy / load balancer; the containers
+# serve plain HTTP on the compose network.
+
+name: webchat-ai-prod
+
+x-app-env: &app-env
+  ENVIRONMENT: production
+  DEBUG: "false"
+
+  # --- Security ---
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required (>=32 bytes, openssl rand -hex 32)}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  # Trusted-proxy deployments only. Set false when the API is exposed directly.
+  TRUST_PROXY: ${TRUST_PROXY:-true}
+  RATE_LIMIT_ENABLED: "true"
+  # Per-API-key sliding window (Sprint 2).
+  API_KEY_RATE_LIMIT_PER_MINUTE: ${API_KEY_RATE_LIMIT_PER_MINUTE:-300}
+
+  # --- Database ---
+  MONGODB_URI: ${MONGODB_URI:?MONGODB_URI is required (Atlas mongodb+srv://...)}
+  MONGODB_DB: ${MONGODB_DB:-webchat_ai}
+  MONGODB_MIN_POOL_SIZE: ${MONGODB_MIN_POOL_SIZE:-10}
+  MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE:-100}
+  MONGODB_SERVER_SELECTION_TIMEOUT_MS: ${MONGODB_SERVER_SELECTION_TIMEOUT_MS:-30000}
+
+  # --- Redis ---
+  REDIS_URL: ${REDIS_URL:?REDIS_URL is required (TLS RESP URL)}
+  REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
+
+  # --- CORS / public URLs ---
+  CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required (JSON array of dashboard origins)}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (production dashboard origin)}
+  WIDGET_SCRIPT_URL: ${WIDGET_SCRIPT_URL:?WIDGET_SCRIPT_URL is required (HTTPS content-hashed widget bundle)}
+  WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL:?WIDGET_API_BASE_URL is required (HTTPS API origin for embeds)}
+
+  # --- Email (Resend) ---
+  RESEND_API_KEY: ${RESEND_API_KEY:?RESEND_API_KEY is required}
+  EMAIL_FROM: ${EMAIL_FROM:?EMAIL_FROM is required (verified Resend sender)}
+
+  # --- AI generation (at least one key required; see config.py validator) ---
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+  GROQ_API_KEY: ${GROQ_API_KEY:-}
+  GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct}
+  GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER:-["gemini","groq","openrouter"]}
+  AI_PROVIDER_TIMEOUT_SECONDS: ${AI_PROVIDER_TIMEOUT_SECONDS:-60}
+
+  # --- Embeddings (dimensions MUST match the Atlas vector index) ---
+  EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER:-["gemini"]}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-gemini-embedding-001}
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-3072}
+
+  # --- Widget API limits (production hardening) ---
+  WIDGET_SESSION_TOKEN_MINUTES: ${WIDGET_SESSION_TOKEN_MINUTES:-15}
+  WIDGET_SESSION_VALIDITY_HOURS: ${WIDGET_SESSION_VALIDITY_HOURS:-24}
+  WIDGET_CONFIG_CACHE_SECONDS: ${WIDGET_CONFIG_CACHE_SECONDS:-300}
+  WIDGET_PER_WIDGET_LIMIT: ${WIDGET_PER_WIDGET_LIMIT:-60}
+  WIDGET_PER_VISITOR_LIMIT: ${WIDGET_PER_VISITOR_LIMIT:-20}
+  WIDGET_SESSION_ISSUE_LIMIT: ${WIDGET_SESSION_ISSUE_LIMIT:-30}
+  WIDGET_FEEDBACK_LIMIT: ${WIDGET_FEEDBACK_LIMIT:-30}
+  WIDGET_IP_LIMIT: ${WIDGET_IP_LIMIT:-120}
+  WIDGET_MAX_MESSAGES_PER_SESSION: ${WIDGET_MAX_MESSAGES_PER_SESSION:-50}
+  WIDGET_RATE_LIMIT_ENABLED: "true"
+
+  # --- Observability (keep off in production) ---
+  PERF_TIMING_LOG_ENABLED: ${PERF_TIMING_LOG_ENABLED:-false}
+
+services:
+  api:
+    image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-api}:${TAG:-v1.0.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: webchat-api-prod
+    networks: [webchat]
+    restart: unless-stopped
+    environment: *app-env
+    # Fronted by the TLS proxy/load balancer; expose the port the proxy routes to.
+    expose:
+      - "8000"
+    healthcheck:
+      # Fail-closed readiness: 200 only when Mongo + Redis are reachable.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-worker}:${TAG:-v1.0.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    container_name: webchat-worker-prod
+    networks: [webchat]
+    restart: unless-stopped
+    environment: *app-env
+    healthcheck:
+      # Worker has no HTTP endpoint; liveness = the ARQ process is up and can
+      # reach the Redis broker.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os; from redis import Redis; assert Redis.from_url(os.environ['REDIS_URL']).ping()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  dashboard:
+    image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-dashboard}:${TAG:-v1.0.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+      args:
+        # Baked into the client bundle at build time (B2 fix). Must be the
+        # public HTTPS API origin reachable from the browser.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required (public API origin)}
+    container_name: webchat-dashboard-prod
+    networks: [webchat]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  widget:
+    image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-widget}:${TAG:-v1.0.0}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.widget
+      args:
+        # Baked into the SDK bundle at build time; the same origin as
+        # WIDGET_API_BASE_URL so `data-api-base-url` and the bundle agree.
+        VITE_WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL:?WIDGET_API_BASE_URL is required (public API origin)}
+    container_name: webchat-widget-prod
+    networks: [webchat]
+    restart: unless-stopped
+    expose:
+      - "80"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-qO-",
+          "--spider",
+          "http://127.0.0.1/webchat-widget.iife.min.js",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  webchat:
+    driver: bridge
