@@ -77,7 +77,8 @@ const CONFIG_OPTIONS: { key: string; values: string; description: string }[] = [
   {
     key: 'allowed_domains',
     values: 'string[] (max 50)',
-    description: 'Origins permitted to embed the widget. Empty = any origin.',
+    description:
+      'Origins permitted to embed the widget. Empty = blocked until configured; use "*" for open embedding.',
   },
 ];
 
@@ -198,7 +199,10 @@ export function DocsPage() {
           <li>
             <code className="font-mono text-xs">*</code> allows any origin (not recommended).
           </li>
-          <li>An empty list allows any origin (the pre-configured default).</li>
+          <li>
+            An empty list blocks embeds (the widget stays offline) until you add at least one
+            domain.
+          </li>
         </ul>
         <CodeBlock
           code={`https://example.com     → allowed

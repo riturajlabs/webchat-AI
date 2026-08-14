@@ -212,4 +212,43 @@ describe('mount integration', () => {
 
     controller.destroy();
   });
+
+  it('blocks chat and shows a persistent banner when the widget is disabled', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_disabled_1')) {
+        return jsonResponse({ ...CONFIG, widget_id: 'widget_disabled_1', enabled: false });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({
+      widgetId: 'widget_disabled_1',
+      apiBaseUrl: API_BASE,
+      fetchImpl,
+      host,
+    });
+
+    await controller.ready();
+    expect(controller.getConfig().enabled).toBe(false);
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    // A disabled widget never mints a session and never hits /chat.
+    expect(fetchImpl).not.toHaveBeenCalledWith(
+      expect.stringContaining('/sessions'),
+      expect.anything(),
+    );
+    expect(fetchImpl).not.toHaveBeenCalledWith(expect.stringContaining('/chat'), expect.anything());
+
+    controller.open();
+    const banner = shadow.querySelector<HTMLElement>('.wc-banner');
+    expect(banner?.hidden).toBe(false);
+    expect(banner?.textContent).toContain('This assistant is currently unavailable');
+    const composer = shadow.querySelector<HTMLTextAreaElement>('textarea');
+    expect(composer?.disabled).toBe(true);
+
+    controller.destroy();
+  });
 });

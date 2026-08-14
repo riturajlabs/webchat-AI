@@ -70,7 +70,10 @@ class WidgetConfigUpdate(BaseModel):
     dark_mode: bool | None = None
     auto_open: bool | None = None
     enabled: bool | None = None
-    # Restrict which browser origins may embed the widget. Empty = any origin.
+    # Embed-origin allowlist. Entries are normalized bare hostnames (optionally
+    # `*.`-wildcards); the literal `*` opts into open embedding. An empty list
+    # blocks browser embeds with WIDGET_DOMAIN_NOT_CONFIGURED until domains are
+    # configured - it never means "any origin".
     allowed_domains: list[str] | None = None
 
     @field_validator("primary_color", "accent_color")
@@ -128,6 +131,10 @@ class WidgetConfigUpdate(BaseModel):
 
         Entries are bare hostnames or `*.`-prefixed wildcards; schemes, ports
         and paths are rejected (embedding is matched on the hostname only).
+        A bare single-label hostname is only accepted for the loopback host
+        (`localhost`), so typos like `example` fail loudly. The dashboard
+        normalizes full URLs (e.g. `https://example.com` → `example.com`)
+        before sending.
         """
         if value is None:
             return None

@@ -36,17 +36,29 @@ TENANT_ID = "tenant-a"
 WEBSITE_ID = "web-1"
 
 
-def _build_widget_service(websites: FakeWebsiteRepository) -> WidgetService:
+def _build_widget_service(
+    websites: FakeWebsiteRepository,
+    *,
+    tenant_status: str = "active",
+    widget_enabled: bool = True,
+    allowed_domains: list[str] | None = None,
+) -> WidgetService:
     widgets = FakeWidgetRepository()
     tenants = FakeTenantRepository()
     store = FakeWidgetStore()
 
     widget = Widget.new(tenant_id=TENANT_ID, website_id=WEBSITE_ID)
     widget.widget_id = WIDGET_ID
+    widget.enabled = widget_enabled
+    # The CORS tests embed from `customer.example`; under the strict allowlist
+    # policy an empty allowlist would reject it (WIDGET_DOMAIN_NOT_CONFIGURED),
+    # so the default fixture widget explicitly permits that customer origin.
+    widget.allowed_domains = list(allowed_domains or ["customer.example"])
     widgets.widgets[widget.id] = widget
 
     tenant = Tenant.new(company_name="Acme")
     tenant.id = TENANT_ID
+    tenant.status = tenant_status
     tenants.tenants[TENANT_ID] = tenant
 
     return WidgetService(
@@ -55,6 +67,18 @@ def _build_widget_service(websites: FakeWebsiteRepository) -> WidgetService:
         websites=websites,
         store=store,
     )
+
+
+def _app_with_service(widget_service: WidgetService, chat_env) -> TestClient:
+    feedback_service = FeedbackService(
+        feedback=FakeFeedbackRepository(),
+        messages=chat_env.messages,
+    )
+    app = create_app()
+    app.dependency_overrides[get_widget_service] = lambda: widget_service
+    app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
+    app.dependency_overrides[get_feedback_service] = lambda: feedback_service
+    return TestClient(app)
 
 
 @pytest.fixture
@@ -132,6 +156,35 @@ async def test_widget_config_unknown_returns_404(client) -> None:
     assert response.json()["error"]["code"] == "WIDGET_NOT_FOUND"
 
 
+async def test_widget_config_reports_enabled_false_for_suspended_tenant(monkeypatch) -> None:
+    """A suspended tenant must not leak via a 403 (ADR-005); it reads as a
+    disabled widget so the embed surfaces 'assistant unavailable' instead."""
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    service = _build_widget_service(chat_env := build_chat_env(), tenant_status="suspended")
+    with _app_with_service(service, chat_env) as test_client:
+        response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    get_settings.cache_clear()
+
+
+async def test_widget_config_reports_enabled_false_for_disabled_widget(monkeypatch) -> None:
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    chat_env = build_chat_env()
+    service = _build_widget_service(chat_env, widget_enabled=False)
+    with _app_with_service(service, chat_env) as test_client:
+        response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}")
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+    get_settings.cache_clear()
+
+
 # --------------------------------------------------------------- sessions
 
 
@@ -155,6 +208,25 @@ async def test_widget_sessions_rejects_unknown_widget(client) -> None:
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "WIDGET_NOT_FOUND"
+
+
+async def test_widget_sessions_rejects_disabled_widget(monkeypatch) -> None:
+    """The config endpoint reads a disabled widget as enabled=false, but a
+    disabled widget can never mint a session token (403 WIDGET_DISABLED)."""
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    chat_env = build_chat_env()
+    service = _build_widget_service(chat_env, widget_enabled=False)
+    with _app_with_service(service, chat_env) as test_client:
+        response = test_client.post(
+            "/api/widget/v1/sessions",
+            json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "WIDGET_DISABLED"
+    get_settings.cache_clear()
 
 
 # ----------------------------------------------------------------- chat

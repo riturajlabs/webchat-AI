@@ -45,6 +45,9 @@ import type { WidgetError } from './errors';
 /** Banner shown while the browser reports itself offline (plan §9). */
 export const OFFLINE_BANNER = "You're offline. Messages will be sent once your connection returns.";
 
+/** Banner shown when the backend reports the widget as disabled/suspended. */
+export const WIDGET_UNAVAILABLE_BANNER = 'This assistant is currently unavailable.';
+
 export interface WidgetHostOptions extends WidgetOptions {
   /** The `<webchat-widget>` element to attach to. Created + appended when omitted. */
   host?: HTMLElement;
@@ -133,6 +136,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
   const configWaiters: Array<(config: WidgetPublicConfig) => void> = [];
   let destroyed = false;
   let open = false;
+  /**
+   * True when the fetched config reports `enabled: false` (widget disabled by
+   * its tenant, or tenant suspended). Chat is blocked and a persistent banner
+   * explains why, so the visitor never gets a generic send failure.
+   */
+  let widgetUnavailable = false;
   /** AbortController for the in-flight turn (Stop-generation button). */
   let activeAbort: AbortController | null = null;
   /** Last question whose send failed (re-sent by the banner Retry action). */
@@ -184,7 +193,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
         activeAbort?.abort();
       }
     },
-    isDisabled: () => conversation.getState().streaming || isOffline(),
+    isDisabled: () => conversation.getState().streaming || isOffline() || widgetUnavailable,
   });
 
   shell.appendChild(windowElement.element);
@@ -214,7 +223,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
   // --- Send path -----------------------------------------------------------
 
   async function send(question: string) {
-    if (conversation.getState().streaming || isOffline()) {
+    if (conversation.getState().streaming || isOffline() || widgetUnavailable) {
       return;
     }
     windowElement.composer.reset();
@@ -371,7 +380,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
 
   function syncRenderer() {
     const offline = isOffline();
-    if (offline) {
+    if (widgetUnavailable) {
+      // Disabled/suspended widget: persistent banner, no chat. Takes priority
+      // over the offline banner so the visitor knows the *why*.
+      windowElement.setBanner(WIDGET_UNAVAILABLE_BANNER);
+    } else if (offline) {
       windowElement.setBanner(OFFLINE_BANNER);
     } else if (windowElement.currentBanner() === OFFLINE_BANNER) {
       // Offline cleared: restore the pending error banner so Retry stays available.
@@ -386,7 +399,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     renderMessagesNow();
     setBusy(messageList, state.streaming);
     windowElement.setStreaming(state.streaming);
-    windowElement.composer.setDisabled(state.streaming || offline);
+    windowElement.composer.setDisabled(state.streaming || offline || widgetUnavailable);
     windowElement.element.hidden = !open;
     syncLauncher(launcher, open);
   }
@@ -465,17 +478,24 @@ export function mount(options: WidgetHostOptions): WidgetController {
     if (destroyed) {
       return;
     }
+    // An explicit `enabled: false` from the backend (disabled widget or
+    // suspended tenant) blocks chat up front; fetch failures keep the safe
+    // defaults (enabled: true) so a transient config outage never bricks the
+    // embed for a healthy widget.
+    widgetUnavailable = !config.enabled;
     applyConfig(config);
     configLoaded = true;
     for (const waiter of configWaiters) {
       waiter(config);
     }
     configWaiters.length = 0;
-    // Ensure a session is ready up front so the first message never waits.
-    try {
-      await session.ensureFresh();
-    } catch {
-      // Session failures are surfaced on first send; the launcher still renders.
+    if (!widgetUnavailable) {
+      // Ensure a session is ready up front so the first message never waits.
+      try {
+        await session.ensureFresh();
+      } catch {
+        // Session failures are surfaced on first send; the launcher still renders.
+      }
     }
     syncRenderer();
   }

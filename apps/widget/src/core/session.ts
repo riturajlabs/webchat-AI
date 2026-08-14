@@ -8,7 +8,7 @@
  */
 
 import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
-import { WidgetError } from './errors';
+import { WidgetError, errorFromApiBody } from './errors';
 import { fetchWithTimeout } from './network';
 
 /** Session request timeout (plan §9). */
@@ -77,11 +77,10 @@ export async function mintSessionToken(
     });
   }
   if (!response.ok) {
-    throw new WidgetError({
-      code: 'server',
-      message: `Session request failed (${response.status})`,
-      status: response.status,
-    });
+    // Parse the backend's JSON error envelope: an invalid or disabled widget
+    // must surface as its own code, never as a generic "server" error.
+    const body = await readErrorEnvelope(response);
+    throw errorFromApiBody(response.status, body);
   }
   const body = (await response.json()) as { session_token?: string; expires_at?: string };
   if (!body.session_token || !body.expires_at) {
@@ -92,6 +91,15 @@ export async function mintSessionToken(
     throw new WidgetError({ code: 'invalid', message: 'Invalid session expiry' });
   }
   return { sessionToken: body.session_token, expiresAt };
+}
+
+/** Best-effort parse of a non-OK response body (see `errorFromApiBody`). */
+async function readErrorEnvelope(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
 }
 
 /**

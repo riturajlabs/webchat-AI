@@ -6,6 +6,12 @@ pages whose `Origin` hostname is listed. The widget surface still answers
 application-level: every widget route rejects mismatched origins with
 `403 WIDGET_ORIGIN_NOT_ALLOWED`. Requests without an `Origin` header (curl /
 server-to-server) are not browser embeds and stay permitted.
+
+An empty allowlist is now *blocking*: browser embeds get
+`403 WIDGET_DOMAIN_NOT_CONFIGURED` until domains are configured. The literal
+`*` entry is the explicit open-embedding opt-in. In `development` the loopback
+hosts (`localhost` / `127.0.0.1`) are auto-permitted so a developer can test an
+embed without editing the allowlist; production never auto-permits them.
 """
 
 import pytest
@@ -14,7 +20,7 @@ from backend.api.deps import (
     get_rag_service,
     get_widget_service,
 )
-from backend.core.config import get_settings
+from backend.core.config import Settings, get_settings
 from backend.core.security import create_widget_session_token
 from backend.main import create_app
 from backend.models.tenant import Tenant
@@ -23,7 +29,7 @@ from backend.services.feedback.feedback_service import FeedbackService
 from backend.services.widget.widget_service import WidgetService
 from fastapi.testclient import TestClient
 
-from tests.chat_helpers import build_chat_env, make_chunk, make_website
+from tests.chat_helpers import ChatEnv, build_chat_env, make_chunk, make_website
 from tests.fakes import (
     FakeFeedbackRepository,
     FakeTenantRepository,
@@ -38,8 +44,25 @@ WEBSITE_ID = "web-origin-1"
 ALLOWED = ["acme.example"]
 
 
+def _prod_settings() -> Settings:
+    """Production settings that pass the startup security validator."""
+    return Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="x" * 40,
+        gemini_api_key="test-key",
+        embedding_provider_order=["gemini"],
+        embedding_dimensions=768,
+        widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        # Real production dashboard origins; localhost is not auto-permitted.
+        cors_origins=["https://app.example.com"],
+    )
+
+
 def _build_widget_service(
-    websites: FakeWebsiteRepository, allowed_domains: list[str]
+    websites: FakeWebsiteRepository,
+    allowed_domains: list[str],
+    settings: Settings | None = None,
 ) -> WidgetService:
     widgets = FakeWidgetRepository()
     tenants = FakeTenantRepository()
@@ -59,18 +82,25 @@ def _build_widget_service(
         tenants=tenants,
         websites=websites,
         store=store,
+        settings=settings,
     )
 
 
-@pytest.fixture
-def client(monkeypatch):
-    """TestClient whose widget service uses a widget with an allowlist."""
+def _build_client(
+    monkeypatch,
+    allowed_domains: list[str],
+    *,
+    settings: Settings | None = None,
+) -> tuple[TestClient, WidgetService, ChatEnv]:
     monkeypatch.setenv("COOKIE_SECURE", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    # Deterministic regardless of a local `.env` (which may set production).
+    if settings is None:
+        monkeypatch.setenv("ENVIRONMENT", "development")
     get_settings.cache_clear()
     chat_env = build_chat_env()
-    widget_service = _build_widget_service(chat_env.websites, ALLOWED)
+    widget_service = _build_widget_service(chat_env.websites, allowed_domains, settings)
     feedback_service = FeedbackService(
         feedback=FakeFeedbackRepository(),
         messages=chat_env.messages,
@@ -79,8 +109,33 @@ def client(monkeypatch):
     app.dependency_overrides[get_widget_service] = lambda: widget_service
     app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
     app.dependency_overrides[get_feedback_service] = lambda: feedback_service
-    with TestClient(app) as test_client:
+    return TestClient(app), widget_service, chat_env
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """TestClient whose widget service uses a widget with an allowlist (dev)."""
+    test_client, widget_service, chat_env = _build_client(monkeypatch, ALLOWED)
+    with test_client:
         yield test_client, widget_service, chat_env
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def unconfigured_client(monkeypatch):
+    """Widget with an empty allowlist (dev)."""
+    test_client, _, _ = _build_client(monkeypatch, [])
+    with test_client:
+        yield test_client
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def production_client(monkeypatch):
+    """Widget with an allowlist under production settings."""
+    test_client, _, _ = _build_client(monkeypatch, ALLOWED, settings=_prod_settings())
+    with test_client:
+        yield test_client
     get_settings.cache_clear()
 
 
@@ -263,16 +318,8 @@ async def test_disallowed_origin_config_does_not_reveal_website(client) -> None:
 @pytest.fixture
 def wildcard_client(monkeypatch):
     """Widget whose allowlist is `*.acme.example` (subdomains + bare domain)."""
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
-    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
-    get_settings.cache_clear()
-    chat_env = build_chat_env()
-    widget_service = _build_widget_service(chat_env.websites, ["*.acme.example"])
-    app = create_app()
-    app.dependency_overrides[get_widget_service] = lambda: widget_service
-    app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
-    with TestClient(app) as test_client:
+    test_client, _, _ = _build_client(monkeypatch, ["*.acme.example"])
+    with test_client:
         yield test_client
     get_settings.cache_clear()
 
@@ -300,3 +347,91 @@ async def test_wildcard_allowlist_matches_subdomain_and_bare(wildcard_client) ->
         ).status_code
         == 403
     )
+
+
+# ------------------------------------------------------- development hosts
+
+
+async def test_development_hosts_allowed_without_allowlist_entry(client) -> None:
+    test_client, _, _ = client
+    # Loopback hosts not in `cors_origins` are auto-permitted in development
+    # so a developer can embed without editing the allowlist.
+    for origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+        response = test_client.get(
+            f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": origin}
+        )
+        assert response.status_code == 200, origin
+
+
+async def test_production_blocks_loopback_origin(production_client) -> None:
+    test_client = production_client
+    # Development-only loopback auto-allow is off in production: a local embed
+    # must be explicitly allowlisted (or served through an allowed domain).
+    response = test_client.get(
+        f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "http://localhost:5173"}
+    )
+    assert response.status_code == 403
+    body = response.json()["error"]
+    assert body["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+    assert "localhost" in body["message"]
+
+
+# ------------------------------------------------------ empty allowlist
+
+
+async def test_empty_allowlist_blocks_browser_origin(unconfigured_client) -> None:
+    test_client = unconfigured_client
+    response = test_client.get(
+        f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "https://acme.example"}
+    )
+    assert response.status_code == 403
+    body = response.json()["error"]
+    assert body["code"] == "WIDGET_DOMAIN_NOT_CONFIGURED"
+
+
+async def test_empty_allowlist_still_allows_non_browser_clients(
+    unconfigured_client,
+) -> None:
+    test_client = unconfigured_client
+    response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}")
+    assert response.status_code == 200
+
+
+# --------------------------------------------------------- error messages
+
+
+async def test_disallowed_origin_message_includes_hostname(client) -> None:
+    test_client, _, _ = client
+    response = test_client.get(
+        f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "https://evil.example"}
+    )
+    assert response.status_code == 403
+    body = response.json()["error"]
+    assert body["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+    assert "evil.example" in body["message"]
+
+
+async def test_domain_not_configured_message_is_actionable(unconfigured_client) -> None:
+    test_client = unconfigured_client
+    response = test_client.get(
+        f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "https://acme.example"}
+    )
+    body = response.json()["error"]
+    assert body["code"] == "WIDGET_DOMAIN_NOT_CONFIGURED"
+    assert "Add allowed domains" in body["message"]
+
+
+# ----------------------------------------------------------- open embedding
+
+
+async def test_asterisk_allowlist_opens_embedding(monkeypatch) -> None:
+    test_client, _, _ = _build_client(monkeypatch, ["*"])
+    with test_client:
+        assert (
+            test_client.get(
+                f"/api/widget/v1/config/{WIDGET_ID}",
+                headers={"Origin": "https://anything.example"},
+            ).status_code
+            == 200
+        )
+    get_settings.cache_clear()

@@ -69,7 +69,33 @@ describe('fetchPublicConfig', () => {
     const store = fakeStore();
     const fetchImpl = vi.fn(async () => jsonResponse({}, 404));
     await expect(fetchPublicConfig(OPTIONS, fetchImpl, store)).rejects.toMatchObject({
-      code: 'config',
+      code: 'invalid',
+    });
+  });
+
+  it('surfaces an invalid widget id from the backend error envelope', async () => {
+    const store = fakeStore();
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: { code: 'WIDGET_NOT_FOUND', message: 'Widget not found.' } }, 404),
+    );
+    await expect(fetchPublicConfig(OPTIONS, fetchImpl, store)).rejects.toMatchObject({
+      code: 'widget_not_found',
+      userMessage: 'Invalid widget ID',
+      status: 404,
+    });
+  });
+
+  it('surfaces a disabled widget from the backend error envelope', async () => {
+    const store = fakeStore();
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        { error: { code: 'WIDGET_DISABLED', message: 'Widget is not available.' } },
+        403,
+      ),
+    );
+    await expect(fetchPublicConfig(OPTIONS, fetchImpl, store)).rejects.toMatchObject({
+      code: 'widget_disabled',
+      userMessage: 'This assistant is currently unavailable',
     });
   });
 });
@@ -90,5 +116,24 @@ describe('loadConfig', () => {
     const fetchImpl = vi.fn(async () => jsonResponse(CONFIG));
     const config = await loadConfig(OPTIONS, fetchImpl);
     expect(config).toEqual(CONFIG);
+  });
+
+  it('preserves an explicitly disabled config instead of defaulting', async () => {
+    const store = fakeStore();
+    const options = { ...OPTIONS, widgetId: 'widget_disabled_1' };
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ ...CONFIG, widget_id: 'widget_disabled_1', enabled: false }),
+    );
+    const config = await loadConfig(options, fetchImpl, store);
+    expect(config.enabled).toBe(false);
+  });
+
+  it('falls back to safe defaults when the widget id is rejected', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: { code: 'WIDGET_NOT_FOUND', message: 'Widget not found.' } }, 404),
+    );
+    const config = await loadConfig(OPTIONS, fetchImpl);
+    expect(config.widget_id).toBe('widget_1');
+    expect(config.enabled).toBe(true);
   });
 });

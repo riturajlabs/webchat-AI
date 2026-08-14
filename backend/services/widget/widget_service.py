@@ -23,6 +23,7 @@ from backend.core.errors import (
     MessageLimitReachedError,
     WebsiteNotReadyError,
     WidgetDisabledError,
+    WidgetDomainNotConfiguredError,
     WidgetNotFoundError,
     WidgetOriginNotAllowedError,
 )
@@ -80,16 +81,20 @@ class WidgetService:
     # ------------------------------------------------------------ config
 
     async def validate_origin(self, widget_id: str, origin: str | None) -> None:
-        """Reject browser embeds from domains outside the widget allowlist.
+        """Reject browser embeds from origins outside the widget allowlist.
 
         Policy (production hardening):
           * no `Origin` header → allowed (non-browser clients; curl/SSE are
             not an embed and cannot be validated anyway);
-          * widget has an empty allowlist → allowed (legacy permissive mode);
-          * otherwise the `Origin` hostname must be in the allowlist, or be a
-            configured dashboard origin (widget-builder previews are always
-            permitted). `Origin: null` (sandboxed iframe) is never allowed
-            once a allowlist is configured.
+          * widget has an empty allowlist → browser embeds are blocked with
+            `WIDGET_DOMAIN_NOT_CONFIGURED` until the tenant configures at
+            least one domain (or opts into open embedding with the literal
+            `*` entry) - an empty allowlist never means "any origin";
+          * otherwise the `Origin` hostname must be in the allowlist, be a
+            configured dashboard origin (widget-builder previews), or be a
+            development host (`localhost`/`127.0.0.1`) when running in
+            `development` - never in production. `Origin: null` (sandboxed
+            iframe) is never allowed.
         """
         if origin is None:
             return
@@ -97,15 +102,22 @@ class WidgetService:
         if widget is None:
             raise WidgetNotFoundError("Widget not found.")
         allowed = list(widget.allowed_domains or [])
-        if not allowed:
+        # Dashboard origins (widget-builder preview, local dev) and, in
+        # development only, the loopback hosts are always permitted so the
+        # tenant can preview/test without editing the allowlist.
+        effective = [*allowed, *self._dashboard_origins(), *self._development_hosts()]
+        if origin_allowed(origin, effective):
             return
-        # Dashboard origins (widget-builder preview, local dev) are always
-        # permitted so the tenant can preview without editing the allowlist.
-        allowed.extend(self._dashboard_origins())
-        if not origin_allowed(origin, allowed):
-            raise WidgetOriginNotAllowedError(
-                "This domain is not allowed to embed this widget."
+        if not allowed:
+            raise WidgetDomainNotConfiguredError(
+                "No allowed domains are configured for this widget. "
+                "Add allowed domains from the dashboard."
             )
+        host = origin_hostname(origin) or "unknown"
+        raise WidgetOriginNotAllowedError(
+            f"Domain {host} is not allowed for this widget. "
+            "Add it to the allowed domains from the dashboard."
+        )
 
     def _dashboard_origins(self) -> list[str]:
         return [
@@ -113,6 +125,18 @@ class WidgetService:
             for origin in self._settings.cors_origins
             if (host := origin_hostname(str(origin))) is not None
         ]
+
+    def _development_hosts(self) -> list[str]:
+        """Loopback hosts allowed to embed in development only.
+
+        `localhost`/`127.0.0.1` are auto-permitted when the backend runs in
+        `development` so a developer can test an embed without editing the
+        allowlist. In production these are never auto-added: a production
+        widget can only be embedded from an explicitly allowlisted domain.
+        """
+        if self._settings.environment.lower() != "development":
+            return []
+        return ["localhost", "127.0.0.1"]
 
     async def get_public_config(self, widget_id: str) -> WidgetPublicConfig:
         """Return the public config, serving from Redis when available.

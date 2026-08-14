@@ -196,6 +196,20 @@ class WidgetOriginNotAllowedError(AppError):
     code = "WIDGET_ORIGIN_NOT_ALLOWED"
 
 
+class WidgetDomainNotConfiguredError(AppError):
+    """No embed-origin allowlist has been configured for the widget.
+
+    Raised when a widget has an empty `allowed_domains` and a browser origin
+    tries to embed it. Distinct from `WidgetOriginNotAllowedError` so clients
+    can tell "this domain is blocked" from "no domains have been configured
+    yet" - the fix differs (add a domain vs. configure the allowlist). The
+    literal `*` entry is the explicit opt-in for open embedding.
+    """
+
+    status_code = 403
+    code = "WIDGET_DOMAIN_NOT_CONFIGURED"
+
+
 class WebsiteNotReadyError(AppError):
     """Website has not finished indexing, so it cannot answer (Phase 8)."""
 

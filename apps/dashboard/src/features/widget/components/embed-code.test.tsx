@@ -68,4 +68,22 @@ describe('EmbedCode', () => {
     expect(bodyText.toLowerCase()).not.toContain('localhost');
     expect(bodyText.toLowerCase()).not.toContain('127.0.0.1');
   });
+
+  it('labels a production CDN snippet with a production note', () => {
+    setup();
+
+    expect(screen.getByText('Production snippet')).toBeInTheDocument();
+    expect(screen.queryByText('Development snippet')).not.toBeInTheDocument();
+  });
+
+  it('labels a localhost snippet as development so it is never pasted live', () => {
+    setup({
+      embedScript:
+        '<script src="http://localhost:8080/webchat-widget.iife.min.js" ' +
+        'data-widget-id="widget_abc123" data-api-base-url="http://localhost:8000" defer></script>',
+    });
+
+    expect(screen.getByText('Development snippet')).toBeInTheDocument();
+    expect(screen.getByText(/test the embed on your machine/)).toBeInTheDocument();
+  });
 });

@@ -10,6 +10,7 @@ origins once a allowlist is configured.
 import pytest
 from backend.utils.origin import (
     normalize_allowed_domains,
+    normalize_domain_entry,
     origin_allowed,
     origin_hostname,
 )
@@ -59,6 +60,20 @@ def test_normalize_entries_lowercases_and_drops_invalid() -> None:
     assert normalize_allowed_domains(["*"]) == ["*"]
 
 
+def test_normalize_entries_accepts_loopback_hosts() -> None:
+    assert normalize_allowed_domains(["localhost", "127.0.0.1", "LOCALHOST."]) == [
+        "localhost",
+        "127.0.0.1",
+        "localhost",
+    ]
+
+
+def test_normalize_entries_rejects_bare_single_label_typos() -> None:
+    # A single-label hostname other than the loopback host is a typo.
+    assert normalize_allowed_domains(["example"]) == []
+    assert normalize_allowed_domains(["*.localhost"]) == []
+
+
 @pytest.mark.parametrize(
     "entry",
     [
@@ -79,6 +94,50 @@ def test_normalize_entries_rejects_scheme_port_path_or_oversized(entry: str) -> 
     assert normalize_allowed_domains([entry]) == []
 
 
+# ---------------------------------------------------- URL-aware normalization
+
+
+@pytest.mark.parametrize(
+    ("input", "expected"),
+    [
+        ("https://example.com", "example.com"),
+        ("http://localhost:3000", "localhost"),
+        ("https://www.example.com/dashboard", "www.example.com"),
+        ("https://example.com/path?query=1#hash", "example.com"),
+        ("HTTPS://SUBDOMAIN.EXAMPLE.COM", "subdomain.example.com"),
+        ("localhost", "localhost"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("example.com", "example.com"),
+        ("*.example.com", "*.example.com"),
+        ("  Acme.Example.  ", "acme.example"),
+    ],
+)
+def test_normalize_domain_entry_extracts_hostname_from_urls(
+    input: str, expected: str
+) -> None:
+    assert normalize_domain_entry(input) == expected
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "example",
+        "localhost:3000",
+        "example.com/path",
+        "http://",
+        "https://",
+        "ftp://example.com",
+        "file:///tmp/page.html",
+        "not a hostname",
+        "user@example.com",
+        "*.localhost",
+        "-example.com",
+    ],
+)
+def test_normalize_domain_entry_rejects_invalid_input(entry: str) -> None:
+    assert normalize_domain_entry(entry) is None
+
+
 # ---------------------------------------------------------------- matching
 
 
@@ -86,8 +145,12 @@ def test_origin_allowed_no_origin_header_is_permitted() -> None:
     assert origin_allowed(None, ["acme.example"]) is True
 
 
-def test_origin_allowed_empty_allowlist_allows_everything() -> None:
-    assert origin_allowed("https://evil.example", []) is True
+def test_origin_allowed_empty_allowlist_denies_browser_origins() -> None:
+    # An empty allowlist never means "any origin": browser embeds are blocked
+    # (the service surfaces WIDGET_DOMAIN_NOT_CONFIGURED) until domains are
+    # configured. Only the literal `*` entry opts into open embedding.
+    assert origin_allowed("https://evil.example", []) is False
+    assert origin_allowed("https://evil.example", ["*"]) is True
 
 
 def test_origin_allowed_matches_hostname_only() -> None:

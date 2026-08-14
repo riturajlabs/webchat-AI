@@ -17,13 +17,13 @@ describe('AllowedDomainsEditor', () => {
     expect(screen.getByText('example.com')).toBeInTheDocument();
     expect(screen.getByText('*.store.example')).toBeInTheDocument();
     expect(screen.getByLabelText('Remove example.com')).toBeInTheDocument();
-    expect(screen.queryByText(/any website can embed/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/blocked from embedding/)).not.toBeInTheDocument();
   });
 
   it('shows an empty state when there are no domains', () => {
     setup();
 
-    expect(screen.getByText(/any website can embed/)).toBeInTheDocument();
+    expect(screen.getByText(/blocked from embedding/)).toBeInTheDocument();
     expect(screen.getByText(`0/${MAX_ALLOWED_DOMAINS}`)).toBeInTheDocument();
   });
 
@@ -49,17 +49,40 @@ describe('AllowedDomainsEditor', () => {
     expect(onChange).toHaveBeenCalledWith(['store.example.com']);
   });
 
+  it('previews what a full URL will be saved as', () => {
+    setup();
+
+    const input = screen.getByLabelText('Allowed domains');
+    fireEvent.change(input, { target: { value: 'https://www.example.com/dashboard' } });
+
+    expect(screen.getByText(/Will be saved as/)).toBeInTheDocument();
+    expect(screen.getByText('www.example.com')).toBeInTheDocument();
+  });
+
+  it('shows a live invalid hint while typing a bad entry', () => {
+    setup();
+
+    fireEvent.change(screen.getByLabelText('Allowed domains'), {
+      target: { value: 'example' },
+    });
+
+    expect(screen.getByText(/Not a valid domain/)).toBeInTheDocument();
+    expect(screen.queryByText(/Will be saved as/)).not.toBeInTheDocument();
+  });
+
   it('rejects invalid entries with a clear error', () => {
     const { onChange } = setup();
 
     fireEvent.change(screen.getByLabelText('Allowed domains'), {
-      target: { value: 'https://example.com' },
+      target: { value: 'example.com:8080' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
     expect(onChange).not.toHaveBeenCalled();
     expect(
-      screen.getByText('Use a bare hostname like example.com (optionally *.example.com).'),
+      screen.getByText(
+        'Enter a hostname like example.com, a *.example.com wildcard, or an http(s) URL.',
+      ),
     ).toBeInTheDocument();
   });
 
@@ -79,7 +102,7 @@ describe('AllowedDomainsEditor', () => {
     setup();
 
     fireEvent.change(screen.getByLabelText('Allowed domains'), {
-      target: { value: 'https://example.com' },
+      target: { value: 'example.com:8080' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     expect(screen.getByRole('alert')).toBeInTheDocument();
@@ -94,5 +117,20 @@ describe('AllowedDomainsEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove example.com' }));
 
     expect(onChange).toHaveBeenCalledWith(['store.example.com']);
+  });
+
+  it('adds the missing loopback hosts with one click', () => {
+    const { onChange } = setup(['example.com']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add localhost testing' }));
+
+    expect(onChange).toHaveBeenCalledWith(['example.com', 'localhost', '127.0.0.1']);
+  });
+
+  it('disables the loopback shortcut when both hosts are listed', () => {
+    setup(['localhost', '127.0.0.1']);
+
+    expect(screen.getByRole('button', { name: 'Add localhost testing' })).toBeDisabled();
+    expect(screen.getByText(/already in the allowlist/)).toBeInTheDocument();
   });
 });

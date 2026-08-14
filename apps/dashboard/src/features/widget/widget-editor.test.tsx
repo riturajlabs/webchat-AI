@@ -80,7 +80,7 @@ describe('WidgetEditor', () => {
     expect(screen.getByText('Powered by WebChat AI')).toBeInTheDocument();
     expect(screen.getAllByText('Allowed domains').length).toBeGreaterThan(0);
     expect(
-      screen.getByText('No allowed domains — any website can embed this widget.'),
+      screen.getByText(/No allowed domains — the widget is blocked from embedding/),
     ).toBeInTheDocument();
   });
 

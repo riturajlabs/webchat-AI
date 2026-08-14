@@ -50,3 +50,33 @@ const controller = mount({
 ${override}  host: document.querySelector('#my-chat'), // optional
 });`;
 }
+
+/**
+ * Describe which environment an embed snippet targets.
+ *
+ * The backend serves the dashboard its authoritative `embed_script`: local
+ * `WIDGET_SCRIPT_URL`/`WIDGET_API_BASE_URL` values in development, the CDN and
+ * public API in production. This powers the "environment notes" panel so a
+ * developer never pastes a localhost snippet into a live page.
+ */
+export function describeEmbedEnvironment(embedScript: string): {
+  kind: 'development' | 'production';
+  title: string;
+  message: string;
+} {
+  const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0|::1/.test(embedScript);
+  if (isLocal) {
+    return {
+      kind: 'development',
+      title: 'Development snippet',
+      message:
+        'This snippet points at your local widget dev server and API (localhost), so you can test the embed on your machine. When you deploy, the dashboard serves the production CDN snippet automatically.',
+    };
+  }
+  return {
+    kind: 'production',
+    title: 'Production snippet',
+    message:
+      'This snippet loads the production widget bundle from the CDN and talks to the public widget API, so you can paste it straight into your site.',
+  };
+}

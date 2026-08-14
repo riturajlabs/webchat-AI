@@ -33,6 +33,31 @@ describe('mintSessionToken', () => {
       code: 'server',
     });
   });
+
+  it('surfaces an invalid widget id from the backend error envelope', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ error: { code: 'WIDGET_NOT_FOUND', message: 'Widget not found.' } }, 404),
+    );
+    await expect(mintSessionToken(OPTIONS, 'visitor-1', fetchImpl)).rejects.toMatchObject({
+      code: 'widget_not_found',
+      userMessage: 'Invalid widget ID',
+      status: 404,
+    });
+  });
+
+  it('surfaces a disabled widget from the backend error envelope', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        { error: { code: 'WIDGET_DISABLED', message: 'Widget is not available.' } },
+        403,
+      ),
+    );
+    await expect(mintSessionToken(OPTIONS, 'visitor-1', fetchImpl)).rejects.toMatchObject({
+      code: 'widget_disabled',
+      userMessage: 'This assistant is currently unavailable',
+      retryable: false,
+    });
+  });
 });
 
 describe('SessionManager', () => {

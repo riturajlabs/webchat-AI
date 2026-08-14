@@ -79,7 +79,8 @@ class WidgetOut(BaseModel):
     dark_mode: bool
     auto_open: bool
     enabled: bool
-    # Embed-origin allowlist (empty = any origin may embed).
+    # Embed-origin allowlist (empty = blocked until configured; use "*" for
+    # open embedding). Normalized bare hostnames / *.wildcards.
     allowed_domains: list[str]
     created_at: datetime
     updated_at: datetime

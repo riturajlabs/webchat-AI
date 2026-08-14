@@ -1,13 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, FlaskConical, Rocket } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 
-import { buildInitExample, buildMountExample } from '../embed';
+import { buildInitExample, buildMountExample, describeEmbedEnvironment } from '../embed';
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -61,6 +61,9 @@ function CodeExample({
  * Widget embed code (Phase 11.5). Renders the ready-to-paste script tag plus
  * the programmatic `init()`/`mount()` examples, each with a copy button that
  * gives inline success feedback. The widget id is baked into every snippet.
+ * An environment note tells the developer whether the snippet is a local
+ * (development) or CDN (production) build so a localhost script never ends up
+ * on a live page.
  */
 export function EmbedCode({
   widgetId,
@@ -70,6 +73,9 @@ export function EmbedCode({
   /** Ready-to-paste script from the backend (authoritative script src). */
   embedScript: string;
 }) {
+  const environment = describeEmbedEnvironment(embedScript);
+  const EnvIcon = environment.kind === 'development' ? FlaskConical : Rocket;
+
   return (
     <Card>
       <CardHeader className="p-4 pb-2">
@@ -84,6 +90,14 @@ export function EmbedCode({
           code={embedScript}
           copyLabel="Copy embed script"
         />
+
+        <div className="flex flex-col gap-1 rounded-md border border-dashed p-3">
+          <p className="flex items-center gap-2 text-sm font-medium">
+            <EnvIcon aria-hidden="true" className="size-4 text-muted-foreground" />
+            {environment.title}
+          </p>
+          <p className="text-sm text-muted-foreground">{environment.message}</p>
+        </div>
 
         <div className="border-t pt-4">
           <p className="mb-3 text-sm text-muted-foreground">

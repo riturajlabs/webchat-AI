@@ -15,8 +15,12 @@ export type WidgetErrorCode =
   | 'server'
   | 'invalid'
   | 'config'
+  | 'widget_not_found'
   | 'widget_disabled'
-  | 'website_not_ready';
+  | 'website_not_ready'
+  | 'origin'
+  | 'domain_not_configured'
+  | 'session';
 
 export interface WidgetErrorOptions {
   code: WidgetErrorCode;
@@ -34,8 +38,12 @@ const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
   server: 'Something went wrong on our side',
   invalid: 'That request could not be sent',
   config: 'Unable to load widget settings',
+  widget_not_found: 'Invalid widget ID',
   widget_disabled: 'This assistant is currently unavailable',
   website_not_ready: 'This assistant is still being set up',
+  origin: 'This domain is not allowed to embed this assistant',
+  domain_not_configured: 'No allowed domains are configured for this assistant',
+  session: "Couldn't start the conversation. Please try again.",
 };
 
 function isRetryable(code: WidgetErrorCode): boolean {
@@ -44,6 +52,7 @@ function isRetryable(code: WidgetErrorCode): boolean {
     case 'timeout':
     case 'unauthorized':
     case 'server':
+    case 'session':
       return true;
     default:
       return false;
@@ -97,24 +106,75 @@ export function errorFromStatus(status: number, message: string): WidgetError {
   return new WidgetError({ code, message, status });
 }
 
-/** Backend AppError codes the widget chat route can emit as SSE error events. */
-const SSE_CODE_MAP: Record<string, WidgetErrorCode> = {
-  WIDGET_NOT_FOUND: 'widget_disabled',
+/**
+ * Backend `AppError` codes mapped onto the stable taxonomy. Used by both the
+ * SSE chat error events and the JSON error envelope (`{"error":{"code":...}}`)
+ * that the config/session endpoints return. `WIDGET_NOT_FOUND` is surfaced as
+ * its own code (the visitor pasted an invalid `data-widget-id`) instead of
+ * being folded into `widget_disabled`, so the message is actionable.
+ */
+const BACKEND_CODE_MAP: Record<string, WidgetErrorCode> = {
+  WIDGET_NOT_FOUND: 'widget_not_found',
   WIDGET_DISABLED: 'widget_disabled',
   WEBSITE_NOT_READY: 'website_not_ready',
   MESSAGE_LIMIT_REACHED: 'limit',
   SPAM_REJECTED: 'invalid',
   RATE_LIMIT_EXCEEDED: 'limit',
+  WIDGET_ORIGIN_NOT_ALLOWED: 'origin',
+  WIDGET_DOMAIN_NOT_CONFIGURED: 'domain_not_configured',
 };
+
+/**
+ * Map a backend error code onto the stable taxonomy.
+ * Unknown codes fall back to `server` so internals are never leaked.
+ */
+export function errorFromBackendCode(
+  code: string | undefined,
+  message: string,
+  status?: number,
+): WidgetError {
+  const mapped = code ? BACKEND_CODE_MAP[code] : undefined;
+  return new WidgetError({
+    code: mapped ?? 'server',
+    message,
+    status,
+  });
+}
 
 /**
  * Map a backend SSE `error` event code onto the stable taxonomy.
  * Unknown codes fall back to `server` so internals are never leaked.
  */
 export function errorFromSseCode(code: string | undefined, message: string): WidgetError {
-  const mapped = code ? SSE_CODE_MAP[code] : undefined;
-  return new WidgetError({
-    code: mapped ?? 'server',
-    message,
-  });
+  return errorFromBackendCode(code, message);
+}
+
+/** Shape of the backend JSON error envelope (`AppError` handler in main.py). */
+interface ErrorEnvelope {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+}
+
+/**
+ * Map a non-OK HTTP response's body onto the taxonomy.
+ *
+ * The backend returns `{"error":{"code":"WIDGET_NOT_FOUND","message":...}}`
+ * (see `backend/core/errors.py` + the `AppError` handler). When the body
+ * carries that envelope the machine code drives the mapping so the visitor
+ * sees a meaningful, actionable message; otherwise it falls back to a
+ * status-code guess. Unknown backend codes never leak: they become `server`.
+ */
+export function errorFromApiBody(status: number, body: unknown): WidgetError {
+  const envelope = (body ?? {}) as ErrorEnvelope;
+  const code = envelope?.error?.code;
+  if (code) {
+    return errorFromBackendCode(
+      code,
+      envelope.error?.message ?? `Request failed (${status})`,
+      status,
+    );
+  }
+  return errorFromStatus(status, `Request failed (${status})`);
 }

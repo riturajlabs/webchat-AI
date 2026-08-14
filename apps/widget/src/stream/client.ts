@@ -9,7 +9,7 @@
  */
 
 import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
-import { WidgetError, errorFromSseCode, errorFromStatus } from '../core/errors';
+import { WidgetError, errorFromApiBody, errorFromSseCode } from '../core/errors';
 import { fetchWithTimeout } from '../core/network';
 import { readSseStream, type SseEvent } from '../core/sse';
 import type { SessionToken } from '../core/session';
@@ -57,6 +57,15 @@ export interface StreamResult {
   aborted?: boolean;
   done?: DonePayload;
   error?: WidgetError;
+}
+
+/** Best-effort parse of a non-OK response body (see `errorFromApiBody`). */
+async function readErrorEnvelope(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -137,7 +146,11 @@ export async function streamChat(
     }
 
     if (!response.ok) {
-      const error = errorFromStatus(response.status, `Chat request failed (${response.status})`);
+      // The backend answers auth failures (e.g. a foreign-origin embed) with
+      // the JSON error envelope; parse it so the visitor gets a meaningful
+      // message rather than a generic status guess.
+      const body = await readErrorEnvelope(response);
+      const error = errorFromApiBody(response.status, body);
       handlers.onError?.(error);
       return { completed: false, error };
     }

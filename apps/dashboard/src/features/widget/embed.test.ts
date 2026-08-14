@@ -5,6 +5,7 @@ import {
   buildInitExample,
   buildMountExample,
   DASHBOARD_URL,
+  describeEmbedEnvironment,
   DOCS_WIDGET_ID,
   WIDGET_API_URL,
   WIDGET_SCRIPT_URL,
@@ -65,5 +66,24 @@ describe('production URL constants', () => {
       expect(url.toLowerCase()).not.toContain('localhost');
       expect(url.toLowerCase()).not.toContain('127.0.0.1');
     }
+  });
+});
+
+describe('describeEmbedEnvironment', () => {
+  it('flags a localhost snippet as development', () => {
+    const env = describeEmbedEnvironment(
+      '<script src="http://localhost:8080/webchat-widget.iife.min.js" ' +
+        'data-widget-id="w-1" data-api-base-url="http://localhost:8000" defer></script>',
+    );
+    expect(env.kind).toBe('development');
+    expect(env.title).toBe('Development snippet');
+    expect(env.message.toLowerCase()).toContain('localhost');
+  });
+
+  it('flags a CDN snippet as production', () => {
+    const env = describeEmbedEnvironment(buildEmbedScript('widget_abc123'));
+    expect(env.kind).toBe('production');
+    expect(env.title).toBe('Production snippet');
+    expect(env.message.toLowerCase()).not.toContain('localhost');
   });
 });

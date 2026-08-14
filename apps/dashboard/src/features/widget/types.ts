@@ -47,7 +47,11 @@ export interface WidgetConfig {
   dark_mode: boolean;
   auto_open: boolean;
   enabled: boolean;
-  /** Embed-origin allowlist; empty = any origin may embed. */
+  /**
+   * Embed-origin allowlist (normalized bare hostnames / `*.`-wildcards). An
+   * empty list blocks browser embeds (WIDGET_DOMAIN_NOT_CONFIGURED) until
+   * domains are configured; use the literal `*` for open embedding.
+   */
   allowed_domains: string[];
   created_at: string;
   updated_at: string;

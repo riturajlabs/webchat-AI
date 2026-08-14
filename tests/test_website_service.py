@@ -385,8 +385,35 @@ async def test_build_embed_script_includes_widget_api_base_url(monkeypatch) -> N
     assert 'data-api-base-url="https://api.example.com"' in script
 
 
-async def test_build_embed_script_omits_api_base_when_unset(monkeypatch) -> None:
-    monkeypatch.delenv("WIDGET_API_BASE_URL", raising=False)
+async def test_build_embed_script_development_fallback_api_base(monkeypatch) -> None:
+    # Unset WIDGET_API_BASE_URL in development → the embed pins the local API
+    # (http://localhost:8000) so a dev page never resolves the widget API to its
+    # own origin.
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("WIDGET_API_BASE_URL", "")
+    get_settings.cache_clear()
+    try:
+        env = build_website_env()
+        script = env.service.build_embed_script("widget-123")
+    finally:
+        get_settings.cache_clear()
+    assert 'data-api-base-url="http://localhost:8000"' in script
+
+
+async def test_build_embed_script_omits_api_base_when_unset_in_production(
+    monkeypatch,
+) -> None:
+    # In production an unset WIDGET_API_BASE_URL is a deployment gap: the
+    # attribute is omitted (no localhost fallback) and the build-time bundle
+    # default applies until a real public API origin is configured.
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET", "x" * 40)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("EMBEDDING_PROVIDER_ORDER", '["gemini"]')
+    monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
+    monkeypatch.setenv(
+        "WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js"
+    )
     monkeypatch.setenv("WIDGET_API_BASE_URL", "")
     get_settings.cache_clear()
     try:

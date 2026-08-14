@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { WidgetError, errorFromSseCode, errorFromStatus } from './errors';
+import { WidgetError, errorFromApiBody, errorFromSseCode, errorFromStatus } from './errors';
 
 describe('WidgetError', () => {
   it('exposes a stable user-facing message per code', () => {
@@ -48,14 +48,79 @@ describe('errorFromStatus', () => {
   });
 });
 
+describe('errorFromApiBody', () => {
+  it('maps the backend error envelope code onto the taxonomy', () => {
+    const error = errorFromApiBody(404, {
+      error: { code: 'WIDGET_NOT_FOUND', message: 'Widget not found.' },
+    });
+    expect(error.code).toBe('widget_not_found');
+    expect(error.userMessage).toBe('Invalid widget ID');
+    expect(error.status).toBe(404);
+  });
+
+  it('maps a disabled widget from the envelope', () => {
+    const error = errorFromApiBody(403, {
+      error: { code: 'WIDGET_DISABLED', message: 'Widget is not available.' },
+    });
+    expect(error.code).toBe('widget_disabled');
+    expect(error.userMessage).toBe('This assistant is currently unavailable');
+    expect(error.retryable).toBe(false);
+  });
+
+  it('maps a disallowed embed origin', () => {
+    const error = errorFromApiBody(403, {
+      error: { code: 'WIDGET_ORIGIN_NOT_ALLOWED', message: 'nope' },
+    });
+    expect(error.code).toBe('origin');
+    expect(error.userMessage).toBe('This domain is not allowed to embed this assistant');
+  });
+
+  it('maps an unconfigured domain allowlist', () => {
+    const error = errorFromApiBody(403, {
+      error: {
+        code: 'WIDGET_DOMAIN_NOT_CONFIGURED',
+        message: 'No allowed domains are configured for this widget.',
+      },
+    });
+    expect(error.code).toBe('domain_not_configured');
+    expect(error.userMessage).toBe('No allowed domains are configured for this assistant');
+    expect(error.retryable).toBe(false);
+  });
+
+  it('falls back to the status mapping when the body has no envelope', () => {
+    expect(errorFromApiBody(503, {}).code).toBe('server');
+    expect(errorFromApiBody(429, { message: 'x' }).code).toBe('limit');
+    expect(errorFromApiBody(500, 'plain text').code).toBe('server');
+    expect(errorFromApiBody(404, {}).code).toBe('invalid');
+  });
+
+  it('never leaks unknown backend codes', () => {
+    const error = errorFromApiBody(400, {
+      error: { code: 'INTERNAL_DB_PASSWORD', message: 'leak' },
+    });
+    expect(error.code).toBe('server');
+    expect(error.userMessage).toBe('Something went wrong on our side');
+  });
+});
+
 describe('errorFromSseCode', () => {
   it('maps known backend AppError codes onto the taxonomy', () => {
-    expect(errorFromSseCode('WIDGET_NOT_FOUND', 'm').code).toBe('widget_disabled');
+    expect(errorFromSseCode('WIDGET_NOT_FOUND', 'm').code).toBe('widget_not_found');
     expect(errorFromSseCode('WIDGET_DISABLED', 'm').code).toBe('widget_disabled');
     expect(errorFromSseCode('WEBSITE_NOT_READY', 'm').code).toBe('website_not_ready');
     expect(errorFromSseCode('MESSAGE_LIMIT_REACHED', 'm').code).toBe('limit');
     expect(errorFromSseCode('SPAM_REJECTED', 'm').code).toBe('invalid');
     expect(errorFromSseCode('RATE_LIMIT_EXCEEDED', 'm').code).toBe('limit');
+    expect(errorFromSseCode('WIDGET_DOMAIN_NOT_CONFIGURED', 'm').code).toBe(
+      'domain_not_configured',
+    );
+  });
+
+  it('surfaces an invalid widget id with an actionable message', () => {
+    const error = errorFromSseCode('WIDGET_NOT_FOUND', 'Widget not found.');
+    expect(error.code).toBe('widget_not_found');
+    expect(error.userMessage).toBe('Invalid widget ID');
+    expect(error.retryable).toBe(false);
   });
 
   it('falls back to server for unknown codes so internals never leak', () => {

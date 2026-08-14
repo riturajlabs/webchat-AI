@@ -193,6 +193,7 @@ def test_update_widget_config_validation(client) -> None:
         ({"suggested_questions": [""]}, "blank suggested question"),
         ({"welcome_message": "x" * 501}, "welcome message too long"),
         ({"placeholder": "x" * 121}, "placeholder too long"),
+        ({"allowed_domains": ["example"]}, "bare single-label hostname rejected"),
         ({}, "empty patch body"),
     ]
     for payload, _label in cases:

@@ -13,7 +13,7 @@ import {
   type WidgetPublicConfig,
   type WidgetOptions,
 } from './types';
-import { WidgetError } from '../core/errors';
+import { WidgetError, errorFromApiBody } from '../core/errors';
 import { fetchWithTimeout } from '../core/network';
 
 export const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -72,15 +72,28 @@ export async function fetchPublicConfig(
     });
   }
   if (!response.ok) {
-    throw new WidgetError({
-      code: 'config',
-      message: `Config request failed (${response.status})`,
-      status: response.status,
-    });
+    // Read the backend's JSON error envelope so the visitor gets an
+    // actionable message (e.g. "Invalid widget ID" for a bogus embed tag)
+    // instead of a generic config failure.
+    const body = await readErrorEnvelope(response);
+    throw errorFromApiBody(response.status, body);
   }
   const config = (await response.json()) as WidgetPublicConfig;
   store.set(options.widgetId, config);
   return config;
+}
+
+/**
+ * Best-effort parse of a non-OK response body. Network/fetch errors have no
+ * body; when the body is not JSON the empty envelope falls through to the
+ * status-code mapping.
+ */
+async function readErrorEnvelope(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
 }
 
 /** Resolve a config, never throwing: falls back to safe defaults on failure. */

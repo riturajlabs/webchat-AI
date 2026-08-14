@@ -192,6 +192,25 @@ describe('streamChat', () => {
     expect(result.error?.code).toBe('limit');
   });
 
+  it('reads the backend error envelope on non-OK responses', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'WIDGET_DISABLED', message: 'off' } }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.error?.code).toBe('widget_disabled');
+    expect(result.error?.userMessage).toBe('This assistant is currently unavailable');
+    expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'widget_disabled' }));
+  });
+
   it('classifies a slow connect as a timeout error', async () => {
     vi.useFakeTimers();
     let abortSignal: AbortSignal | undefined;

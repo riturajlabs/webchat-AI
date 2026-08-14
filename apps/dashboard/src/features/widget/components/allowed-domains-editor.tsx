@@ -1,13 +1,14 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { Globe, Plus, Trash2 } from 'lucide-react';
+import { FlaskConical, Globe, Plus, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 
-import { MAX_ALLOWED_DOMAINS, normalizeDomain } from '../domain';
+import { LOOPBACK_HOSTS, MAX_ALLOWED_DOMAINS, normalizeDomain } from '../domain';
 
 export function AllowedDomainsEditor({
   domains,
@@ -20,6 +21,10 @@ export function AllowedDomainsEditor({
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
 
+  const preview = normalizeDomain(value);
+  const typing = value.trim().length > 0;
+  const missingLoopback = LOOPBACK_HOSTS.filter((host) => !domains.includes(host));
+
   function add() {
     const entry = value.trim();
     if (!entry) {
@@ -28,7 +33,7 @@ export function AllowedDomainsEditor({
     }
     const normalized = normalizeDomain(entry);
     if (normalized === null) {
-      setError('Use a bare hostname like example.com (optionally *.example.com).');
+      setError('Enter a hostname like example.com, a *.example.com wildcard, or an http(s) URL.');
       return;
     }
     if (domains.includes(normalized)) {
@@ -48,8 +53,15 @@ export function AllowedDomainsEditor({
     onChange(domains.filter((entry) => entry !== domain));
   }
 
+  function addLoopbackHosts() {
+    if (missingLoopback.length === 0) {
+      return;
+    }
+    onChange([...domains, ...missingLoopback]);
+  }
+
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <Label htmlFor={inputId}>Allowed domains</Label>
         <span className="text-xs text-muted-foreground">
@@ -57,8 +69,9 @@ export function AllowedDomainsEditor({
         </span>
       </div>
       <p className="text-sm text-muted-foreground">
-        Only these domains may embed the widget. Leave empty to allow any origin, or use
-        *.example.com to allow every subdomain.
+        Only these domains may embed the widget. Enter a full URL — only its hostname is saved — or
+        use *.example.com to allow every subdomain. An empty list blocks embeds until you add a
+        domain.
       </p>
       <div className="flex items-center gap-2">
         <Input
@@ -82,6 +95,23 @@ export function AllowedDomainsEditor({
           Add
         </Button>
       </div>
+      {typing ? (
+        <p
+          role="status"
+          className={cn(
+            'rounded-md px-3 py-2 text-sm',
+            preview !== null ? 'bg-primary/5 text-primary' : 'bg-destructive/10 text-destructive',
+          )}
+        >
+          {preview !== null ? (
+            <>
+              Will be saved as: <span className="font-mono">{preview}</span>
+            </>
+          ) : (
+            'Not a valid domain. Use example.com, *.example.com, or an http(s) URL.'
+          )}
+        </p>
+      ) : null}
       {error !== null ? (
         <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
@@ -89,7 +119,8 @@ export function AllowedDomainsEditor({
       ) : null}
       {domains.length === 0 ? (
         <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-          No allowed domains — any website can embed this widget.
+          No allowed domains — the widget is blocked from embedding on any website until you add a
+          domain.
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
@@ -115,6 +146,37 @@ export function AllowedDomainsEditor({
           ))}
         </ul>
       )}
+      <div className="flex flex-col gap-2 rounded-md border border-dashed p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col gap-0.5">
+            <Label>Development domains</Label>
+            <p className="text-sm text-muted-foreground">
+              localhost and 127.0.0.1 are auto-permitted while the API runs in development, so you
+              can test the embed locally without touching the list.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addLoopbackHosts}
+            disabled={missingLoopback.length === 0}
+          >
+            <FlaskConical aria-hidden="true" />
+            Add localhost testing
+          </Button>
+        </div>
+        {missingLoopback.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {LOOPBACK_HOSTS.join(' and ')} are already in the allowlist.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Adds {missingLoopback.join(' and ')} — recommended if you test on a domain other than
+            localhost (e.g. 10.0.0.1 or a staging host).
+          </p>
+        )}
+      </div>
     </div>
   );
 }

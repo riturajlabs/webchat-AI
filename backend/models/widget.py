@@ -41,10 +41,11 @@ class Widget(BaseModel):
     dark_mode: bool = False
     auto_open: bool = False
     enabled: bool = True
-    # Embed-origin allowlist (production hardening). Empty = any origin may
-    # embed (legacy default); non-empty = browser requests whose `Origin` host
-    # is not listed are rejected. Seeded from the website host at creation and
-    # editable via the dashboard widget builder.
+    # Embed-origin allowlist (production hardening). Normalized bare hostnames
+    # (optionally `*.`-wildcards); the literal `*` opts into open embedding.
+    # An empty list blocks browser embeds (WIDGET_DOMAIN_NOT_CONFIGURED) until
+    # domains are configured - it never means "any origin". Seeded from the
+    # website host at creation and editable via the dashboard widget builder.
     allowed_domains: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime

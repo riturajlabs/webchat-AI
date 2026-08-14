@@ -253,17 +253,30 @@ class WebsiteService:
     def build_embed_script(self, widget_id: str) -> str:
         """One-line embed snippet for a widget.
 
-        `data-api-base-url` is included when `WIDGET_API_BASE_URL` is
-        configured so the SDK resolves the API origin from the embed tag (the
-        highest-precedence source) regardless of which build the served bundle
-        was produced with. The SDK appends `/api/widget/v1` when needed.
+        `data-api-base-url` is included so the SDK resolves the API origin from
+        the embed tag (the highest-precedence source) regardless of which build
+        the served bundle was produced with. The SDK appends `/api/widget/v1`
+        when needed.
+
+        Development: falls back to the local API (`http://localhost:8000`)
+        when `WIDGET_API_BASE_URL` is unset so a local embed never resolves to
+        the page's own origin. Production requires `WIDGET_API_BASE_URL` (or
+        omits the attribute so the build-time bundle default applies).
         """
-        api_base = self._settings.widget_api_base_url.rstrip("/")
+        api_base = self._widget_api_base()
         api_attr = f' data-api-base-url="{api_base}"' if api_base else ""
         return (
             f'<script src="{self._settings.widget_script_url}" '
             f'data-widget-id="{widget_id}"{api_attr} defer></script>'
         )
+
+    def _widget_api_base(self) -> str:
+        """Public API origin for the embed tag (empty = omit the attribute)."""
+        if self._settings.widget_api_base_url:
+            return self._settings.widget_api_base_url.rstrip("/")
+        if self._settings.environment.lower() == "production":
+            return ""
+        return "http://localhost:8000"
 
 
 __all__ = [
