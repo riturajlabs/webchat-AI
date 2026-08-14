@@ -1,9 +1,10 @@
 """Conversation management endpoints (Phase 11.2).
 
-Read/delete views over chat history. All routes require a valid bearer access
-token with tenant role `owner` or `admin`. Tenant scoping comes from the
-authenticated principal - the request path/query can never select another
-tenant's conversations (00-AI-Development-Rules §7).
+Read/delete views over chat history. All routes require a valid bearer
+credential with tenant role `owner` or `admin` - a user access JWT or a
+`wc_*` API key (which always authenticates as owner). Tenant scoping comes
+from the authenticated principal - the request path/query can never select
+another tenant's conversations (00-AI-Development-Rules §7).
 
     GET    /api/conversations            paginated list (search + website filter)
     GET    /api/conversations/{id}       detail with full message history
@@ -17,9 +18,10 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from backend.api.deps import (
     client_ip,
     conversations_limiter,
-    current_user,
+    current_principal,
+    enforce_api_key_rate_limit,
     get_conversation_service,
-    require_role,
+    require_principal_role,
 )
 from backend.schemas.conversations import (
     MAX_CONVERSATION_SEARCH_LENGTH,
@@ -29,21 +31,23 @@ from backend.schemas.conversations import (
     ConversationMessageOut,
     ConversationSummary,
 )
+from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
 from backend.services.conversations.conversation_service import ConversationService
 
 router = APIRouter(
     prefix="/conversations",
     tags=["conversations"],
-    dependencies=[Depends(require_role("owner", "admin"))],
+    dependencies=[Depends(require_principal_role("owner", "admin"))],
 )
 
 
 @router.get("", response_model=ConversationListResponse)
 async def list_conversations(
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[ConversationService, Depends(get_conversation_service)],
     _: Annotated[None, Depends(conversations_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
     response: Response,
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=MAX_LIST_PAGE_SIZE)] = 20,
@@ -85,9 +89,10 @@ async def list_conversations(
 @router.get("/{session_id}", response_model=ConversationDetail)
 async def get_conversation(
     session_id: str,
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[ConversationService, Depends(get_conversation_service)],
     _: Annotated[None, Depends(conversations_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
 ) -> ConversationDetail:
     item = await service.get_conversation(principal.tenant_id, session_id)
     return ConversationDetail(
@@ -117,9 +122,10 @@ async def get_conversation(
 async def delete_conversation(
     session_id: str,
     request: Request,
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[ConversationService, Depends(get_conversation_service)],
     _: Annotated[None, Depends(conversations_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
 ) -> None:
     await service.delete_conversation(
         principal.tenant_id,

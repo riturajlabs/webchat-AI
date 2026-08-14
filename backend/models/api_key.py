@@ -31,19 +31,30 @@ class ApiKey(BaseModel):
     key_prefix: str = API_KEY_PREFIX
     hashed_secret: str
     status: str = API_KEY_STATUS_ACTIVE
+    # Optional expiry (UTC). When set, the key stops authenticating after this
+    # moment even if its status is still `active` (Sprint 2).
+    expires_at: datetime | None = None
     last_used_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     schema_version: int = 1
 
     @classmethod
-    def new(cls, *, tenant_id: str, name: str, hashed_secret: str) -> "ApiKey":
+    def new(
+        cls,
+        *,
+        tenant_id: str,
+        name: str,
+        hashed_secret: str,
+        expires_at: datetime | None = None,
+    ) -> "ApiKey":
         now = utcnow()
         return cls(
             id=new_id(),
             tenant_id=tenant_id,
             name=name,
             hashed_secret=hashed_secret,
+            expires_at=expires_at,
             created_at=now,
             updated_at=now,
         )

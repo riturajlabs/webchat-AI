@@ -25,7 +25,11 @@ from backend.core.errors import (
 )
 from backend.core.rate_limit import SlidingWindowRateLimiter
 from backend.core.redis import get_redis
-from backend.core.security import csrf_tokens_match, decode_widget_session_token
+from backend.core.security import (
+    API_KEY_PREFIX,
+    csrf_tokens_match,
+    decode_widget_session_token,
+)
 from backend.repositories import (
     MongoAdminRepository,
     MongoAnalyticsRepository,
@@ -47,7 +51,7 @@ from backend.repositories import (
 from backend.schemas.widget import CreateWidgetSessionRequest
 from backend.services.admin import AdminService
 from backend.services.analytics import AnalyticsService
-from backend.services.api_keys import ApiKeyService
+from backend.services.api_keys import ApiKeyPrincipal, ApiKeyService
 from backend.services.auth import AuthService, Principal
 from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
@@ -159,10 +163,15 @@ def get_analytics_service(
 def get_api_key_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
 ) -> ApiKeyService:
-    """Build the API key service with MongoDB-backed repositories (docs/05 §12)."""
+    """Build the API key service with MongoDB-backed repositories (docs/05 §12).
+
+    `tenants` is needed so `authenticate_api_key` can re-check that the owning
+    tenant is still active before resolving a `wc_*` key to a principal.
+    """
     return ApiKeyService(
         keys=MongoApiKeyRepository(db),
         audit=MongoAuditLogRepository(db),
+        tenants=MongoTenantRepository(db),
     )
 
 
@@ -289,6 +298,46 @@ def require_role(*roles: str) -> Callable[[Principal], None]:
     return _require
 
 
+async def current_principal(
+    request: Request,
+    access_token: Annotated[str, Depends(get_access_token)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+    api_keys: Annotated[ApiKeyService, Depends(get_api_key_service)],
+) -> Principal | ApiKeyPrincipal:
+    """Resolve a request identity: a user access JWT or a `wc_*` API key.
+
+    API keys always authenticate as `owner` for their owning tenant (Sprint 2);
+    the key is never a user session, so `user_id` is `None` and the principal
+    is duck-typed for the read/mutation routes that accept it. User access
+    tokens are resolved exactly like `current_user`.
+    """
+    if access_token.startswith(API_KEY_PREFIX):
+        return await api_keys.authenticate_api_key(
+            raw_secret=access_token,
+            ip_address=client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+    return await auth.authenticate(access_token)
+
+
+def require_principal_role(*roles: str) -> Callable[[Principal | ApiKeyPrincipal], None]:
+    """Return a dependency guarding a route for one of `roles`, API-key aware.
+
+    Same contract as `require_role`, but the principal may come from either a
+    user access token or a `wc_*` API key (which authenticates as `owner`).
+    Routes that must never accept API keys (user management, website CRUD,
+    widget configuration, admin) keep `require_role`/`current_user`.
+    """
+
+    def _require(
+        principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
+    ) -> None:
+        if principal.role not in roles:
+            raise ForbiddenError("Insufficient permissions for this action.")
+
+    return _require
+
+
 def client_ip(request: Request) -> str:
     """Best-effort client IP.
 
@@ -357,6 +406,7 @@ class RateLimitDependency:
 register_limiter = RateLimitDependency(limit=10, window_seconds=3600)
 login_limiter = RateLimitDependency(limit=20, window_seconds=900)
 verify_email_limiter = RateLimitDependency(limit=10, window_seconds=3600)
+resend_verification_limiter = RateLimitDependency(limit=5, window_seconds=3600)
 forgot_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
 reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
 # Phase 3 website-management abuse protection (create/update/delete/list/get).
@@ -378,6 +428,36 @@ admin_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)
+
+
+async def enforce_api_key_rate_limit(
+    request: Request,
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
+) -> None:
+    """Dedicated sliding-window budget for requests authenticated by `wc_*` keys.
+
+    Programmatic keys get their own `rl:apikey:{key_id}` window
+    (`api_key_rate_limit_per_minute`) so a bursty integration cannot exhaust a
+    shared per-IP budget, and a shared egress IP cannot rotate budgets by key.
+    No-op for user (access-token) requests, which keep the route's per-IP
+    limiter. Fails closed on Redis outage (ADR-004), like `RateLimitDependency`.
+    """
+    if not isinstance(principal, ApiKeyPrincipal):
+        return
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    limiter = SlidingWindowRateLimiter(
+        _RedisRateLimitStore(get_redis()),
+        limit=settings.api_key_rate_limit_per_minute,
+        window_seconds=60,
+    )
+    try:
+        allowed = await limiter.consume(f"rl:apikey:{principal.key_id}")
+    except Exception as exc:
+        raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
+    if not allowed:
+        raise RateLimitExceededError("Too many requests. Please try again later.")
 
 
 class WidgetRateLimitDependency:

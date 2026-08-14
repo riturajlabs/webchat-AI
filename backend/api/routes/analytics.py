@@ -1,7 +1,8 @@
 """Analytics endpoints (Phase 11.3).
 
 Read-only reporting over the existing chat/usage data. All routes require a
-valid bearer access token with tenant role `owner` or `admin`. Tenant scoping
+valid bearer credential with tenant role `owner` or `admin` - a user access
+JWT or a `wc_*` API key (which always authenticates as owner). Tenant scoping
 comes from the authenticated principal - the request can never select another
 tenant's analytics (00-AI-Development-Rules §7).
 
@@ -17,9 +18,10 @@ from fastapi import APIRouter, Depends, Query
 
 from backend.api.deps import (
     analytics_limiter,
-    current_user,
+    current_principal,
+    enforce_api_key_rate_limit,
     get_analytics_service,
-    require_role,
+    require_principal_role,
 )
 from backend.schemas.analytics import (
     DEFAULT_ANALYTICS_DAYS,
@@ -32,20 +34,22 @@ from backend.schemas.analytics import (
     TopWebsite,
 )
 from backend.services.analytics import AnalyticsService
+from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
 
 router = APIRouter(
     prefix="/analytics",
     tags=["analytics"],
-    dependencies=[Depends(require_role("owner", "admin"))],
+    dependencies=[Depends(require_principal_role("owner", "admin"))],
 )
 
 
 @router.get("/summary", response_model=AnalyticsSummary)
 async def get_analytics_summary(
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> AnalyticsSummary:
@@ -64,9 +68,10 @@ async def get_analytics_summary(
 
 @router.get("/timeseries", response_model=list[TimeseriesPoint])
 async def get_analytics_timeseries(
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> list[TimeseriesPoint]:
@@ -86,9 +91,10 @@ async def get_analytics_timeseries(
 
 @router.get("/top-websites", response_model=list[TopWebsite])
 async def get_top_websites(
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     limit: Annotated[int, Query(ge=1, le=MAX_TOP_WEBSITES_LIMIT)] = DEFAULT_TOP_WEBSITES_LIMIT,
 ) -> list[TopWebsite]:
@@ -106,9 +112,10 @@ async def get_top_websites(
 
 @router.get("/performance", response_model=ResponseMetrics)
 async def get_response_metrics(
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> ResponseMetrics:

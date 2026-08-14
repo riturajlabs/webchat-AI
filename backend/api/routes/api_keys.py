@@ -7,6 +7,10 @@ body can never select another tenant's keys (00-AI-Development-Rules §7).
     POST   /api/api-keys       create a key (raw secret shown exactly once)
     GET    /api/api-keys       list active keys
     DELETE /api/api-keys/{id}  revoke a key (soft delete)
+
+Creation mints a `wc_*` secret whose SHA-256 hash is the only thing persisted
+(ADR-004); the raw value is returned to the caller exactly once. Revoke is a
+soft delete: the record is kept for audit but hidden from tenant-facing reads.
 """
 
 from typing import Annotated
@@ -20,7 +24,11 @@ from backend.api.deps import (
     get_api_key_service,
     require_role,
 )
-from backend.schemas.api_keys import ApiKeyOut, CreateApiKeyRequest, CreateApiKeyResponse
+from backend.schemas.api_keys import (
+    ApiKeyOut,
+    CreateApiKeyRequest,
+    CreateApiKeyResponse,
+)
 from backend.services.api_keys import ApiKeyService
 from backend.services.auth import Principal
 

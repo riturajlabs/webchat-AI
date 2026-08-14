@@ -12,19 +12,28 @@ Top-5) + Gemini streaming and returns a Server-Sent-Events stream:
 
 All errors surface as `error` events (200), except auth/role/rate-limit which
 fail before the stream begins. The chatbot never answers without context
-(hallucination guard - docs/06 Phase 6 rules).
+(hallucination guard - docs/06 Phase 6 rules). If the client disconnects
+mid-stream the pipeline stops at the next chunk boundary - no further tokens
+are consumed and the partial answer is not persisted.
 """
 
-import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
-from backend.api.deps import chat_limiter, current_user, get_rag_service, require_role
+from backend.api.deps import (
+    chat_limiter,
+    current_principal,
+    enforce_api_key_rate_limit,
+    get_rag_service,
+    require_principal_role,
+)
+from backend.api.sse import stream_with_disconnect
 from backend.schemas.chat import ChatRequest
+from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
 from backend.services.chat.rag_service import RagService
 
@@ -33,33 +42,34 @@ logger = logging.getLogger("webchat_ai")
 router = APIRouter(
     prefix="/chat",
     tags=["chat"],
-    dependencies=[Depends(require_role("owner", "admin"))],
+    dependencies=[Depends(require_principal_role("owner", "admin"))],
 )
-
-
-def _sse(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 @router.post("/stream")
 async def stream_chat(
     body: ChatRequest,
-    principal: Annotated[Principal, Depends(current_user)],
+    request: Request,
+    principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[RagService, Depends(get_rag_service)],
     _: Annotated[None, Depends(chat_limiter)],
+    __: Annotated[None, Depends(enforce_api_key_rate_limit)],
 ) -> StreamingResponse:
     """Stream an answer for `question` from the tenant's knowledge base."""
 
     async def event_stream() -> AsyncIterator[str]:
-        async for event in service.stream_answer(
-            tenant_id=principal.tenant_id,
-            website_id=body.website_id,
-            question=body.question,
-            session_id=body.session_id,
-            visitor_id=body.visitor_id,
-            user_id=principal.user_id,
+        async for frame in stream_with_disconnect(
+            request,
+            service.stream_answer(
+                tenant_id=principal.tenant_id,
+                website_id=body.website_id,
+                question=body.question,
+                session_id=body.session_id,
+                visitor_id=body.visitor_id,
+                user_id=principal.user_id,
+            ),
         ):
-            yield _sse(event["event"], event["data"])
+            yield frame
 
     return StreamingResponse(
         event_stream(),
