@@ -7,6 +7,7 @@ from backend.main import create_app
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import VALID_PASSWORD, build_auth_env
+from tests.http_helpers import register_verified
 from tests.website_helpers import build_website_env
 
 REGISTER_PAYLOAD = {
@@ -35,17 +36,14 @@ def client(monkeypatch):
 
 
 def _auth_headers(test_client: TestClient) -> dict[str, str]:
-    """Register a fresh account (unique email) and return bearer headers."""
+    """Register + verify a fresh account (unique email) and return bearer headers."""
     global _ACCOUNT_SEQ
     _ACCOUNT_SEQ += 1
-    payload = {
-        "name": "Alice",
-        "email": f"alice{_ACCOUNT_SEQ}@example.com",
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return register_verified(
+        test_client,
+        name="Alice",
+        email=f"alice{_ACCOUNT_SEQ}@example.com",
+    )
 
 
 def _create_website(
@@ -60,7 +58,7 @@ def _create_website(
     return response.json()
 
 
-def test_create_website_returns_website_widget_secret_and_script(client) -> None:
+def test_create_website_returns_website_widget_and_script(client) -> None:
     test_client, env = client
     body = _create_website(test_client, _auth_headers(test_client))
 
@@ -69,7 +67,7 @@ def test_create_website_returns_website_widget_secret_and_script(client) -> None
     assert website["url"] == "https://example.com/"
     assert website["status"] == "pending"
     assert website["widget_id"]
-    assert body["widget_secret"]
+    assert "widget_secret" not in body
     assert body["embed_script"].startswith("<script src=")
     assert website["widget_id"] in body["embed_script"]
     assert len(env.websites.websites) == 1

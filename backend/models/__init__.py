@@ -7,7 +7,9 @@ from backend.models.api_key import (
     ApiKey,
 )
 from backend.models.audit_log import (
+    AUDIT_API_KEY_AUTHENTICATED,
     AUDIT_API_KEY_CREATED,
+    AUDIT_API_KEY_REJECTED,
     AUDIT_API_KEY_REVOKED,
     AUDIT_EMAIL_VERIFIED,
     AUDIT_FORGOT_PASSWORD,
@@ -106,7 +108,9 @@ from backend.models.widget import (
 )
 
 __all__ = [
+    "AUDIT_API_KEY_AUTHENTICATED",
     "AUDIT_API_KEY_CREATED",
+    "AUDIT_API_KEY_REJECTED",
     "AUDIT_API_KEY_REVOKED",
     "AUDIT_EMAIL_VERIFIED",
     "AUDIT_FORGOT_PASSWORD",

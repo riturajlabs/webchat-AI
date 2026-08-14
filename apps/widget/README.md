@@ -42,6 +42,22 @@ The widget resolves its API base in this order:
 The resolved base always ends in `/api/widget/v1`, so requests hit
 `/config/{widget_id}`, `/sessions`, `/chat` and `/feedback` under that prefix.
 
+## Production bundle
+
+`pnpm build` emits **content-hashed** bundles under `dist/`:
+
+- `webchat-widget.<hash>.js` (ESM), `webchat-widget.umd.<hash>.cjs` (UMD),
+  `webchat-widget.iife.min.<hash>.js` (IIFE) plus `.map` siblings.
+- `scripts/copy-stable.mjs` also writes stable-name copies
+  (`webchat-widget.iife.min.js`, …) for package entry points and local dev/e2e;
+  these must **not** be used for long-lived caching.
+
+Host the hashed IIFE bundle on a CDN and set `WIDGET_SCRIPT_URL` to it — the
+CDN can then serve it with `Cache-Control: immutable` for a year (see
+`docker/nginx.widget.conf`), and the embed snippet returned by the backend
+points at the correct asset. `scripts/check-assets.mjs` verifies the hashed
+bundle exists and prints the value to configure.
+
 ## Programmatic use (frameworks)
 
 For framework apps (React/Vue/SPAs), call `init()` with the widget id:

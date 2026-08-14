@@ -16,9 +16,9 @@ WIDGET_FONT_SIZES = {"sm", "md", "lg"}
 class Widget(BaseModel):
     """Per-website embeddable widget configuration.
 
-    `widget_secret_hash` stores a SHA-256 digest of the HMAC secret used for
-    future server-to-server integrations (ADR-004). The raw secret is shown to
-    the tenant exactly once, at creation, and never shipped in client JS.
+    Widget authentication is covered exclusively by the short-lived, per-widget
+    session JWTs issued by the public widget API (Phase 8) - there is no
+    long-lived widget secret (Sprint 2 removed the reserved field).
     """
 
     model_config = ConfigDict(extra="allow")
@@ -41,7 +41,6 @@ class Widget(BaseModel):
     dark_mode: bool = False
     auto_open: bool = False
     enabled: bool = True
-    widget_secret_hash: str | None = None
     # Embed-origin allowlist (production hardening). Empty = any origin may
     # embed (legacy default); non-empty = browser requests whose `Origin` host
     # is not listed are rejected. Seeded from the website host at creation and
@@ -57,7 +56,6 @@ class Widget(BaseModel):
         *,
         tenant_id: str,
         website_id: str,
-        widget_secret_hash: str | None = None,
     ) -> "Widget":
         now = utcnow()
         return cls(
@@ -65,7 +63,6 @@ class Widget(BaseModel):
             tenant_id=tenant_id,
             website_id=website_id,
             widget_id=new_id(),
-            widget_secret_hash=widget_secret_hash,
             created_at=now,
             updated_at=now,
         )

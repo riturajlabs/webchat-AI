@@ -19,6 +19,7 @@ from backend.api.deps import (
     get_auth_service,
     login_limiter,
     register_limiter,
+    resend_verification_limiter,
     reset_password_limiter,
     verify_csrf,
     verify_email_limiter,
@@ -33,6 +34,7 @@ from backend.schemas.auth import (
     MessageResponse,
     RefreshResponse,
     RegisterRequest,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     UserOut,
     VerifyEmailRequest,
@@ -140,6 +142,23 @@ async def verify_email(
         user_agent=request.headers.get("user-agent"),
     )
     return MessageResponse(message="Email verified.")
+
+
+@router.post("/resend-verification", response_model=MessageResponse)
+async def resend_verification(
+    body: ResendVerificationRequest,
+    request: Request,
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+    _: Annotated[None, Depends(resend_verification_limiter)],
+) -> MessageResponse:
+    await auth.resend_verification(
+        email=str(body.email),
+        ip_address=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return MessageResponse(
+        message="If that email is registered, a new verification link has been sent."
+    )
 
 
 @router.post("/refresh", response_model=RefreshResponse)

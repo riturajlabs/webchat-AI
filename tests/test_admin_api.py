@@ -19,13 +19,7 @@ from backend.models.website import Website
 from fastapi.testclient import TestClient
 
 from tests.admin_helpers import build_admin_env
-from tests.auth_helpers import VALID_PASSWORD
-
-REGISTER_PAYLOAD = {
-    "name": "Alice",
-    "email": "alice@example.com",
-    "password": VALID_PASSWORD,
-}
+from tests.http_helpers import register_verified_account
 
 _ACCOUNT_SEQ = 0
 
@@ -52,14 +46,7 @@ def client(monkeypatch):
 
 
 def _register(test_client: TestClient, *, name: str = "Alice") -> dict:
-    payload = {
-        "name": name,
-        "email": _next_email(),
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    body = response.json()
+    body = register_verified_account(test_client, name=name, email=_next_email())
     return {
         "access_token": body["access_token"],
         "user_id": body["user"]["id"],

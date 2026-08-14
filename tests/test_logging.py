@@ -72,6 +72,9 @@ def test_configure_logging_is_environment_aware(monkeypatch) -> None:
             environment="production",
             jwt_secret="a" * 32,
             widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+            widget_api_base_url="",
+            gemini_api_key="test-key",
+            _env_file=None,
         ),
     )
     configure_logging()

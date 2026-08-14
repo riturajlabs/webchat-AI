@@ -30,6 +30,30 @@ class AccountSuspendedError(AppError):
     code = "ACCOUNT_SUSPENDED"
 
 
+class EmailNotVerifiedError(AppError):
+    """The account exists but its email has not been verified yet.
+
+    Raised by login/refresh/authenticate so unverified users are blocked from
+    the dashboard until they verify (Sprint 1 P1 remediation). The distinct
+    403 code lets the frontend route to the verify-email screen with a resend
+    action instead of showing a generic credential error.
+    """
+
+    status_code = 403
+    code = "EMAIL_NOT_VERIFIED"
+
+
+class FeatureUnavailableError(AppError):
+    """A surface is intentionally disabled (returns HTTP 501).
+
+    Used to clearly disable endpoints whose credentials cannot actually be
+    used yet (e.g. API-key minting) rather than silently issuing secrets.
+    """
+
+    status_code = 501
+    code = "NOT_IMPLEMENTED"
+
+
 class ForbiddenError(AppError):
     status_code = 403
     code = "FORBIDDEN"

@@ -3,8 +3,10 @@
 import re
 from dataclasses import dataclass
 
+from backend.models.user import User
 from backend.services.auth import AuthService
 from backend.services.mail.base import EmailMessage
+
 from tests.fakes import (
     FakeAuditLogRepository,
     FakeMemberRepository,
@@ -61,3 +63,13 @@ def token_from_url(message: EmailMessage) -> str:
     match = _TOKEN_IN_URL.search(message.text)
     assert match is not None, "email does not contain a ?token= URL"
     return match.group(1)
+
+
+async def verify_registered_user(env: AuthEnv) -> User:
+    """Mark the most recently registered user as email-verified.
+
+    Mimics a visitor clicking the link in the last verification email, running
+    the real `verify_email` flow (token decode + DB update + audit).
+    """
+    token = token_from_url(env.mail.sent[-1])
+    return await env.service.verify_email(token=token, ip_address=None, user_agent=None)

@@ -12,6 +12,7 @@ from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     AccountSuspendedError,
     DuplicateEmailError,
+    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidTokenError,
     TokenReuseError,
@@ -39,6 +40,7 @@ from backend.models.audit_log import (
     AUDIT_REFRESH_REUSE_DETECTED,
     AUDIT_REGISTER,
     AUDIT_TOKEN_REFRESHED,
+    AUDIT_VERIFICATION_RESENT,
     AuditLog,
 )
 from backend.models.member import Member
@@ -169,6 +171,29 @@ class AuthService:
             )
         return user
 
+    async def resend_verification(
+        self, *, email: str, ip_address: str | None, user_agent: str | None
+    ) -> None:
+        """Send a fresh verification link for an unverified account.
+
+        Silent by design (no response differentiation): unknown emails and
+        already-verified accounts get no email, exactly like `forgot_password`,
+        so the endpoint cannot be used to enumerate registered addresses.
+        """
+        user = await self._users.find_by_email(email.lower().strip())
+        if user is None or user.email_verified:
+            return
+        await self._send_verification_email(user)
+        await self._audit.create(
+            AuditLog.new(
+                action=AUDIT_VERIFICATION_RESENT,
+                tenant_id=user.tenant_id,
+                user_id=user.id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        )
+
     async def login(
         self,
         *,
@@ -196,6 +221,10 @@ class AuthService:
         tenant = await self._tenants.find_by_id(user.tenant_id)
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
+        if not user.email_verified:
+            raise EmailNotVerifiedError(
+                "Please verify your email before signing in. A new link can be sent below."
+            )
 
         role = await self._resolve_role(user)
         await self._users.update_last_login(user.id, utcnow())
@@ -230,6 +259,10 @@ class AuthService:
         tenant = await self._tenants.find_by_id(record.tenant_id)
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
+        if not user.email_verified:
+            raise EmailNotVerifiedError(
+                "Please verify your email before signing in. A new link can be sent below."
+            )
 
         role = await self._resolve_role(user)
         new_raw = generate_refresh_token()
@@ -340,6 +373,10 @@ class AuthService:
             tenant = await self._tenants.find_by_id(claims["tenant_id"])
         if tenant is None or tenant.status != "active":
             raise AccountSuspendedError("This account's workspace is suspended.")
+        if not user.email_verified:
+            raise EmailNotVerifiedError(
+                "Please verify your email before signing in. A new link can be sent below."
+            )
         async with chat_stage("auth.member"):
             role = await self._resolve_role(user)
         return Principal(

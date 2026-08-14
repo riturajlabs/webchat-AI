@@ -53,7 +53,6 @@ const CREATE_RESPONSE: CreateWebsiteResponse = {
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
   },
-  widget_secret: 'secret-abc-123',
   embed_script: '<script src="http://localhost:8080/w.js" data-widget-id="widget-1"></script>',
 };
 
@@ -89,7 +88,7 @@ describe('AddWebsiteDialog', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('creates a website and shows the one-time secret and embed script', async () => {
+  it('creates a website and shows the embed script', async () => {
     render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Acme Inc' } });
@@ -101,7 +100,7 @@ describe('AddWebsiteDialog', () => {
     await waitFor(() => {
       expect(screen.getByText('Website added')).toBeInTheDocument();
     });
-    expect(screen.getByText('secret-abc-123')).toBeInTheDocument();
+    expect(screen.queryByText('secret-abc-123')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Embed script')).toHaveValue(CREATE_RESPONSE.embed_script);
   });
 

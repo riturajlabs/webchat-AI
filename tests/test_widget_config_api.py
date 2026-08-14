@@ -17,14 +17,9 @@ from backend.models.audit_log import AUDIT_WIDGET_UPDATED
 from backend.services.widget import WidgetConfigService
 from fastapi.testclient import TestClient
 
-from tests.auth_helpers import VALID_PASSWORD, build_auth_env
+from tests.auth_helpers import build_auth_env
+from tests.http_helpers import register_verified
 from tests.website_helpers import build_website_env
-
-REGISTER_PAYLOAD = {
-    "name": "Alice",
-    "email": "alice@example.com",
-    "password": VALID_PASSWORD,
-}
 
 _ACCOUNT_SEQ = 0
 
@@ -62,14 +57,11 @@ def client(monkeypatch):
 def _auth_headers(test_client: TestClient) -> dict[str, str]:
     global _ACCOUNT_SEQ
     _ACCOUNT_SEQ += 1
-    payload = {
-        "name": "Alice",
-        "email": f"alice{_ACCOUNT_SEQ}@example.com",
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return register_verified(
+        test_client,
+        name="Alice",
+        email=f"alice{_ACCOUNT_SEQ}@example.com",
+    )
 
 
 def _create_website(test_client: TestClient, headers: dict[str, str]) -> dict:

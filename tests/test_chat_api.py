@@ -7,8 +7,10 @@ from backend.api.deps import get_auth_service, get_rag_service, get_website_serv
 from backend.core.config import get_settings
 from backend.main import create_app
 from fastapi.testclient import TestClient
-from tests.auth_helpers import VALID_PASSWORD, build_auth_env
+
+from tests.auth_helpers import build_auth_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
+from tests.http_helpers import register_verified_account
 
 _ACCOUNT_SEQ = 0
 
@@ -31,17 +33,14 @@ def client(monkeypatch):
 
 
 def _register(test_client: TestClient) -> tuple[dict, dict[str, str]]:
-    """Register a fresh account (unique email) and return (user, headers)."""
+    """Register + verify a fresh account (unique email) and return (user, headers)."""
     global _ACCOUNT_SEQ
     _ACCOUNT_SEQ += 1
-    payload = {
-        "name": "Alice",
-        "email": f"alice{_ACCOUNT_SEQ}@example.com",
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    body = response.json()
+    body = register_verified_account(
+        test_client,
+        name="Alice",
+        email=f"alice{_ACCOUNT_SEQ}@example.com",
+    )
     return body["user"], {"Authorization": f"Bearer {body['access_token']}"}
 
 

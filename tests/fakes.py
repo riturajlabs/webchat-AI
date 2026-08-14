@@ -281,6 +281,18 @@ class FakeApiKeyRepository:
             key.status = API_KEY_STATUS_REVOKED
             key.updated_at = utcnow()
 
+    async def find_by_hash(self, hashed_secret: str) -> ApiKey | None:
+        for key in self._keys.values():
+            if key.hashed_secret == hashed_secret:
+                return key
+        return None
+
+    async def touch_last_used(self, key_id: str, used_at: datetime) -> None:
+        key = self._keys.get(key_id)
+        if key is not None:
+            key.last_used_at = used_at
+            key.updated_at = used_at
+
 
 class FakeWebsiteRepository:
     def __init__(self) -> None:

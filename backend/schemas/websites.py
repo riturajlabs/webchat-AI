@@ -117,6 +117,4 @@ class WidgetResponse(BaseModel):
 class CreateWebsiteResponse(BaseModel):
     website: WebsiteOut
     widget: WidgetOut
-    # Shown exactly once; only a hash is persisted (ADR-004).
-    widget_secret: str
     embed_script: str

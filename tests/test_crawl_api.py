@@ -7,7 +7,9 @@ from backend.core.errors import CrawlConflictError, CrawlJobNotFoundError
 from backend.main import create_app
 from backend.models.crawl_job import CRAWL_STATUS_COMPLETED, CRAWL_STATUS_PENDING, CrawlJob
 from fastapi.testclient import TestClient
-from tests.auth_helpers import VALID_PASSWORD, build_auth_env
+
+from tests.auth_helpers import build_auth_env
+from tests.http_helpers import register_verified
 
 _ACCOUNT_SEQ = 0
 
@@ -53,14 +55,11 @@ def client(monkeypatch):
 def _auth_headers(test_client: TestClient) -> dict[str, str]:
     global _ACCOUNT_SEQ
     _ACCOUNT_SEQ += 1
-    payload = {
-        "name": "Alice",
-        "email": f"alice{_ACCOUNT_SEQ}@example.com",
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return register_verified(
+        test_client,
+        name="Alice",
+        email=f"alice{_ACCOUNT_SEQ}@example.com",
+    )
 
 
 def test_start_crawl_returns_202_and_job(client) -> None:

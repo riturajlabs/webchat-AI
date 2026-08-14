@@ -114,24 +114,7 @@ export function AddWebsiteDialog({
               className="rounded-md border border-green-200 bg-green-50 p-3 text-sm"
             >
               <p className="font-medium text-green-900">Website added</p>
-              <p className="text-green-800">
-                Your widget is ready. Save the secret below - it is shown only once.
-              </p>
-            </div>
-
-            <div>
-              <label
-                htmlFor="widget-secret"
-                className="mb-1 block text-xs font-medium text-muted-foreground"
-              >
-                Widget secret (one-time)
-              </label>
-              <code
-                id="widget-secret"
-                className="block break-all rounded-md bg-muted p-2 font-mono text-xs"
-              >
-                {result.widget_secret}
-              </code>
+              <p className="text-green-800">Your widget is ready. Paste the embed script below.</p>
             </div>
 
             <div>

@@ -140,7 +140,7 @@ class ConversationService:
         tenant_id: str,
         session_id: str,
         *,
-        user_id: str,
+        user_id: str | None,
         ip_address: str | None,
         user_agent: str | None,
     ) -> None:

@@ -49,8 +49,6 @@ export interface Widget {
 export interface CreateWebsiteResponse {
   website: Website;
   widget: Widget;
-  /** One-time widget secret; only a hash is stored server-side (ADR-004). */
-  widget_secret: string;
   embed_script: string;
 }
 

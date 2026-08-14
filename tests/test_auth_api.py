@@ -9,6 +9,7 @@ from backend.main import create_app
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+
 from tests.auth_helpers import VALID_PASSWORD, build_auth_env, token_from_url
 
 
@@ -67,8 +68,9 @@ def test_register_weak_password_returns_422(client) -> None:
 
 
 def test_login_success_returns_tokens(client) -> None:
-    test_client, _ = client
+    test_client, env = client
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+    _verify_registered(test_client, env)
     response = test_client.post(
         "/api/auth/login",
         json={"email": "alice@example.com", "password": VALID_PASSWORD},
@@ -89,8 +91,9 @@ def test_login_wrong_password_returns_401(client) -> None:
 
 
 def test_refresh_rotates_refresh_cookie_with_valid_csrf(client) -> None:
-    test_client, _ = client
+    test_client, env = client
     test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+    _verify_registered(test_client, env)
     csrf = test_client.cookies.get("csrf_token")
     assert csrf
     old_refresh = test_client.cookies.get("refresh_token")
@@ -131,12 +134,18 @@ def test_logout_clears_cookies(client) -> None:
 
 
 def test_me_requires_bearer_token(client) -> None:
-    test_client, _ = client
+    test_client, env = client
     assert test_client.get("/api/auth/me").status_code == 401
 
     access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
         "access_token"
     ]
+    # The verification gate blocks unverified access-token use.
+    response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
+
+    _verify_registered(test_client, env)
     response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
     assert response.status_code == 200
     assert response.json()["email"] == "alice@example.com"
@@ -153,6 +162,72 @@ def test_verify_email_endpoint(client) -> None:
     assert response.json()["message"] == "Email verified."
     user = next(iter(env.users.users.values()))
     assert user.email_verified is True
+
+
+def test_login_unverified_email_is_rejected_with_403(client) -> None:
+    test_client, _ = client
+    test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+
+    response = test_client.post(
+        "/api/auth/login",
+        json={"email": "alice@example.com", "password": VALID_PASSWORD},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "EMAIL_NOT_VERIFIED"
+
+
+def test_login_after_verification_succeeds(client) -> None:
+    test_client, env = client
+    test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+    _verify_registered(test_client, env)
+
+    response = test_client.post(
+        "/api/auth/login",
+        json={"email": "alice@example.com", "password": VALID_PASSWORD},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["access_token"]
+
+
+def test_resend_verification_sends_link_for_unverified_account(client) -> None:
+    test_client, env = client
+    test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+    assert len(env.mail.sent) == 1
+
+    response = test_client.post(
+        "/api/auth/resend-verification", json={"email": "alice@example.com"}
+    )
+
+    assert response.status_code == 200
+    assert len(env.mail.sent) == 2
+    assert env.mail.sent[-1].subject == "Verify your email address"
+    # The audit trail records the resend.
+    assert any(log.action == "VERIFICATION_RESENT" for log in env.audit.logs)
+
+
+def test_resend_verification_is_silent_for_unknown_email(client) -> None:
+    test_client, env = client
+    response = test_client.post(
+        "/api/auth/resend-verification", json={"email": "nobody@example.com"}
+    )
+    assert response.status_code == 200
+    assert len(env.mail.sent) == 0
+
+
+def test_resend_verification_is_silent_for_verified_account(client) -> None:
+    test_client, env = client
+    test_client.post("/api/auth/register", json=REGISTER_PAYLOAD)
+    _verify_registered(test_client, env)
+    assert len(env.mail.sent) == 1
+
+    response = test_client.post(
+        "/api/auth/resend-verification", json={"email": "alice@example.com"}
+    )
+
+    assert response.status_code == 200
+    assert len(env.mail.sent) == 1
 
 
 def test_forgot_password_endpoint_is_always_successful(client) -> None:
@@ -179,6 +254,7 @@ def test_reset_password_endpoint_allows_new_password(client) -> None:
 
     assert response.status_code == 200
     assert user.pwd_token_version == 1
+    _verify_registered(test_client, env)
     login = test_client.post(
         "/api/auth/login",
         json={"email": "alice@example.com", "password": "NewStr0ng!Pass"},
@@ -187,6 +263,13 @@ def test_reset_password_endpoint_allows_new_password(client) -> None:
 
 
 # --------------------------------------------------------------------- RBAC
+
+
+def _verify_registered(test_client: TestClient, env) -> None:
+    """Verify the just-registered account via the last verification email."""
+    verification_token = token_from_url(env.mail.sent[-1])
+    response = test_client.post("/api/auth/verify-email", json={"token": verification_token})
+    assert response.status_code == 200, response.text
 
 
 def _role_guard_app(env) -> FastAPI:
@@ -224,6 +307,7 @@ def test_require_role_allows_authorized_role(client) -> None:
     access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
         "access_token"
     ]
+    _verify_registered(test_client, env)
     headers = {"Authorization": f"Bearer {access_token}"}
 
     with TestClient(_role_guard_app(env)) as guard:
@@ -236,6 +320,7 @@ def test_require_role_forbids_unauthorized_role(client) -> None:
     access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
         "access_token"
     ]
+    _verify_registered(test_client, env)
     headers = {"Authorization": f"Bearer {access_token}"}
 
     with TestClient(_role_guard_app(env)) as guard:

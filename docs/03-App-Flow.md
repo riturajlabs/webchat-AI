@@ -76,12 +76,19 @@ J --> K
 ## Steps
 
 1. User opens dashboard.
-2. User signs up.
-3. Email verification is completed.
+2. User signs up (an access token is issued immediately, but the account is
+   flagged `email_verified=false`).
+3. User verifies the email via the emailed link (`POST /api/auth/verify-email`).
 4. Password is securely hashed.
 5. JWT Access Token generated.
 6. Refresh Token generated.
 7. User redirected to dashboard.
+
+Authenticated endpoints require a verified account: `login`, `refresh` and
+`authenticate` reject unverified accounts with a 403 `EMAIL_NOT_VERIFIED`, and
+the dashboard redirects to `/verify-email`. Users who lose the original email
+can request a new link from `POST /api/auth/resend-verification` (anonymous,
+rate-limited, silently idempotent).
 
 ```mermaid
 sequenceDiagram
@@ -95,6 +102,13 @@ User->>Frontend: Signup
 Frontend->>Backend: Register
 Backend->>Database: Save User
 Database-->>Backend: Success
+Backend-->>Frontend: JWT + Refresh Token (unverified)
+Frontend-->>User: Redirect to verify-email
+User->>Backend: Verify email (link token)
+Backend->>Database: email_verified=true
+Backend-->>Frontend: Verified
+User->>Frontend: Login
+Frontend->>Backend: Login (verified)
 Backend-->>Frontend: JWT + Refresh Token
 Frontend-->>User: Dashboard
 ```

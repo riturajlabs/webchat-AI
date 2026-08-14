@@ -155,6 +155,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.widget
       network: host
+      args:
+        # Production builds bake the widget API origin (WIDGET_API_BASE_URL is
+        # the backend-side twin used for `data-api-base-url`). Dev builds leave
+        # it empty so the bundle falls back to same-origin / data-api-base-url.
+        VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL:-}
     container_name: webchat-widget
     networks: [webchat]
     restart: unless-stopped

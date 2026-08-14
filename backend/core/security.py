@@ -173,20 +173,6 @@ def hash_refresh_token(token: str) -> str:
     return _SHA256(token.encode("utf-8")).hexdigest()
 
 
-def generate_widget_secret() -> str:
-    """Return a 256-bit HMAC secret for server-to-server widget use (ADR-004).
-
-    The raw value is returned to the tenant exactly once; only its hash is
-    stored so a DB leak never exposes usable secrets.
-    """
-    return secrets.token_urlsafe(32)
-
-
-def hash_widget_secret(secret: str) -> str:
-    """Return the SHA-256 hex digest persisted on the widget document."""
-    return _SHA256(secret.encode("utf-8")).hexdigest()
-
-
 def generate_api_key() -> str:
     """Return a new tenant-issued API key (docs/05 §12).
 

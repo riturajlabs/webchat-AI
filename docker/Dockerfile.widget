@@ -11,6 +11,12 @@ ENV HUSKY=0
 
 FROM base AS builder
 WORKDIR /app
+# The widget bundle bakes the API origin at build time so the SaaS host can
+# ship one bundle that talks to the right backend from any customer domain.
+# Production must build with `--build-arg VITE_WIDGET_API_BASE_URL=https://...`
+# (see .env.example); the check-assets gate rejects loopback hosts on purpose.
+ARG VITE_WIDGET_API_BASE_URL=""
+ENV VITE_WIDGET_API_BASE_URL="${VITE_WIDGET_API_BASE_URL}"
 # All workspace manifests must be present for `pnpm install` to resolve.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/dashboard/package.json apps/dashboard/package.json

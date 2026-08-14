@@ -62,7 +62,6 @@ async def create_website(
     return CreateWebsiteResponse(
         website=WebsiteOut.from_website(result.website, widget_id=result.widget.widget_id),
         widget=WidgetOut.from_widget(result.widget),
-        widget_secret=result.widget_secret,
         embed_script=result.embed_script,
     )
 

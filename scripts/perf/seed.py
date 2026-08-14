@@ -26,9 +26,7 @@ from typing import Any
 
 from backend.ai.mock import MockEmbeddingClient
 from backend.core.security import (
-    generate_widget_secret,
     hash_password,
-    hash_widget_secret,
     new_id,
     utcnow,
 )
@@ -140,7 +138,6 @@ async def seed(
         widget = Widget.new(
             tenant_id=tenant.id,
             website_id=website.id,
-            widget_secret_hash=hash_widget_secret(generate_widget_secret()),
         )
         widget.suggested_questions = ["What does your product do?", "How do I get started?"]
 

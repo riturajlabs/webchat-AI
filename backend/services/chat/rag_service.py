@@ -14,7 +14,7 @@ the streaming endpoint stays uniform.
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any
 
 from backend.ai.gemini import GenerationClient
@@ -100,7 +100,7 @@ class RagService:
         session_id: str | None = None,
         visitor_id: str | None = None,
         user_id: str | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Answer `question` as a stream of SSE events.
 
         Events: `sources`, `message` (one per delta), `done`, or `error`.
@@ -324,7 +324,7 @@ class RagService:
         session: ChatSession,
         started: float,
         vector_queries: int,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Emit the no-context fallback without ever calling the model."""
         response_time = time.monotonic() - started
         assistant = ChatMessage.new(

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 
 import { useAuth } from '@/features/auth/auth-context';
+import { ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,6 +32,10 @@ export function LoginForm() {
       await login(email.trim(), password);
       router.replace(redirectTo.startsWith('/') ? redirectTo : '/');
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'EMAIL_NOT_VERIFIED') {
+        router.replace(`/verify-email?email=${encodeURIComponent(email.trim().toLowerCase())}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to sign in.');
     } finally {
       setIsPending(false);

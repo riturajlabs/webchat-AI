@@ -9,6 +9,7 @@ from backend.core.errors import EmbeddingUnavailableError, GenerationError
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER
 from backend.prompts.rag import RAG_PROMPT_VERSION, UNKNOWN_ANSWER_FALLBACK
 from backend.services.chat.rag_service import RagService
+
 from tests.chat_helpers import (
     build_chat_env,
     consume,

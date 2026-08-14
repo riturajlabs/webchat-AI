@@ -6,6 +6,7 @@ import pytest
 from backend.core.errors import (
     AccountSuspendedError,
     DuplicateEmailError,
+    EmailNotVerifiedError,
     InvalidCredentialsError,
     InvalidTokenError,
     TokenReuseError,
@@ -26,9 +27,16 @@ from backend.models.audit_log import (
     AUDIT_REFRESH_REUSE_DETECTED,
     AUDIT_REGISTER,
     AUDIT_TOKEN_REFRESHED,
+    AUDIT_VERIFICATION_RESENT,
 )
 from backend.models.user import User
-from tests.auth_helpers import VALID_PASSWORD, build_auth_env, token_from_url
+
+from tests.auth_helpers import (
+    VALID_PASSWORD,
+    build_auth_env,
+    token_from_url,
+    verify_registered_user,
+)
 from tests.fakes import FakeUserRepository
 
 
@@ -140,6 +148,7 @@ async def test_login_success_updates_last_login_and_audits() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     result = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address="9.9.9.9", user_agent="ua"
     )
@@ -251,6 +260,7 @@ async def test_refresh_rotates_token_and_revokes_previous() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
     )
@@ -283,6 +293,7 @@ async def test_refresh_reuse_detection_revokes_all_and_alerts() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
     )
@@ -321,6 +332,7 @@ async def test_refresh_expired_token_rejected() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
     )
@@ -346,6 +358,7 @@ async def test_logout_revokes_all_and_audits() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     login = await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
     )
@@ -400,6 +413,7 @@ async def test_reset_password_updates_hash_increments_version_and_revokes_sessio
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     # Establish a session; the reset must revoke it.
     await env.service.login(
         email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
@@ -455,6 +469,7 @@ async def test_rbac_role_resolved_from_membership() -> None:
         ip_address=None,
         user_agent=None,
     )
+    await verify_registered_user(env)
     user = env.users.users[next(iter(env.users.users))]
     member = env.members.members[next(iter(env.members.members))]
     member.role = "viewer"
@@ -491,3 +506,101 @@ async def test_authenticate_rejects_unknown_user() -> None:
     token = create_access_token("no-such-user", "no-such-tenant", "owner")[0]
     with pytest.raises(InvalidCredentialsError):
         await env.service.authenticate(token)
+
+
+# ---------------------------------------------------- email-verification gate
+
+
+async def test_login_unverified_email_rejected() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    with pytest.raises(EmailNotVerifiedError) as exc:
+        await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.code == "EMAIL_NOT_VERIFIED"
+
+
+async def test_authenticate_unverified_token_rejected() -> None:
+    env = build_auth_env()
+    result = await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    with pytest.raises(EmailNotVerifiedError):
+        await env.service.authenticate(result.access_token)
+
+
+async def test_refresh_unverified_session_rejected() -> None:
+    env = build_auth_env()
+    result = await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    with pytest.raises(EmailNotVerifiedError):
+        await env.service.refresh(
+            raw_refresh_token=result.refresh_token, ip_address=None, user_agent=None
+        )
+
+
+async def test_resend_verification_sends_link_and_audits() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    assert len(env.mail.sent) == 1
+
+    await env.service.resend_verification(
+        email="ALICE@example.com", ip_address="1.1.1.1", user_agent="ua"
+    )
+
+    assert len(env.mail.sent) == 2
+    assert env.mail.sent[-1].subject == "Verify your email address"
+    assert env.audit.logs[-1].action == AUDIT_VERIFICATION_RESENT
+    assert env.audit.logs[-1].ip_address == "1.1.1.1"
+
+
+async def test_resend_verification_is_silent_for_unknown_email() -> None:
+    env = build_auth_env()
+    await env.service.resend_verification(
+        email="ghost@example.com", ip_address=None, user_agent=None
+    )
+    assert env.mail.sent == []
+    assert env.audit.logs == []
+
+
+async def test_resend_verification_is_silent_for_verified_account() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    assert len(env.mail.sent) == 1
+
+    await env.service.resend_verification(
+        email="alice@example.com", ip_address=None, user_agent=None
+    )
+
+    assert len(env.mail.sent) == 1
+    assert env.audit.logs[-1].action == AUDIT_EMAIL_VERIFIED  # unchanged

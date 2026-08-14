@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:3000"
     # Where the built widget SDK bundle is served from (embed-script generation).
     widget_script_url: str = "http://localhost:8080/webchat-widget.iife.min.js"
+    # Public origin of the widget API, e.g. `https://api.example.com`. When set,
+    # the generated embed script carries `data-api-base-url` so the widget talks
+    # to the SaaS API even if the served bundle was built for an older origin
+    # (or a stale cached bundle). Empty = rely on the build-time
+    # `VITE_WIDGET_API_BASE_URL` / same-origin default baked into the bundle.
+    widget_api_base_url: str = ""
 
     # Public widget API (Phase 8, ADR-004 §widget).
     widget_session_token_minutes: int = 15
@@ -88,6 +94,11 @@ class Settings(BaseSettings):
     # Master switch for the widget rate limits; `None` inherits the global
     # `rate_limit_enabled` (resolved in the validator below).
     widget_rate_limit_enabled: bool | None = None
+
+    # Per-API-key requests per minute (Sprint 2). Programmatic `wc_*` keys get
+    # their own sliding window keyed by key id, independent of the per-IP
+    # budgets applied to the same endpoints.
+    api_key_rate_limit_per_minute: int = 300
 
     # Email (Phase 2 - ADR-001)
     resend_api_key: str | None = None
@@ -214,6 +225,16 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(
                     "WIDGET_SCRIPT_URL must point at a real CDN/host in production "
+                    "(got a localhost value)."
+                )
+            # The widget API base is embedded into customer pages via
+            # `data-api-base-url`; a localhost value would break every embed.
+            if self.widget_api_base_url and any(
+                marker in self.widget_api_base_url.lower()
+                for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+            ):
+                raise ValueError(
+                    "WIDGET_API_BASE_URL must point at a real API origin in production "
                     "(got a localhost value)."
                 )
         if self.widget_rate_limit_enabled is None:

@@ -150,8 +150,9 @@ class WidgetConfigUpdate(BaseModel):
 class WidgetPublicConfig(BaseModel):
     """Theme/branding/config the embed needs to render itself.
 
-    Never includes `widget_secret_hash`, the raw secret (which is never
-    persisted anyway), `tenant_id`, or `website_id`.
+    Never includes `tenant_id` or `website_id`. Widget requests authenticate
+    via the short-lived session JWTs issued by `POST /api/widget/v1/sessions` -
+    there is no long-lived widget secret.
     """
 
     widget_id: str

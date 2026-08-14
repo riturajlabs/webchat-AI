@@ -15,6 +15,14 @@ vi.mock('@/lib/api', () => ({
     patch: vi.fn(),
     delete: vi.fn(),
   },
+  ApiError: class ApiError extends Error {
+    code: string;
+
+    constructor(code: string, message: string) {
+      super(message);
+      this.code = code;
+    }
+  },
 }));
 
 const mockedGet = vi.mocked(api.get);

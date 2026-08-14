@@ -10,14 +10,9 @@ from backend.models.audit_log import AUDIT_CONVERSATION_DELETED
 from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED
 from fastapi.testclient import TestClient
 
-from tests.auth_helpers import VALID_PASSWORD, build_auth_env
+from tests.auth_helpers import build_auth_env
 from tests.conversations_helpers import build_conversation_env, seed_conversation
-
-REGISTER_PAYLOAD = {
-    "name": "Alice",
-    "email": "alice@example.com",
-    "password": VALID_PASSWORD,
-}
+from tests.http_helpers import register_verified_account
 
 _ACCOUNT_SEQ = 0
 
@@ -39,17 +34,14 @@ def client(monkeypatch):
 
 
 def _auth(test_client: TestClient) -> tuple[dict[str, str], str]:
-    """Register a fresh account and return (bearer headers, tenant_id)."""
+    """Register + verify a fresh account and return (bearer headers, tenant_id)."""
     global _ACCOUNT_SEQ
     _ACCOUNT_SEQ += 1
-    payload = {
-        "name": "Alice",
-        "email": f"alice{_ACCOUNT_SEQ}@example.com",
-        "password": VALID_PASSWORD,
-    }
-    response = test_client.post("/api/auth/register", json=payload)
-    assert response.status_code == 201, response.text
-    body = response.json()
+    body = register_verified_account(
+        test_client,
+        name="Alice",
+        email=f"alice{_ACCOUNT_SEQ}@example.com",
+    )
     return {"Authorization": f"Bearer {body['access_token']}"}, body["user"]["tenant_id"]
 
 

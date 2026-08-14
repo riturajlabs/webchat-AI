@@ -1,7 +1,7 @@
 """Website management business logic (Phase 3, ADR-008).
 
 Routes validate and translate; this service owns every workflow: create
-(website + widget + one-time secret), list/get, update (URL changes reset
+(website + widget + embed script), list/get, update (URL changes reset
 crawl state), and delete (cascades to the widget). All database access is
 tenant-scoped by the caller-provided `tenant_id`, never by request input.
 """
@@ -14,11 +14,7 @@ from backend.core.errors import (
     DuplicateWebsiteError,
     WebsiteNotFoundError,
 )
-from backend.core.security import (
-    generate_widget_secret,
-    hash_widget_secret,
-    utcnow,
-)
+from backend.core.security import utcnow
 from backend.models.audit_log import (
     AUDIT_WEBSITE_CREATED,
     AUDIT_WEBSITE_DELETED,
@@ -48,11 +44,10 @@ class WebsiteListItem:
 
 @dataclass(frozen=True)
 class CreateWebsiteResult:
-    """Create response: the persisted website and widget plus one-time secret."""
+    """Create response: the persisted website and widget plus embed script."""
 
     website: Website
     widget: Widget
-    widget_secret: str
     embed_script: str
 
 
@@ -94,11 +89,9 @@ class WebsiteService:
         )
         await self._websites.create(website)
 
-        widget_secret = generate_widget_secret()
         widget = Widget.new(
             tenant_id=principal.tenant_id,
             website_id=website.id,
-            widget_secret_hash=hash_widget_secret(widget_secret),
         )
         # Seed the embed-origin allowlist from the registered website host so
         # new widgets are protected-by-default against embedding elsewhere;
@@ -125,7 +118,6 @@ class WebsiteService:
         return CreateWebsiteResult(
             website=website,
             widget=widget,
-            widget_secret=widget_secret,
             embed_script=self.build_embed_script(widget.widget_id),
         )
 
@@ -259,9 +251,18 @@ class WebsiteService:
         return host.lower().rstrip(".")
 
     def build_embed_script(self, widget_id: str) -> str:
+        """One-line embed snippet for a widget.
+
+        `data-api-base-url` is included when `WIDGET_API_BASE_URL` is
+        configured so the SDK resolves the API origin from the embed tag (the
+        highest-precedence source) regardless of which build the served bundle
+        was produced with. The SDK appends `/api/widget/v1` when needed.
+        """
+        api_base = self._settings.widget_api_base_url.rstrip("/")
+        api_attr = f' data-api-base-url="{api_base}"' if api_base else ""
         return (
             f'<script src="{self._settings.widget_script_url}" '
-            f'data-widget-id="{widget_id}" defer></script>'
+            f'data-widget-id="{widget_id}"{api_attr} defer></script>'
         )
 
 

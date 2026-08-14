@@ -4,6 +4,7 @@ import hashlib
 
 import pytest
 from backend.services.ingestion import CrawlSession, FetchError, SsrFGuard
+
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher
 from tests.fakes import FakeDocumentRepository
 

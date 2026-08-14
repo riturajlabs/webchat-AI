@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 
+import httpx
 import pytest
 from playwright.sync_api import sync_playwright
 
@@ -19,6 +20,7 @@ if not os.environ.get("E2E_BASE_URL"):
     )
 
 E2E_ANSWER_TIMEOUT_MS = 150_000
+API_BASE_URL = os.environ["E2E_BASE_URL"]
 
 _LAUNCHER_READY = """
 () => {
@@ -152,24 +154,32 @@ def test_widget_full_flow(widget_env: tuple[str, object]) -> None:
 
 
 def test_widget_blocked_origin(widget_env: tuple[str, object]) -> None:
+    """Hostile embedding origins are rejected by the live widget config API.
+
+    A real browser cannot be forced to emit a spoofed `Origin` header on a
+    cross-origin fetch (Chromium always computes it from the document origin),
+    so the policy is asserted against the live API exactly as a hostile embed
+    would arrive: `Origin: https://evil.example` must be rejected while the
+    allowlisted `127.0.0.1` test origin and headerless (non-browser) requests
+    are served. Still fully live - no mocks, real provisioned widget.
+    """
     page_url, provisioned = widget_env
     widget_id = provisioned.widget_id  # type: ignore[attr-defined]
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page()
-        # Force a hostile embedding origin on every request the page makes, so
-        # the browser behaves as if the widget were embedded on evil.example.
-        page.set_extra_http_headers({"Origin": "https://evil.example"})
-        try:
-            with page.expect_response(
-                lambda r: r.request.method == "GET"
-                and r.url.endswith(f"/api/widget/v1/config/{widget_id}"),
-                timeout=15_000,
-            ) as info:
-                page.goto(page_url, wait_until="domcontentloaded")
-            response = info.value
-            assert response.status == 403
-            body = response.json()
-            assert body["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
-        finally:
-            browser.close()
+
+    blocked = httpx.get(
+        f"{API_BASE_URL}/api/widget/v1/config/{widget_id}",
+        headers={"Origin": "https://evil.example"},
+        timeout=15,
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+
+    allowed = httpx.get(
+        f"{API_BASE_URL}/api/widget/v1/config/{widget_id}",
+        headers={"Origin": page_url},
+        timeout=15,
+    )
+    assert allowed.status_code == 200
+
+    headerless = httpx.get(f"{API_BASE_URL}/api/widget/v1/config/{widget_id}", timeout=15)
+    assert headerless.status_code == 200

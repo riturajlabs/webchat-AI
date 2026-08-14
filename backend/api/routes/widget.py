@@ -14,12 +14,11 @@ session tokens are short-lived JWTs scoped to one widget+tenant+website+visitor
 non-secret identifier (plan §3.2.1).
 """
 
-import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from backend.api.deps import (
@@ -36,6 +35,7 @@ from backend.api.deps import (
     widget_session_origin_guard,
     widget_visitor_limiter,
 )
+from backend.api.sse import sse, stream_with_disconnect
 from backend.core.errors import AppError, SpamRejectedError
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
@@ -55,10 +55,6 @@ router = APIRouter(
     prefix="/widget/v1",
     tags=["widget"],
 )
-
-
-def _sse(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
 @router.get("/config/{widget_id}", response_model=WidgetPublicConfig)
@@ -100,6 +96,7 @@ async def create_widget_session(
 @router.post("/chat")
 async def widget_chat(
     body: WidgetChatRequest,
+    request: Request,
     claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
     service: Annotated[WidgetService, Depends(get_widget_service)],
     rag: Annotated[RagService, Depends(get_rag_service)],
@@ -114,7 +111,8 @@ async def widget_chat(
     are re-validated against the live widget/tenant/website state before the
     pipeline runs (ADR-004 tenant validation flow). Validation failures surface
     as SSE `error` events so the stream stays uniform; only auth/rate-limit
-    rejections happen before the stream begins.
+    rejections happen before the stream begins. The stream stops the moment the
+    client disconnects (no wasted generation tokens, no partial answer saved).
     """
 
     async def event_stream() -> AsyncIterator[str]:
@@ -133,18 +131,19 @@ async def widget_chat(
                 session_id=body.session_id,
             )
         except AppError as exc:
-            yield _sse("error", {"code": exc.code, "message": exc.message})
+            yield sse("error", {"code": exc.code, "message": exc.message})
             return
 
-        async for event in rag.stream_answer(
+        stream = rag.stream_answer(
             tenant_id=claims["tenant_id"],
             website_id=claims["website_id"],
             question=body.question,
             session_id=body.session_id,
             visitor_id=claims.get("visitor_id"),
             user_id=None,
-        ):
-            yield _sse(event["event"], event["data"])
+        )
+        async for frame in stream_with_disconnect(request, stream):
+            yield frame
 
     return StreamingResponse(
         event_stream(),

@@ -63,6 +63,15 @@ class VerifyEmailRequest(BaseModel):
     token: str = Field(min_length=10)
 
 
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: EmailStr) -> str:
+        return value.lower().strip()
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 

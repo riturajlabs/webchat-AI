@@ -101,6 +101,42 @@ def test_production_accepts_cdn_widget_script_url() -> None:
     assert "localhost" not in settings.widget_script_url
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://0.0.0.0:8000",
+        "http://[::1]:8000",
+    ],
+)
+def test_production_rejects_localhost_widget_api_base_url(url: str) -> None:
+    # The API base is embedded into customer pages via `data-api-base-url`;
+    # a localhost value would point every production embed back at the server,
+    # so fail fast at boot (audit finding #3).
+    with pytest.raises(ValueError, match="WIDGET_API_BASE_URL"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            jwt_secret="a" * 32,
+            groq_api_key="test-key",
+            widget_script_url="https://assets.example.com/widget.js",
+            widget_api_base_url=url,
+        )
+
+
+def test_production_accepts_public_widget_api_base_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        groq_api_key="test-key",
+        widget_script_url="https://assets.example.com/widget.js",
+        widget_api_base_url="https://api.example.com",
+    )
+    assert settings.widget_api_base_url == "https://api.example.com"
+
+
 def test_production_rejects_empty_embedding_order() -> None:
     with pytest.raises(ValueError, match="EMBEDDING_PROVIDER_ORDER"):
         Settings(

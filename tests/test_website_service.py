@@ -1,6 +1,7 @@
 """Unit tests for the WebsiteService business logic (Phase 3)."""
 
 import pytest
+from backend.core.config import get_settings
 from backend.core.errors import (
     DuplicateWebsiteError,
     InvalidUrlError,
@@ -37,11 +38,12 @@ async def test_create_website_creates_website_and_widget() -> None:
     widget = next(iter(env.widgets.widgets.values()))
     assert widget.website_id == result.website.id
     assert widget.tenant_id == principal.tenant_id
-    assert widget.widget_secret_hash is not None
-    assert widget.widget_secret_hash != result.widget_secret
+    # No long-lived widget secret is ever generated: widget requests are
+    # authenticated solely by the short-lived session JWTs (Phase 8).
+    assert not hasattr(widget, "widget_secret_hash")
 
 
-async def test_create_website_returns_secret_once_and_embed_script() -> None:
+async def test_create_website_returns_embed_script_without_secret() -> None:
     env = build_website_env()
     result = await env.service.create_website(
         principal=make_principal(),
@@ -51,7 +53,7 @@ async def test_create_website_returns_secret_once_and_embed_script() -> None:
         user_agent=None,
     )
 
-    assert result.widget_secret
+    assert not hasattr(result, "widget_secret")
     assert result.widget.widget_id
     assert result.widget.widget_id in result.embed_script
 
@@ -364,6 +366,35 @@ async def test_create_website_allows_url_reuse_after_soft_delete() -> None:
     assert second.website.status == WEBSITE_STATUS_PENDING
     # The soft-deleted record persists for audit/recovery alongside the new one.
     assert len(env.websites.websites) == 2
+
+
+async def test_build_embed_script_includes_widget_api_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("WIDGET_API_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv(
+        "WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js"
+    )
+    get_settings.cache_clear()
+    try:
+        env = build_website_env()
+        script = env.service.build_embed_script("widget-123")
+    finally:
+        get_settings.cache_clear()
+
+    assert 'src="https://cdn.example.com/webchat-widget.iife.min.js"' in script
+    assert 'data-widget-id="widget-123"' in script
+    assert 'data-api-base-url="https://api.example.com"' in script
+
+
+async def test_build_embed_script_omits_api_base_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("WIDGET_API_BASE_URL", raising=False)
+    monkeypatch.setenv("WIDGET_API_BASE_URL", "")
+    get_settings.cache_clear()
+    try:
+        env = build_website_env()
+        script = env.service.build_embed_script("widget-123")
+    finally:
+        get_settings.cache_clear()
+    assert "data-api-base-url" not in script
 
 
 async def test_get_widget_returns_tenant_widget() -> None:

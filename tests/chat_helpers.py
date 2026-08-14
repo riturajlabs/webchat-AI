@@ -11,6 +11,7 @@ from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_READY, KnowledgeChun
 from backend.models.website import WEBSITE_STATUS_READY, Website
 from backend.services.chat.rag_service import RagService
 from backend.services.website import WebsiteService
+
 from tests.fakes import (
     FakeAuditLogRepository,
     FakeChatMessageRepository,

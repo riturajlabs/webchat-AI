@@ -8,16 +8,20 @@
  *    `@font-face`), which would leak through the shadow boundary as network
  *    fetches and fail under a strict embedding-page CSP.
  *
+ * The stable-name copy is checked (content-identical to the hashed bundle);
+ * the hashed bundle must also exist so a CDN can serve it immutable.
+ *
  * Run after `pnpm build`:
  *
  *     node scripts/check-assets.mjs
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..');
-const file = resolve(root, 'dist', 'webchat-widget.iife.min.js');
+const dist = resolve(root, 'dist');
+const file = resolve(dist, 'webchat-widget.iife.min.js');
 
 const source = readFileSync(file, 'utf8');
 const failures = [];
@@ -33,6 +37,13 @@ if (/@import|@font-face/.test(source)) {
   failures.push('bundle CSS uses @import/@font-face (external fetch)');
 }
 
+const hashedIife = readdirSync(dist).find(
+  (name) => /^webchat-widget\.iife\.min\.[A-Za-z0-9_-]{8,}\.js$/.test(name),
+);
+if (!hashedIife) {
+  failures.push('no content-hashed IIFE bundle found (webchat-widget.iife.min.<hash>.js)');
+}
+
 for (const failure of failures) {
   console.error(`FAIL: ${file} — ${failure}`);
 }
@@ -40,4 +51,12 @@ for (const failure of failures) {
 if (failures.length > 0) {
   process.exit(1);
 }
-console.log(`webchat-widget.iife.min.js: self-contained (no loopback hosts, no external asset refs)`);
+
+if (hashedIife) {
+  console.log(
+    `webchat-widget.iife.min.js: self-contained (no loopback hosts, no external asset refs)`,
+  );
+  console.log(
+    `Production WIDGET_SCRIPT_URL should point at the hashed bundle: ${hashedIife}`,
+  );
+}
