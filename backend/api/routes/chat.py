@@ -29,12 +29,14 @@ from backend.api.deps import (
     current_principal,
     enforce_api_key_rate_limit,
     get_rag_service,
+    get_usage_service,
     require_principal_role,
 )
-from backend.api.sse import stream_with_disconnect
+from backend.api.sse import stream_answer_with_usage
 from backend.schemas.chat import ChatRequest
 from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
+from backend.services.billing import UsageService
 from backend.services.chat.rag_service import RagService
 
 logger = logging.getLogger("webchat_ai")
@@ -52,13 +54,17 @@ async def stream_chat(
     request: Request,
     principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[RagService, Depends(get_rag_service)],
+    usage: Annotated[UsageService, Depends(get_usage_service)],
     _: Annotated[None, Depends(chat_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
 ) -> StreamingResponse:
-    """Stream an answer for `question` from the tenant's knowledge base."""
+    """Stream an answer for `question` from the tenant's knowledge base.
 
+    The `messages_sent` plan limit is enforced before the pipeline runs; when
+    exhausted the stream opens with an `error` frame (code `LIMIT_REACHED`).
+    """
     async def event_stream() -> AsyncIterator[str]:
-        async for frame in stream_with_disconnect(
+        async for frame in stream_answer_with_usage(
             request,
             service.stream_answer(
                 tenant_id=principal.tenant_id,
@@ -68,6 +74,10 @@ async def stream_chat(
                 visitor_id=body.visitor_id,
                 user_id=principal.user_id,
             ),
+            usage=usage,
+            tenant_id=principal.tenant_id,
+            user_id=principal.user_id,
+            website_id=body.website_id,
         ):
             yield frame
 

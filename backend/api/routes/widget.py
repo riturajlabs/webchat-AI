@@ -24,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from backend.api.deps import (
     get_feedback_service,
     get_rag_service,
+    get_usage_service,
     get_widget_service,
     widget_chat_limiter,
     widget_claims_origin_guard,
@@ -35,7 +36,7 @@ from backend.api.deps import (
     widget_session_origin_guard,
     widget_visitor_limiter,
 )
-from backend.api.sse import sse, stream_with_disconnect
+from backend.api.sse import sse, stream_answer_with_usage
 from backend.core.errors import AppError, SpamRejectedError
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
@@ -44,6 +45,7 @@ from backend.schemas.widget import (
     WidgetPublicConfig,
     WidgetSessionResponse,
 )
+from backend.services.billing import UsageService
 from backend.services.chat.rag_service import RagService
 from backend.services.feedback.feedback_service import FeedbackService
 from backend.services.widget.spam_filter import is_spam
@@ -100,6 +102,7 @@ async def widget_chat(
     claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
     service: Annotated[WidgetService, Depends(get_widget_service)],
     rag: Annotated[RagService, Depends(get_rag_service)],
+    usage: Annotated[UsageService, Depends(get_usage_service)],
     _: Annotated[None, Depends(widget_chat_limiter)],
     __: Annotated[None, Depends(widget_visitor_limiter)],
     ___: Annotated[None, Depends(widget_claims_origin_guard)],
@@ -111,8 +114,10 @@ async def widget_chat(
     are re-validated against the live widget/tenant/website state before the
     pipeline runs (ADR-004 tenant validation flow). Validation failures surface
     as SSE `error` events so the stream stays uniform; only auth/rate-limit
-    rejections happen before the stream begins. The stream stops the moment the
-    client disconnects (no wasted generation tokens, no partial answer saved).
+    rejections happen before the stream begins. The tenant's `messages_sent`
+    plan limit is enforced before the pipeline runs (code `LIMIT_REACHED`).
+    The stream stops the moment the client disconnects (no wasted generation
+    tokens, no partial answer saved).
     """
 
     async def event_stream() -> AsyncIterator[str]:
@@ -142,7 +147,14 @@ async def widget_chat(
             visitor_id=claims.get("visitor_id"),
             user_id=None,
         )
-        async for frame in stream_with_disconnect(request, stream):
+        async for frame in stream_answer_with_usage(
+            request,
+            stream,
+            usage=usage,
+            tenant_id=claims["tenant_id"],
+            user_id=None,
+            website_id=claims["website_id"],
+        ):
             yield frame
 
     return StreamingResponse(

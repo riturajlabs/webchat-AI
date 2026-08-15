@@ -74,6 +74,9 @@ def test_configure_logging_is_environment_aware(monkeypatch) -> None:
             widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
             widget_api_base_url="",
             gemini_api_key="test-key",
+            payment_provider="stripe",
+            stripe_secret_key="sk_test",
+            stripe_webhook_secret="whsec_test",
             _env_file=None,
         ),
     )

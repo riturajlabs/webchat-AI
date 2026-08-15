@@ -16,6 +16,7 @@ from backend.api.deps import (
     get_auth_service,
     get_conversation_service,
     get_rag_service,
+    get_usage_service,
     get_website_service,
 )
 from backend.core.config import get_settings
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient
 from tests.analytics_helpers import build_analytics_env, seed_day, seed_website
 from tests.api_keys_helpers import build_api_keys_env
 from tests.auth_helpers import build_auth_env
+from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.conversations_helpers import build_conversation_env, seed_conversation
 from tests.http_helpers import register_verified_account
@@ -46,6 +48,7 @@ def client(monkeypatch):
     chat_env = build_chat_env()
     conv_env = build_conversation_env()
     analytics_env = build_analytics_env()
+    billing_env = build_billing_env(auth_env.tenants)
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: auth_env.service
     app.dependency_overrides[get_api_key_service] = lambda: api_keys_env.service
@@ -53,6 +56,7 @@ def client(monkeypatch):
     app.dependency_overrides[get_website_service] = lambda: chat_env.websites_service
     app.dependency_overrides[get_conversation_service] = lambda: conv_env.service
     app.dependency_overrides[get_analytics_service] = lambda: analytics_env.service
+    app.dependency_overrides[get_usage_service] = lambda: billing_env.service
     with TestClient(app) as test_client:
         yield test_client, auth_env, api_keys_env, chat_env, conv_env, analytics_env
     get_settings.cache_clear()

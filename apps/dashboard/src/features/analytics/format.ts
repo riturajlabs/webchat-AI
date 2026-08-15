@@ -60,3 +60,8 @@ export function formatRating(value: number | null | undefined): string {
   }
   return `${value.toFixed(1)} / 5`;
 }
+
+/** `66.6667` -> `"67%"` (rounds to whole percent for card values). */
+export function formatPercent(value: number): string {
+  return `${Math.round(value)}%`;
+}

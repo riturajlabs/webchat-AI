@@ -31,6 +31,7 @@ from backend.repositories import (
     WidgetRepository,
 )
 from backend.services.auth import Principal
+from backend.services.billing import UsageService
 from backend.utils.url_validator import normalize_url
 
 
@@ -61,11 +62,16 @@ class WebsiteService:
         widgets: WidgetRepository,
         audit: AuditLogRepository,
         settings: Settings | None = None,
+        usage: UsageService | None = None,
     ) -> None:
         self._websites = websites
         self._widgets = widgets
         self._audit = audit
         self._settings = settings or get_settings()
+        # Phase 13 billing: raises `LimitReachedError` before the tenant can
+        # exceed `max_websites`. Optional so pre-existing call sites/tests keep
+        # working without a usage service.
+        self._usage = usage
 
     # ------------------------------------------------------------------ flows
 
@@ -81,6 +87,9 @@ class WebsiteService:
         normalized_url = normalize_url(url)
         if await self._websites.find_by_url(principal.tenant_id, normalized_url) is not None:
             raise DuplicateWebsiteError("A website with this URL already exists.")
+        if self._usage is not None:
+            # Phase 13 billing: reject before persisting anything.
+            await self._usage.check_limit(principal.tenant_id, event_type="websites")
 
         website = Website.new(
             tenant_id=principal.tenant_id,

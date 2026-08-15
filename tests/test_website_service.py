@@ -415,6 +415,9 @@ async def test_build_embed_script_omits_api_base_when_unset_in_production(
         "WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js"
     )
     monkeypatch.setenv("WIDGET_API_BASE_URL", "")
+    monkeypatch.setenv("PAYMENT_PROVIDER", "stripe")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
     get_settings.cache_clear()
     try:
         env = build_website_env()

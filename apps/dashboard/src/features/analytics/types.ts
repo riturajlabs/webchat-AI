@@ -45,4 +45,42 @@ export interface FeedbackSummary {
   distribution: Record<string, number>;
 }
 
+/**
+ * Resolution metrics (Phase 12.5, /api/analytics/overview).
+ * Rates are percentages over the window's assistant responses; the fallback
+ * text is the no-context answer the RAG pipeline returns.
+ */
+export interface AnalyticsOverview {
+  total_conversations: number;
+  total_messages: number;
+  total_questions: number;
+  total_ai_responses: number;
+  successful_answers: number;
+  fallback_responses: number;
+  resolution_rate: number;
+  fallback_percentage: number;
+  avg_response_time: number | null;
+}
+
+/** One popular user question and how often it was asked (Phase 12.5). */
+export interface QuestionCount {
+  question: string;
+  count: number;
+}
+
+/**
+ * Feedback sentiment (Phase 12.5, /api/analytics/feedback).
+ * Positive = ratings 4-5, neutral = 3, negative = 1-2.
+ */
+export interface FeedbackAnalytics {
+  total: number;
+  positive: number;
+  negative: number;
+  neutral: number;
+  positive_percentage: number;
+  negative_percentage: number;
+  average_rating: number | null;
+  distribution: Record<string, number>;
+}
+
 export type AnalyticsRange = 7 | 30 | 90;

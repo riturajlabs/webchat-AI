@@ -11,6 +11,7 @@ import pytest
 from backend.api.deps import (
     get_feedback_service,
     get_rag_service,
+    get_usage_service,
     get_widget_service,
 )
 from backend.core.config import get_settings
@@ -22,6 +23,7 @@ from backend.services.feedback.feedback_service import FeedbackService
 from backend.services.widget.widget_service import WidgetService
 from fastapi.testclient import TestClient
 
+from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.fakes import (
     FakeFeedbackRepository,
@@ -42,9 +44,10 @@ def _build_widget_service(
     tenant_status: str = "active",
     widget_enabled: bool = True,
     allowed_domains: list[str] | None = None,
+    tenants: FakeTenantRepository | None = None,
 ) -> WidgetService:
     widgets = FakeWidgetRepository()
-    tenants = FakeTenantRepository()
+    tenants = tenants or FakeTenantRepository()
     store = FakeWidgetStore()
 
     widget = Widget.new(tenant_id=TENANT_ID, website_id=WEBSITE_ID)
@@ -69,7 +72,11 @@ def _build_widget_service(
     )
 
 
-def _app_with_service(widget_service: WidgetService, chat_env) -> TestClient:
+def _app_with_service(
+    widget_service: WidgetService,
+    chat_env,
+    usage=None,
+) -> TestClient:
     feedback_service = FeedbackService(
         feedback=FakeFeedbackRepository(),
         messages=chat_env.messages,
@@ -78,6 +85,8 @@ def _app_with_service(widget_service: WidgetService, chat_env) -> TestClient:
     app.dependency_overrides[get_widget_service] = lambda: widget_service
     app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
     app.dependency_overrides[get_feedback_service] = lambda: feedback_service
+    if usage is not None:
+        app.dependency_overrides[get_usage_service] = lambda: usage
     return TestClient(app)
 
 
@@ -91,7 +100,9 @@ def client(monkeypatch):
     monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
     chat_env = build_chat_env()
-    widget_service = _build_widget_service(chat_env.websites)
+    tenants = FakeTenantRepository()
+    widget_service = _build_widget_service(chat_env.websites, tenants=tenants)
+    billing_env = build_billing_env(tenants)
     # The feedback service shares the chat message repo so a visitor can rate a
     # message the chat flow actually produced.
     feedback_service = FeedbackService(
@@ -102,6 +113,7 @@ def client(monkeypatch):
     app.dependency_overrides[get_widget_service] = lambda: widget_service
     app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
     app.dependency_overrides[get_feedback_service] = lambda: feedback_service
+    app.dependency_overrides[get_usage_service] = lambda: billing_env.service
     with TestClient(app) as test_client:
         yield test_client, widget_service, chat_env, feedback_service
     get_settings.cache_clear()

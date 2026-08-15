@@ -42,7 +42,9 @@ from backend.repositories import (
     MongoFeedbackRepository,
     MongoMemberRepository,
     MongoRefreshTokenRepository,
+    MongoSubscriptionRepository,
     MongoTenantRepository,
+    MongoUsageEventRepository,
     MongoUsageRecordRepository,
     MongoUserRepository,
     MongoWebsiteRepository,
@@ -54,6 +56,12 @@ from backend.services.admin import AdminService
 from backend.services.analytics import AnalyticsService
 from backend.services.api_keys import ApiKeyPrincipal, ApiKeyService
 from backend.services.auth import AuthService, Principal
+from backend.services.billing import (
+    PaymentProvider,
+    SubscriptionService,
+    UsageService,
+    build_payment_provider,
+)
 from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
@@ -89,30 +97,77 @@ def get_auth_service(
     )
 
 
+def get_usage_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> UsageService:
+    """Build the billing usage service with MongoDB-backed repositories.
+
+    Phase 13 gates chat messages, website creation and crawls against the
+    tenant's plan, and reports `/api/billing/usage`. Phase 14 resolves the
+    plan from the tenant's active subscription (via `subscriptions`) before
+    falling back to `tenants.plan`.
+    """
+    return UsageService(
+        events=MongoUsageEventRepository(db),
+        tenants=MongoTenantRepository(db),
+        websites=MongoWebsiteRepository(db),
+        documents=MongoDocumentRepository(db),
+        subscriptions=MongoSubscriptionRepository(db),
+    )
+
+
+def get_payment_provider() -> PaymentProvider:
+    """Resolve the configured payment gateway implementation (Phase 14)."""
+    return build_payment_provider(get_settings())
+
+
+def get_subscription_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    provider: Annotated[PaymentProvider, Depends(get_payment_provider)],
+) -> SubscriptionService:
+    """Build the subscription service (checkout, webhook activation, reads).
+
+    Phase 14: `create_checkout` delegates to the payment provider and
+    `activate_payment` appends a `subscriptions` document per paid billing
+    period (payment history).
+    """
+    return SubscriptionService(
+        subscriptions=MongoSubscriptionRepository(db),
+        provider=provider,
+        tenants=MongoTenantRepository(db),
+        currency=get_settings().payment_currency,
+    )
+
+
 def get_website_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    usage: Annotated[UsageService, Depends(get_usage_service)],
 ) -> WebsiteService:
     """Build the website service with MongoDB-backed repositories."""
     return WebsiteService(
         websites=MongoWebsiteRepository(db),
         widgets=MongoWidgetRepository(db),
         audit=MongoAuditLogRepository(db),
+        usage=usage,
     )
 
 
 def get_crawl_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    usage: Annotated[UsageService, Depends(get_usage_service)],
 ) -> CrawlService:
     """Build the crawl service with MongoDB-backed repositories.
 
     The ARQ `crawl_website` task is enqueued so `start_crawl` never blocks on
-    worker execution (ADR-002).
+    worker execution (ADR-002). Phase 13 limit enforcement (documents +
+    crawl_pages) runs before the job is queued.
     """
     return CrawlService(
         crawl_jobs=MongoCrawlJobRepository(db),
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         enqueue=enqueue_crawl_website,
+        usage=usage,
     )
 
 
@@ -444,6 +499,14 @@ widget_config_limiter = RateLimitDependency(limit=240, window_seconds=3600)
 # a dedicated audit trail for admin actions"): bounded budget on admin reads
 # and mutations alike.
 admin_limiter = RateLimitDependency(limit=600, window_seconds=3600)
+# Phase 13 billing reads abuse protection (usage + plans).
+billing_limiter = RateLimitDependency(limit=240, window_seconds=3600)
+# Phase 14 payment abuse protection (checkout + subscription report reads).
+billing_checkout_limiter = RateLimitDependency(limit=30, window_seconds=3600)
+# Phase 14 provider webhooks: authenticated by signature, but still per-IP
+# budgeted so a hostile client cannot flood the activation path (they will be
+# rejected on signature anyway; the budget bounds the DB work).
+webhook_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)

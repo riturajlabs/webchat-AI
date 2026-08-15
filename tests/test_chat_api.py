@@ -3,12 +3,18 @@
 import json
 
 import pytest
-from backend.api.deps import get_auth_service, get_rag_service, get_website_service
+from backend.api.deps import (
+    get_auth_service,
+    get_rag_service,
+    get_usage_service,
+    get_website_service,
+)
 from backend.core.config import get_settings
 from backend.main import create_app
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import build_auth_env
+from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.http_helpers import register_verified_account
 
@@ -17,18 +23,20 @@ _ACCOUNT_SEQ = 0
 
 @pytest.fixture
 def client(monkeypatch):
-    """A TestClient whose auth/website/rag services are backed by fakes."""
+    """A TestClient whose auth/website/rag/usage services are backed by fakes."""
     monkeypatch.setenv("COOKIE_SECURE", "false")
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
     auth_env = build_auth_env()
     chat_env = build_chat_env()
+    billing_env = build_billing_env(auth_env.tenants)
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: auth_env.service
     app.dependency_overrides[get_website_service] = lambda: chat_env.websites_service
     app.dependency_overrides[get_rag_service] = lambda: chat_env.rag
+    app.dependency_overrides[get_usage_service] = lambda: billing_env.service
     with TestClient(app) as test_client:
-        yield test_client, auth_env, chat_env
+        yield test_client, auth_env, chat_env, billing_env
     get_settings.cache_clear()
 
 
@@ -70,7 +78,7 @@ def _event_map(events: list[tuple[str, dict]]) -> dict[str, list[dict]]:
 
 
 async def test_chat_streams_answer_with_sources_and_done(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     user, headers = _register(test_client)
     await make_website(
         chat_env,
@@ -106,13 +114,13 @@ async def test_chat_streams_answer_with_sources_and_done(client) -> None:
 
 
 async def test_chat_requires_authentication(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     response = test_client.post("/api/chat/stream", json={"website_id": "web-1", "question": "Hi"})
     assert response.status_code == 401
 
 
 async def test_chat_requires_owner_or_admin_role(client) -> None:
-    test_client, auth_env, chat_env = client
+    test_client, auth_env, _, _ = client
     user, headers = _register(test_client)
     # Downgrade the account to viewer: chat must be forbidden (RBAC).
     member = next(iter(auth_env.members.members.values()))
@@ -126,7 +134,7 @@ async def test_chat_requires_owner_or_admin_role(client) -> None:
 
 
 async def test_chat_rejects_blank_question(client) -> None:
-    test_client, _, _ = client
+    test_client, _, _, _ = client
     _, headers = _register(test_client)
     response = test_client.post(
         "/api/chat/stream",
@@ -137,7 +145,7 @@ async def test_chat_rejects_blank_question(client) -> None:
 
 
 async def test_chat_isolates_websites_between_tenants(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     owner, owner_headers = _register(test_client)
     await make_website(
         chat_env,
@@ -168,7 +176,7 @@ async def test_chat_isolates_websites_between_tenants(client) -> None:
 
 
 async def test_chat_fallback_streams_error_free_fallback(client) -> None:
-    test_client, _, chat_env = client
+    test_client, _, chat_env, _ = client
     user, headers = _register(test_client)
     await make_website(
         chat_env,
@@ -188,3 +196,39 @@ async def test_chat_fallback_streams_error_free_fallback(client) -> None:
     assert grouped["done"][0]["fallback"] is True
     assert "error" not in grouped
     assert chat_env.generation.calls == []
+
+
+async def test_chat_stream_rejects_when_message_limit_reached(client) -> None:
+    """Phase 13: an exhausted monthly messages cap opens with LIMIT_REACHED."""
+    test_client, _, chat_env, billing_env = client
+    user, headers = _register(test_client)
+    await make_website(
+        chat_env,
+        tenant_id=user["tenant_id"],
+        website_id="web-1",
+        knowledge_chunks=1,
+    )
+    for _ in range(1_000):
+        await billing_env.service.record_usage(
+            tenant_id=user["tenant_id"],
+            user_id=user["id"],
+            website_id="web-1",
+            event_type="messages_sent",
+        )
+
+    response = test_client.post(
+        "/api/chat/stream",
+        json={"website_id": "web-1", "question": "What plans do you offer?"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    assert len(events) == 1
+    event, data = events[0]
+    assert event == "error"
+    assert data["code"] == "LIMIT_REACHED"
+    assert "messages_sent" in data["message"]
+    # The pipeline must never run past the gate.
+    assert chat_env.generation.calls == []
+    assert len(chat_env.messages.messages) == 0

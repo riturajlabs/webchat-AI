@@ -15,6 +15,8 @@ from backend.core.config import get_settings
 from backend.core.security import utcnow
 from backend.repositories.analytics_repository import (
     AnalyticsRepository,
+    FeedbackAnalyticsRow,
+    QuestionCountRow,
     ResponseMetricsRow,
     TimeseriesRow,
     TopWebsiteRow,
@@ -34,6 +36,27 @@ class AnalyticsSummaryItem:
     total_input_tokens: int
     total_output_tokens: int
     estimated_cost: float
+    avg_response_time: float | None
+
+
+@dataclass(frozen=True)
+class OverviewItem:
+    """Resolution-metrics contract for the /overview endpoint (Phase 12.5).
+
+    Percentages are derived here: resolution rate is the share of assistant
+    responses that were not the no-context fallback; the fallback percentage
+    is the complement. Both round to one decimal and collapse to 0.0 when
+    there are no responses at all.
+    """
+
+    total_conversations: int
+    total_messages: int
+    total_questions: int
+    total_ai_responses: int
+    successful_answers: int
+    fallback_responses: int
+    resolution_rate: float
+    fallback_percentage: float
     avg_response_time: float | None
 
 
@@ -107,6 +130,62 @@ class AnalyticsService:
             slowest_response_time=_round_optional(row.slowest_response_time),
         )
 
+    async def get_overview(
+        self,
+        tenant_id: str,
+        *,
+        days: int,
+        website_id: str | None = None,
+    ) -> OverviewItem:
+        """Resolution metrics: chats, questions, successful/fallback answers.
+
+        `resolution_rate` = successful answers / all answers; when the window
+        has no assistant responses both rates are 0.0 (there is nothing to
+        divide by, and an empty window should read as 0% resolved, not null).
+        """
+        row = await self._analytics.overview(
+            tenant_id, website_id=website_id, since=_start_of_window(days)
+        )
+        total = row.total_ai_responses
+        resolution_rate = round(row.successful_answers / total * 100, 1) if total else 0.0
+        fallback_percentage = round(row.fallback_responses / total * 100, 1) if total else 0.0
+        return OverviewItem(
+            total_conversations=row.total_conversations,
+            total_messages=row.total_messages,
+            total_questions=row.total_questions,
+            total_ai_responses=row.total_ai_responses,
+            successful_answers=row.successful_answers,
+            fallback_responses=row.fallback_responses,
+            resolution_rate=resolution_rate,
+            fallback_percentage=fallback_percentage,
+            avg_response_time=_round_optional(row.avg_response_time),
+        )
+
+    async def get_top_questions(
+        self,
+        tenant_id: str,
+        *,
+        days: int,
+        website_id: str | None = None,
+        limit: int,
+    ) -> list[QuestionCountRow]:
+        """Rank the most frequently asked user questions in the window."""
+        return await self._analytics.top_questions(
+            tenant_id, website_id=website_id, since=_start_of_window(days), limit=limit
+        )
+
+    async def get_feedback_analytics(
+        self,
+        tenant_id: str,
+        *,
+        days: int,
+        website_id: str | None = None,
+    ) -> FeedbackAnalyticsRow:
+        """Sentiment + star distribution over the feedback collection."""
+        return await self._analytics.feedback(
+            tenant_id, website_id=website_id, since=_start_of_window(days)
+        )
+
     # ------------------------------------------------------------- internals
 
     def _estimated_cost(self, input_tokens: int, output_tokens: int) -> float:
@@ -159,4 +238,5 @@ def _round_optional(value: float | None) -> float | None:
 __all__ = [
     "AnalyticsService",
     "AnalyticsSummaryItem",
+    "OverviewItem",
 ]

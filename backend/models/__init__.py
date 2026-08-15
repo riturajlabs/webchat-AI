@@ -76,6 +76,16 @@ from backend.models.knowledge_chunk import (
 )
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
+from backend.models.subscription import (
+    SUBSCRIPTION_LIVE_STATUSES,
+    SUBSCRIPTION_SCHEMA_VERSION,
+    SUBSCRIPTION_STATUS_ACTIVE,
+    SUBSCRIPTION_STATUS_CANCELLED,
+    SUBSCRIPTION_STATUS_EXPIRED,
+    SUBSCRIPTION_STATUS_TRIALING,
+    SUBSCRIPTION_STATUSES,
+    Subscription,
+)
 from backend.models.tenant import Tenant
 from backend.models.usage_record import (
     USAGE_COUNTER_CHATS,
@@ -173,6 +183,14 @@ __all__ = [
     "KnowledgeChunk",
     "Member",
     "RefreshToken",
+    "Subscription",
+    "SUBSCRIPTION_LIVE_STATUSES",
+    "SUBSCRIPTION_SCHEMA_VERSION",
+    "SUBSCRIPTION_STATUSES",
+    "SUBSCRIPTION_STATUS_ACTIVE",
+    "SUBSCRIPTION_STATUS_CANCELLED",
+    "SUBSCRIPTION_STATUS_EXPIRED",
+    "SUBSCRIPTION_STATUS_TRIALING",
     "Tenant",
     "User",
     "WEBSITE_STATUSES",

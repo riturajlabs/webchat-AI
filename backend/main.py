@@ -19,12 +19,14 @@ from backend.api.routes.admin import router as admin_router
 from backend.api.routes.analytics import router as analytics_router
 from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
+from backend.api.routes.billing import router as billing_router
 from backend.api.routes.chat import router as chat_router
 from backend.api.routes.conversations import router as conversations_router
 from backend.api.routes.crawl_jobs import router as crawl_jobs_router
 from backend.api.routes.feedback import router as feedback_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.knowledge import router as knowledge_router
+from backend.api.routes.webhooks import router as webhooks_router
 from backend.api.routes.websites import router as websites_router
 from backend.api.routes.widget import router as widget_router
 from backend.core.config import get_settings
@@ -139,6 +141,8 @@ def create_app() -> FastAPI:
     app.include_router(feedback_router, prefix="/api")
     app.include_router(knowledge_router, prefix="/api")
     app.include_router(widget_router, prefix="/api")
+    app.include_router(billing_router, prefix="/api")
+    app.include_router(webhooks_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
 
     return app

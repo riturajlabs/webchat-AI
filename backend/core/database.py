@@ -281,6 +281,23 @@ class MongoDB:
         await db["usage_records"].create_index(
             "updated_at", expireAfterSeconds=_usage_ttl_seconds()
         )
+        # Phase 13 SaaS billing (docs/05 §20, ADR-005 §5.9): `usage_events` is
+        # the append-only counter log powering `/api/billing/usage` and plan
+        # limit checks. `(tenant_id, created_at)` serves the monthly window
+        # aggregation; TTL mirrors usage_records retention.
+        await db["usage_events"].create_index([("tenant_id", 1), ("created_at", 1)])
+        await db["usage_events"].create_index(
+            "created_at", expireAfterSeconds=_usage_ttl_seconds()
+        )
+        # Phase 14 SaaS subscriptions: the tenant list (payment history + plan
+        # resolution) and the webhook idempotency lookup keyed by provider id.
+        await db["subscriptions"].create_index(
+            [("tenant_id", 1), ("created_at", -1)]
+        )
+        await db["subscriptions"].create_index(
+            [("tenant_id", 1), ("status", 1), ("end_date", 1)]
+        )
+        await db["subscriptions"].create_index("payment_id", unique=True)
         # API key management (docs/05 §12).
         await db["api_keys"].create_index("tenant_id")
         await db["api_keys"].create_index([("tenant_id", 1), ("created_at", -1)])

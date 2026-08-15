@@ -276,3 +276,51 @@ class UserNotFoundError(AppError):
 
     status_code = 404
     code = "USER_NOT_FOUND"
+
+
+class LimitReachedError(AppError):
+    """A subscription plan limit is exhausted (Phase 13 billing).
+
+    Raised before an action that would exceed a plan cap (chat message,
+    website creation, document crawl). `extra` carries the offending metric,
+    the current usage and the plan limit so clients can render a meaningful
+    upgrade prompt.
+    """
+
+    status_code = 429
+    code = "LIMIT_REACHED"
+
+
+class PaymentProviderError(AppError):
+    """The payment gateway rejected or failed a request (Phase 14).
+
+    Raised when creating a checkout session or verifying a payment upstream;
+    a gateway outage must not look like a caller mistake, so this surfaces as
+    a 502 with the provider's message (never its keys).
+    """
+
+    status_code = 502
+    code = "PAYMENT_PROVIDER_ERROR"
+
+
+class PaymentSignatureError(AppError):
+    """A payment webhook failed signature verification (Phase 14).
+
+    Raised by `PaymentProvider.parse_webhook` so an unverified webhook is
+    rejected (400) *before* any subscription state changes. Providers retry on
+    non-2xx, so a bad signature is retried rather than silently accepted.
+    """
+
+    status_code = 400
+    code = "INVALID_PAYMENT_SIGNATURE"
+
+
+class PlanNotPurchasableError(AppError):
+    """The requested plan cannot be bought via self-serve checkout (Phase 14).
+
+    Free is the trial tier and Enterprise is sold by sales (`price_cents`
+    is `None`/`0`); attempting to checkout either is a client error.
+    """
+
+    status_code = 400
+    code = "PLAN_NOT_PURCHASABLE"

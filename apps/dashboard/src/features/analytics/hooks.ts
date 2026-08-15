@@ -8,9 +8,12 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 
 import type {
+  AnalyticsOverview,
   AnalyticsRange,
   AnalyticsSummary,
+  FeedbackAnalytics,
   FeedbackSummary,
+  QuestionCount,
   ResponseMetrics,
   TimeseriesPoint,
   TopWebsite,
@@ -27,6 +30,10 @@ export const analyticsKeys = {
     ['analytics', 'performance', { days, websiteId }] as const,
   feedback: (days: number, websiteId: string) =>
     ['analytics', 'feedback', { days, websiteId }] as const,
+  overview: (days: number, websiteId: string) =>
+    ['analytics', 'overview', { days, websiteId }] as const,
+  questions: (days: number, websiteId: string) =>
+    ['analytics', 'questions', { days, websiteId }] as const,
 };
 
 export interface AnalyticsFilters {
@@ -80,5 +87,40 @@ export function useFeedbackSummary(days: number, websiteId: string) {
     queryKey: analyticsKeys.feedback(days, websiteId),
     queryFn: () =>
       api.get<FeedbackSummary>(`/api/feedback/summary?days=${days}${websiteQuery(websiteId)}`),
+  });
+}
+
+/**
+ * Resolution metrics (Phase 12.5, /api/analytics/overview).
+ * Successful answers, fallback rate, resolution rate and response time.
+ */
+export function useAnalyticsOverview(days: number, websiteId: string) {
+  return useQuery({
+    queryKey: analyticsKeys.overview(days, websiteId),
+    queryFn: () =>
+      api.get<AnalyticsOverview>(`/api/analytics/overview?days=${days}${websiteQuery(websiteId)}`),
+  });
+}
+
+/**
+ * Feedback sentiment (Phase 12.5, /api/analytics/feedback).
+ * Positive = ratings 4-5, negative = 1-2, neutral = 3.
+ */
+export function useAnalyticsFeedback(days: number, websiteId: string) {
+  return useQuery({
+    queryKey: analyticsKeys.feedback(days, websiteId),
+    queryFn: () =>
+      api.get<FeedbackAnalytics>(`/api/analytics/feedback?days=${days}${websiteQuery(websiteId)}`),
+  });
+}
+
+/** Most-asked user questions in the window (Phase 12.5). */
+export function useAnalyticsQuestions(days: number, websiteId: string) {
+  return useQuery({
+    queryKey: analyticsKeys.questions(days, websiteId),
+    queryFn: () =>
+      api.get<QuestionCount[]>(
+        `/api/analytics/questions?days=${days}${websiteQuery(websiteId)}&limit=10`,
+      ),
   });
 }

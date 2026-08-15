@@ -25,6 +25,7 @@ from backend.repositories import (
     WebsiteRepository,
 )
 from backend.services.auth import Principal
+from backend.services.billing import UsageService
 
 EnqueueFn = Callable[[str], Awaitable[None]]
 
@@ -47,12 +48,17 @@ class CrawlService:
         audit: AuditLogRepository,
         enqueue: EnqueueFn,
         settings: Settings | None = None,
+        usage: UsageService | None = None,
     ) -> None:
         self._crawl_jobs = crawl_jobs
         self._websites = websites
         self._audit = audit
         self._enqueue = enqueue
         self._settings = settings or get_settings()
+        # Phase 13 billing: raises `LimitReachedError` before queueing when the
+        # tenant already sits at `max_documents` or has exhausted its monthly
+        # `max_crawl_pages`. Optional for callers/tests without usage gating.
+        self._usage = usage
 
     async def start_crawl(
         self,
@@ -73,6 +79,10 @@ class CrawlService:
         active = await self._crawl_jobs.find_active_for_website(principal.tenant_id, website_id)
         if active is not None:
             raise CrawlConflictError("A crawl is already in progress for this website.")
+        if self._usage is not None:
+            # Phase 13 billing: reject before the job is created/queued.
+            await self._usage.check_limit(principal.tenant_id, event_type="documents")
+            await self._usage.check_limit(principal.tenant_id, event_type="crawl_pages")
 
         job = CrawlJob.new(tenant_id=principal.tenant_id, website_id=website_id)
         await self._crawl_jobs.create(job)

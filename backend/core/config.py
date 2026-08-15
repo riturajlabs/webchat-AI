@@ -204,6 +204,19 @@ class Settings(BaseSettings):
     cost_per_million_input_tokens: float = 0.30
     cost_per_million_output_tokens: float = 1.50
 
+    # Payments (Phase 14, SaaS subscriptions). `payment_provider` selects the
+    # abstraction implementation: "stripe", "razorpay" or "mock" (dev/tests).
+    # In production only stripe/razorpay pass validation, with the provider's
+    # keys required. `payment_currency` is the ISO 4217 code billed via
+    # checkout (plan prices in `backend/models/plan.py` are its minor units).
+    payment_provider: str = "mock"
+    payment_currency: str = "USD"
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    razorpay_key_id: str | None = None
+    razorpay_key_secret: str | None = None
+    razorpay_webhook_secret: str | None = None
+
     # Performance instrumentation (Phase 12.1; opt-in, disabled by default).
     # When true, per-request HTTP timing, AI provider timings (TTFT/total) and
     # worker job durations are logged as structured records. Never enabled in
@@ -250,6 +263,27 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "WIDGET_API_BASE_URL must point at a real API origin in production "
                     "(got a localhost value)."
+                )
+            # Payments fail closed: a real gateway + its keys are mandatory.
+            if self.payment_provider.lower() not in ("stripe", "razorpay"):
+                raise ValueError(
+                    "PAYMENT_PROVIDER must be 'stripe' or 'razorpay' in production "
+                    "(got a mock/unset value)."
+                )
+            if self.payment_provider.lower() == "stripe" and (
+                not self.stripe_secret_key or not self.stripe_webhook_secret
+            ):
+                raise ValueError(
+                    "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required in production."
+                )
+            if self.payment_provider.lower() == "razorpay" and (
+                not self.razorpay_key_id
+                or not self.razorpay_key_secret
+                or not self.razorpay_webhook_secret
+            ):
+                raise ValueError(
+                    "RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET "
+                    "are required in production."
                 )
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled

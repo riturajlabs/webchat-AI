@@ -56,7 +56,16 @@ from backend.repositories.refresh_token_repository import (
     MongoRefreshTokenRepository,
     RefreshTokenRepository,
 )
+from backend.repositories.subscription_repository import (
+    MongoSubscriptionRepository,
+    SubscriptionRepository,
+)
 from backend.repositories.tenant_repository import MongoTenantRepository, TenantRepository
+from backend.repositories.usage_event_repository import (
+    MongoUsageEventRepository,
+    UsageEventRepository,
+    UsageEventTotals,
+)
 from backend.repositories.usage_record_repository import (
     MongoUsageRecordRepository,
     TenantUsageSummary,
@@ -105,18 +114,23 @@ __all__ = [
     "MongoTenantRepository",
     "MongoUserRepository",
     "MongoUsageRecordRepository",
+    "MongoUsageEventRepository",
     "MongoWebsiteRepository",
     "MongoWidgetRepository",
     "MongoVectorRepository",
+    "MongoSubscriptionRepository",
     "MemberRepository",
     "PlatformStats",
     "RefreshTokenRepository",
     "ResponseMetricsRow",
+    "SubscriptionRepository",
     "TenantRepository",
     "TimeseriesRow",
     "TopWebsiteRow",
     "UserRepository",
     "UsageRecordRepository",
+    "UsageEventRepository",
+    "UsageEventTotals",
     "VectorRepository",
     "VectorSearchResult",
     "WebsiteRepository",

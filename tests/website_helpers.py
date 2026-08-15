@@ -17,7 +17,7 @@ class WebsiteEnv:
     service: WebsiteService
 
 
-def build_website_env() -> WebsiteEnv:
+def build_website_env(usage=None) -> WebsiteEnv:
     websites = FakeWebsiteRepository()
     widgets = FakeWidgetRepository()
     audit = FakeAuditLogRepository()
@@ -25,6 +25,7 @@ def build_website_env() -> WebsiteEnv:
         websites=websites,
         widgets=widgets,
         audit=audit,
+        usage=usage,
     )
     return WebsiteEnv(websites=websites, widgets=widgets, audit=audit, service=service)
 

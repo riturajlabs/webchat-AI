@@ -15,9 +15,20 @@ from typing import Any, Protocol
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ASCENDING, DESCENDING
 
-from backend.models.chat_message import CHAT_ROLE_ASSISTANT
+from backend.models.chat_message import (
+    CHAT_ROLE_ASSISTANT,
+    CHAT_ROLE_USER,
+)
 from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED
 from backend.models.website import WEBSITE_STATUS_DELETED
+from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK
+
+# Feedback sentiment buckets for the analytics feedback endpoint. Ratings of
+# 4-5 stars count as positive, 3 as neutral, and 1-2 as negative (the star
+# distribution itself is still surfaced verbatim for the dashboard chart).
+FEEDBACK_POSITIVE_RATING = 4
+FEEDBACK_NEGATIVE_RATING = 2
+
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,45 @@ class ResponseMetricsRow:
     slowest_response_time: float | None
 
 
+@dataclass(frozen=True)
+class OverviewRow:
+    """Raw aggregates behind the /analytics/overview endpoint.
+
+    `total_questions` counts user turns; `total_ai_responses` counts assistant
+    messages (fallbacks included); `successful_answers` and
+    `fallback_responses` split assistant messages by whether they carry the
+    no-context fallback text (Phase 12.5 resolution metrics).
+    """
+
+    total_conversations: int
+    total_messages: int
+    total_questions: int
+    total_ai_responses: int
+    successful_answers: int
+    fallback_responses: int
+    avg_response_time: float | None
+
+
+@dataclass(frozen=True)
+class QuestionCountRow:
+    """One distinct user question and how often it was asked."""
+
+    question: str
+    count: int
+
+
+@dataclass(frozen=True)
+class FeedbackAnalyticsRow:
+    """Sentiment + star distribution behind the /analytics/feedback endpoint."""
+
+    total: int
+    positive: int
+    negative: int
+    neutral: int
+    average_rating: float | None
+    distribution: dict[int, int]
+
+
 class AnalyticsRepository(Protocol):
     """Read-only analytics queries (all tenant-scoped, ADR-005 §5.5)."""
 
@@ -98,6 +148,31 @@ class AnalyticsRepository(Protocol):
         since: datetime,
     ) -> ResponseMetricsRow: ...
 
+    async def overview(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> OverviewRow: ...
+
+    async def top_questions(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+        limit: int,
+    ) -> list[QuestionCountRow]: ...
+
+    async def feedback(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> FeedbackAnalyticsRow: ...
+
 
 class MongoAnalyticsRepository:
     """MongoDB-backed analytics repository.
@@ -107,6 +182,10 @@ class MongoAnalyticsRepository:
     `messages` (role `assistant`); message/token totals come from the
     `usage_records` daily rollup, which `RagService` already maintains
     (ADR-005 §5.5). Website names resolve from the tenant's `websites`.
+    Fallback responses are recognised by their fixed no-context text
+    (`backend.prompts.rag.UNKNOWN_ANSWER_FALLBACK`) so the analytics layer
+    needs no changes to the chat pipeline. Feedback reads the `feedback`
+    collection the widget already writes.
     """
 
     def __init__(self, db: AsyncIOMotorDatabase[Any]) -> None:
@@ -114,6 +193,7 @@ class MongoAnalyticsRepository:
         self._messages = db["messages"]
         self._usage = db["usage_records"]
         self._websites = db["websites"]
+        self._feedback = db["feedback"]
 
     async def summary(
         self,
@@ -309,7 +389,195 @@ class MongoAnalyticsRepository:
             slowest_response_time=float(doc["slowest_response_time"]),
         )
 
+    async def overview(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> OverviewRow:
+        """Conversation / question / response resolution aggregates.
+
+        A single `$facet` pass over `messages` yields user-turn counts,
+        assistant counts, the fallback split (by fixed no-context text) and
+        the average response time; conversations and total messages reuse the
+        same sources as `summary`.
+        """
+        total_conversations = await self._count_conversations(
+            tenant_id, website_id=website_id, since=since
+        )
+        messages_match: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "role": {"$in": [CHAT_ROLE_USER, CHAT_ROLE_ASSISTANT]},
+            "created_at": {"$gte": since},
+        }
+        if website_id is not None:
+            messages_match["website_id"] = website_id
+        facet_doc = await self._first(
+            self._messages.aggregate(
+                [
+                    {"$match": messages_match},
+                    {
+                        "$facet": {
+                            "users": [{"$match": {"role": CHAT_ROLE_USER}}, {"$count": "count"}],
+                            "assistants": [
+                                {"$match": {"role": CHAT_ROLE_ASSISTANT}},
+                                {"$count": "count"},
+                            ],
+                            "fallbacks": [
+                                {
+                                    "$match": {
+                                        "role": CHAT_ROLE_ASSISTANT,
+                                        "content": UNKNOWN_ANSWER_FALLBACK,
+                                    }
+                                },
+                                {"$count": "count"},
+                            ],
+                            "response": [
+                                {
+                                    "$match": {
+                                        "role": CHAT_ROLE_ASSISTANT,
+                                        "response_time": {"$ne": None},
+                                    }
+                                },
+                                {"$group": {"_id": None, "avg": {"$avg": "$response_time"}}},
+                            ],
+                        }
+                    },
+                ]
+            )
+        )
+        facet = facet_doc or {}
+        total_ai_responses = self._facet_count(facet, "assistants")
+        fallback_responses = self._facet_count(facet, "fallbacks")
+        usage_match: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "date": {"$gte": since.date().isoformat()},
+        }
+        if website_id is not None:
+            usage_match["website_id"] = website_id
+        usage_doc = await self._first(
+            self._usage.aggregate(
+                [
+                    {"$match": usage_match},
+                    {"$group": {"_id": None, "total_messages": {"$sum": "$counters.messages"}}},
+                ]
+            )
+        )
+        response = facet.get("response")
+        return OverviewRow(
+            total_conversations=total_conversations,
+            total_messages=int(usage_doc.get("total_messages", 0)) if usage_doc else 0,
+            total_questions=self._facet_count(facet, "users"),
+            total_ai_responses=total_ai_responses,
+            successful_answers=total_ai_responses - fallback_responses,
+            fallback_responses=fallback_responses,
+            avg_response_time=(
+                float(response[0]["avg"])
+                if response and response[0].get("avg") is not None
+                else None
+            ),
+        )
+
+    async def top_questions(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+        limit: int,
+    ) -> list[QuestionCountRow]:
+        """Rank the most frequently asked user questions in the window.
+
+        Grouping is by the sanitized message text (`sanitize_question` already
+        collapses whitespace before persistence), trimmed here so stored or
+        legacy values with stray edges still group together.
+        """
+        match: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "role": CHAT_ROLE_USER,
+            "created_at": {"$gte": since},
+        }
+        if website_id is not None:
+            match["website_id"] = website_id
+        cursor = self._messages.aggregate(
+            [
+                {"$match": match},
+                {"$group": {"_id": {"$trim": {"input": "$content"}}, "count": {"$sum": 1}}},
+                {"$sort": {"count": DESCENDING}},
+                {"$limit": limit},
+            ]
+        )
+        return [
+            QuestionCountRow(question=str(doc["_id"]), count=int(doc.get("count", 0)))
+            async for doc in cursor
+        ]
+
+    async def feedback(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> FeedbackAnalyticsRow:
+        """Sentiment + star distribution over the `feedback` collection.
+
+        One `$group` pass buckets by rating; positive/neutral/negative buckets
+        and the average are derived here (ratings 4-5 positive, 3 neutral,
+        1-2 negative — see `FEEDBACK_POSITIVE_RATING`).
+        """
+        match: dict[str, Any] = {"tenant_id": tenant_id}
+        if website_id is not None:
+            match["website_id"] = website_id
+        if since is not None:
+            match["created_at"] = {"$gte": since}
+        cursor = self._feedback.aggregate(
+            [
+                {"$match": match},
+                {"$group": {"_id": "$rating", "count": {"$sum": 1}}},
+            ]
+        )
+        distribution: dict[int, int] = {}
+        total = 0
+        weighted = 0
+        async for doc in cursor:
+            rating = int(doc["_id"])
+            if not 1 <= rating <= 5:
+                continue
+            count = int(doc.get("count", 0))
+            distribution[rating] = count
+            total += count
+            weighted += rating * count
+        positive = sum(
+            count
+            for rating, count in distribution.items()
+            if rating >= FEEDBACK_POSITIVE_RATING
+        )
+        negative = sum(
+            count
+            for rating, count in distribution.items()
+            if rating <= FEEDBACK_NEGATIVE_RATING
+        )
+        neutral = sum(
+            count
+            for rating, count in distribution.items()
+            if FEEDBACK_NEGATIVE_RATING < rating < FEEDBACK_POSITIVE_RATING
+        )
+        return FeedbackAnalyticsRow(
+            total=total,
+            positive=positive,
+            negative=negative,
+            neutral=neutral,
+            average_rating=round(weighted / total, 2) if total else None,
+            distribution=distribution,
+        )
+
     # ------------------------------------------------------------- internals
+
+    @staticmethod
+    def _facet_count(facet: dict[str, Any], key: str) -> int:
+        rows = facet.get(key) or []
+        return int(rows[0]["count"]) if rows else 0
 
     async def _count_conversations(
         self, tenant_id: str, *, website_id: str | None, since: datetime
@@ -346,7 +614,10 @@ class MongoAnalyticsRepository:
 __all__ = [
     "AnalyticsRepository",
     "AnalyticsSummaryRow",
+    "FeedbackAnalyticsRow",
     "MongoAnalyticsRepository",
+    "OverviewRow",
+    "QuestionCountRow",
     "ResponseMetricsRow",
     "TimeseriesRow",
     "TopWebsiteRow",

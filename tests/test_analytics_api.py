@@ -14,7 +14,15 @@ from backend.core.config import get_settings
 from backend.main import create_app
 from fastapi.testclient import TestClient
 
-from tests.analytics_helpers import build_analytics_env, seed_day, seed_website
+from tests.analytics_helpers import (
+    build_analytics_env,
+    seed_answer,
+    seed_day,
+    seed_fallback,
+    seed_feedback,
+    seed_question,
+    seed_website,
+)
 from tests.auth_helpers import build_auth_env
 from tests.http_helpers import register_verified_account
 
@@ -60,6 +68,9 @@ def test_analytics_requires_authentication(client) -> None:
         "/api/analytics/timeseries",
         "/api/analytics/top-websites",
         "/api/analytics/performance",
+        "/api/analytics/overview",
+        "/api/analytics/questions",
+        "/api/analytics/feedback",
     ):
         assert test_client.get(path).status_code == 401
 
@@ -273,6 +284,15 @@ async def test_analytics_rejects_invalid_days(client) -> None:
     assert (
         test_client.get("/api/analytics/top-websites?limit=0", headers=headers).status_code == 422
     )
+    assert (
+        test_client.get("/api/analytics/overview?days=0", headers=headers).status_code == 422
+    )
+    assert (
+        test_client.get("/api/analytics/questions?limit=0", headers=headers).status_code == 422
+    )
+    assert (
+        test_client.get("/api/analytics/questions?limit=51", headers=headers).status_code == 422
+    )
 
 
 async def test_analytics_requires_owner_or_admin_role(client) -> None:
@@ -285,3 +305,288 @@ async def test_analytics_requires_owner_or_admin_role(client) -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+# ---------------------------------------------------------------------------
+# Phase 12.5: /overview, /questions, /feedback
+# ---------------------------------------------------------------------------
+
+
+async def test_overview_reports_resolution_metrics(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_day(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        chats=2,
+        messages=4,
+        input_tokens=100,
+        output_tokens=50,
+        response_times=[0.5, 1.5],
+    )
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="What courses are available?",
+    )
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="What courses are available?",
+    )
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="What are the pricing plans?",
+    )
+    await seed_fallback(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+    )
+
+    response = test_client.get("/api/analytics/overview", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_conversations"] == 2
+    assert body["total_messages"] == 4
+    assert body["total_questions"] == 3
+    assert body["total_ai_responses"] == 3  # 2 seed_day answers + 1 fallback
+    assert body["successful_answers"] == 2
+    assert body["fallback_responses"] == 1
+    assert body["resolution_rate"] == 66.7  # 2/3 * 100
+    assert body["fallback_percentage"] == 33.3  # 1/3 * 100
+    assert body["avg_response_time"] == 1.0  # only seed_day answers carry times
+
+
+async def test_overview_empty_window_returns_zero_rates(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+
+    response = test_client.get("/api/analytics/overview", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_conversations"] == 0
+    assert body["total_questions"] == 0
+    assert body["total_ai_responses"] == 0
+    assert body["successful_answers"] == 0
+    assert body["fallback_responses"] == 0
+    assert body["resolution_rate"] == 0.0
+    assert body["fallback_percentage"] == 0.0
+    assert body["avg_response_time"] is None
+
+
+async def test_overview_can_filter_by_website(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-a")
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-b")
+    await seed_answer(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-a",
+        date=_days_ago(1),
+        response_time=0.4,
+    )
+    await seed_answer(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-b",
+        date=_days_ago(1),
+        response_time=2.5,
+    )
+
+    response = test_client.get(
+        "/api/analytics/overview?website_id=web-a", headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_ai_responses"] == 1
+    assert body["successful_answers"] == 1
+    assert body["avg_response_time"] == 0.4
+
+
+async def test_questions_ranks_most_asked(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    for question, times in (
+        ("What courses are available?", 3),
+        ("How do I reset my password?", 2),
+        ("What are the pricing plans?", 1),
+    ):
+        for _ in range(times):
+            await seed_question(
+                analytics_env,
+                tenant_id=tenant_id,
+                website_id="web-1",
+                date=_days_ago(1),
+                question=question,
+            )
+
+    response = test_client.get("/api/analytics/questions", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["question"] for item in body] == [
+        "What courses are available?",
+        "How do I reset my password?",
+        "What are the pricing plans?",
+    ]
+    assert [item["count"] for item in body] == [3, 2, 1]
+
+
+async def test_questions_respects_limit(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    for index in range(4):
+        await seed_question(
+            analytics_env,
+            tenant_id=tenant_id,
+            website_id="web-1",
+            date=_days_ago(1),
+            question=f"Question {index}?",
+        )
+
+    response = test_client.get("/api/analytics/questions?limit=2", headers=headers)
+
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+
+async def test_questions_defaults_to_7_days(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="Recent question?",
+    )
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(8),
+        question="Old question?",
+    )
+
+    response = test_client.get("/api/analytics/questions", headers=headers)
+
+    assert response.status_code == 200
+    assert [item["question"] for item in response.json()] == ["Recent question?"]
+
+
+async def test_questions_can_filter_by_website(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-a")
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-b")
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-a",
+        date=_days_ago(1),
+        question="For A?",
+    )
+    await seed_question(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-b",
+        date=_days_ago(1),
+        question="For B?",
+    )
+
+    response = test_client.get(
+        "/api/analytics/questions?website_id=web-a", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert [item["question"] for item in response.json()] == ["For A?"]
+
+
+async def test_feedback_reports_sentiment_and_distribution(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    for rating in (5, 5, 4, 3, 2, 1):
+        await seed_feedback(
+            analytics_env,
+            tenant_id=tenant_id,
+            website_id="web-1",
+            rating=rating,
+            date=_days_ago(1),
+        )
+
+    response = test_client.get("/api/analytics/feedback", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 6
+    assert body["positive"] == 3  # 5, 5, 4
+    assert body["neutral"] == 1  # 3
+    assert body["negative"] == 2  # 2, 1
+    assert body["positive_percentage"] == 50.0
+    assert body["negative_percentage"] == 33.3
+    assert body["average_rating"] == 3.33  # (5+5+4+3+2+1) / 6
+    assert body["distribution"] == {"5": 2, "4": 1, "3": 1, "2": 1, "1": 1}
+
+
+async def test_feedback_empty_returns_zero_sentiment(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+
+    response = test_client.get("/api/analytics/feedback", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["positive"] == 0
+    assert body["negative"] == 0
+    assert body["positive_percentage"] == 0.0
+    assert body["negative_percentage"] == 0.0
+    assert body["average_rating"] is None
+    assert body["distribution"] == {}
+
+
+async def test_analytics_isolates_tenants_for_questions_and_feedback(client) -> None:
+    test_client, _, analytics_env = client
+    owner_headers, owner_tenant = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=owner_tenant, website_id="web-1")
+    await seed_question(
+        analytics_env,
+        tenant_id=owner_tenant,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="Private question?",
+    )
+    await seed_feedback(
+        analytics_env,
+        tenant_id=owner_tenant,
+        website_id="web-1",
+        rating=5,
+        date=_days_ago(1),
+    )
+
+    other_headers, _other_tenant = _auth(test_client)
+
+    assert test_client.get("/api/analytics/questions", headers=other_headers).json() == []
+    assert test_client.get("/api/analytics/feedback", headers=other_headers).json()["total"] == 0

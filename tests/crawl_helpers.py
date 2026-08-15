@@ -48,7 +48,7 @@ class CrawlEnv:
     service: CrawlService
 
 
-def build_crawl_env() -> CrawlEnv:
+def build_crawl_env(usage=None) -> CrawlEnv:
     """A fake-backed CrawlService wired to a recording enqueue callable."""
     crawl_jobs = FakeCrawlJobRepository()
     documents = FakeDocumentRepository()
@@ -65,6 +65,7 @@ def build_crawl_env() -> CrawlEnv:
         websites=websites,
         audit=audit,
         enqueue=enqueue,
+        usage=usage,
     )
     return CrawlEnv(
         crawl_jobs=crawl_jobs,
@@ -79,12 +80,14 @@ def build_crawl_env() -> CrawlEnv:
 
 def build_website_service(
     env: CrawlEnv,
+    usage=None,
 ) -> WebsiteService:
     """A fake-backed WebsiteService sharing the same website/audit fakes."""
     return WebsiteService(
         websites=env.websites,
         widgets=env.widgets,
         audit=env.audit,
+        usage=usage,
     )
 
 

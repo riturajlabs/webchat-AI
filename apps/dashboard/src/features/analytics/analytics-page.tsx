@@ -30,23 +30,28 @@ import {
   formatCost,
   formatDay,
   formatNumber,
+  formatPercent,
   formatRating,
   formatSeconds,
 } from './format';
 import {
+  useAnalyticsFeedback,
+  useAnalyticsOverview,
   useAnalyticsPerformance,
+  useAnalyticsQuestions,
   useAnalyticsSummary,
   useAnalyticsTimeseries,
   useAnalyticsTopWebsites,
   useFeedbackSummary,
 } from './hooks';
-import type { AnalyticsRange } from './types';
+import type { AnalyticsRange, QuestionCount } from './types';
 
 const SERIES_COLORS = {
   conversations: '#6366f1',
   messages: '#10b981',
   inputTokens: '#f59e0b',
   outputTokens: '#8b5cf6',
+  questions: '#ec4899',
 };
 
 function StatCard({
@@ -283,6 +288,59 @@ function TopWebsitesChart({
 }
 
 /**
+ * Most-asked questions (Phase 12.5, /api/analytics/questions).
+ * Horizontal bars so long question text stays readable; labels truncate to a
+ * fixed width via the tick formatter.
+ */
+function PopularQuestionsChart({ data, mounted }: { data: QuestionCount[]; mounted: boolean }) {
+  if (!mounted) {
+    return <ChartPlaceholder height={320} />;
+  }
+  const sorted = [...data]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+    .reverse();
+  return (
+    <div className="h-80 w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart
+          data={sorted}
+          layout="vertical"
+          margin={{ top: 4, right: 8, left: 8, bottom: 0 }}
+          data-testid="popular-questions-chart"
+        >
+          <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" horizontal={false} />
+          <XAxis
+            type="number"
+            tick={AxisLabelStyle()}
+            tickLine={false}
+            axisLine={false}
+            allowDecimals={false}
+          />
+          <YAxis
+            type="category"
+            dataKey="question"
+            width={190}
+            tick={AxisLabelStyle()}
+            tickLine={false}
+            axisLine={false}
+            tickFormatter={(value) => {
+              const text = String(value);
+              return text.length > 22 ? `${text.slice(0, 21)}…` : text;
+            }}
+          />
+          <Tooltip
+            formatter={(value) => [formatNumber(Number(value)), 'Asks']}
+            contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }}
+          />
+          <Bar dataKey="count" name="Asks" fill={SERIES_COLORS.questions} radius={[0, 4, 4, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/**
  * Star-rating distribution chart (Phase 12.4, UI/UX §12).
  * Renders 5 horizontal bars (1★ → 5★). When no ratings exist yet the
  * component stays mounted so the empty state is legible.
@@ -359,6 +417,9 @@ export function AnalyticsPage() {
   const { data: topWebsites } = useAnalyticsTopWebsites(days);
   const { data: performance } = useAnalyticsPerformance(days, websiteId);
   const { data: feedback } = useFeedbackSummary(days, websiteId);
+  const { data: overview } = useAnalyticsOverview(days, websiteId);
+  const { data: questions } = useAnalyticsQuestions(days, websiteId);
+  const { data: feedbackAnalytics } = useAnalyticsFeedback(days, websiteId);
 
   const activityData = useMemo(
     () =>
@@ -476,10 +537,34 @@ export function AnalyticsPage() {
               icon={MessagesSquare}
             />
             <StatCard
-              label="AI responses"
-              value={formatNumber(summary.total_ai_responses)}
-              hint="Assistant replies"
+              label="Resolution Rate"
+              value={formatPercent(overview?.resolution_rate ?? 0)}
+              hint={
+                overview
+                  ? `${formatNumber(overview.successful_answers)} of ${formatNumber(
+                      overview.total_ai_responses,
+                    )} answers resolved`
+                  : 'Assistant answers'
+              }
               icon={BarChart3}
+            />
+            <StatCard
+              label="Avg response time"
+              value={formatSeconds(overview?.avg_response_time ?? summary.avg_response_time)}
+              hint="Assistant latency"
+              icon={Timer}
+            />
+            <StatCard
+              label="Fallback rate"
+              value={formatPercent(overview?.fallback_percentage ?? 0)}
+              hint={
+                overview
+                  ? `${formatNumber(overview.fallback_responses)} unanswered ${
+                      overview.fallback_responses === 1 ? 'question' : 'questions'
+                    }`
+                  : 'No-context answers'
+              }
+              icon={Gauge}
             />
             <StatCard
               label="Tokens"
@@ -494,12 +579,6 @@ export function AnalyticsPage() {
               value={formatCost(summary.estimated_cost)}
               hint="At list prices"
               icon={CircleDollarSign}
-            />
-            <StatCard
-              label="Avg response time"
-              value={formatSeconds(summary.avg_response_time)}
-              hint="Assistant latency"
-              icon={Timer}
             />
             <StatCard
               label="User satisfaction"
@@ -520,6 +599,20 @@ export function AnalyticsPage() {
                 description="Messages and conversations per day."
               >
                 <ActivityChart data={activityData} mounted={mounted} />
+              </ChartShell>
+              <ChartShell
+                title="Popular questions"
+                description="Most-asked questions in the selected period."
+              >
+                {questions && questions.length > 0 ? (
+                  <PopularQuestionsChart data={questions} mounted={mounted} />
+                ) : (
+                  <EmptyState
+                    icon={BarChart3}
+                    title="No questions yet"
+                    description="Once visitors ask the assistant, the most common questions show up here."
+                  />
+                )}
               </ChartShell>
               <ChartShell title="Token usage" description="Input and output tokens per day.">
                 <TokenChart data={tokenData} mounted={mounted} />
@@ -544,8 +637,28 @@ export function AnalyticsPage() {
                 slowest={performance?.slowest_response_time ?? null}
               />
               <ChartShell title="User satisfaction" description="How visitors rated the assistant.">
-                {feedback && feedback.total > 0 ? (
-                  <FeedbackDistributionChart data={feedbackDistribution} mounted={mounted} />
+                {feedbackAnalytics && feedbackAnalytics.total > 0 ? (
+                  <div className="flex flex-col gap-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="rounded-lg border border-border bg-muted/30 p-3">
+                        <p className="font-sans text-lg font-bold tracking-tight text-emerald-600">
+                          {formatPercent(feedbackAnalytics.positive_percentage)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Positive ({formatNumber(feedbackAnalytics.positive)})
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-border bg-muted/30 p-3">
+                        <p className="font-sans text-lg font-bold tracking-tight text-rose-600">
+                          {formatPercent(feedbackAnalytics.negative_percentage)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Negative ({formatNumber(feedbackAnalytics.negative)})
+                        </p>
+                      </div>
+                    </div>
+                    <FeedbackDistributionChart data={feedbackDistribution} mounted={mounted} />
+                  </div>
                 ) : (
                   <EmptyState
                     icon={Star}

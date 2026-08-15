@@ -6,7 +6,7 @@ from backend.ai.gemini import GenerationUsage
 from backend.core.security import utcnow
 from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
 from backend.models.audit_log import AuditLog
-from backend.models.chat_message import CHAT_ROLE_ASSISTANT, ChatMessage
+from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER, ChatMessage
 from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED, ChatSession
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
@@ -17,22 +17,40 @@ from backend.models.feedback import Feedback
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
+from backend.models.subscription import (
+    SUBSCRIPTION_LIVE_STATUSES,
+    Subscription,
+)
 from backend.models.tenant import Tenant
+from backend.models.usage_event import UsageEvent
 from backend.models.usage_record import UsageRecord
 from backend.models.user import User
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.models.widget import Widget
+from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK
 from backend.repositories.admin_repository import PlatformStats
 from backend.repositories.analytics_repository import (
+    FEEDBACK_NEGATIVE_RATING,
+    FEEDBACK_POSITIVE_RATING,
     AnalyticsSummaryRow,
+    FeedbackAnalyticsRow,
+    OverviewRow,
+    QuestionCountRow,
     ResponseMetricsRow,
     TimeseriesRow,
     TopWebsiteRow,
 )
 from backend.repositories.chat_message_repository import MessageSummary
 from backend.repositories.feedback_repository import FeedbackSummary
+from backend.repositories.usage_event_repository import UsageEventTotals
 from backend.repositories.usage_record_repository import TenantUsageSummary
 from backend.repositories.vector.base import VectorSearchResult
+from backend.services.billing.payments.base import (
+    PAYMENT_STATUS_PAID,
+    PaymentCheckout,
+    PaymentVerification,
+    WebhookEvent,
+)
 from backend.services.mail.base import EmailMessage
 
 
@@ -564,6 +582,15 @@ class FakeDocumentRepository:
                 document
                 for document in self._documents.values()
                 if document.tenant_id == tenant_id and document.website_id == website_id
+            ]
+        )
+
+    async def count_by_tenant(self, tenant_id: str) -> int:
+        return len(
+            [
+                document
+                for document in self._documents.values()
+                if document.tenant_id == tenant_id
             ]
         )
 
@@ -1119,6 +1146,192 @@ class FakeUsageRecordRepository:
         )
 
 
+class FakeUsageEventRepository:
+    """In-memory append-only usage event repository (Phase 13 billing)."""
+
+    def __init__(self) -> None:
+        self._events: list[UsageEvent] = []
+
+    @property
+    def events(self) -> list[UsageEvent]:
+        return list(self._events)
+
+    async def record(self, event: UsageEvent) -> None:
+        self._events.append(event)
+
+    async def totals_by_type_since(self, tenant_id: str, since: datetime) -> UsageEventTotals:
+        totals = UsageEventTotals()
+        for event in self._events:
+            if event.tenant_id != tenant_id or event.created_at < since:
+                continue
+            totals = UsageEventTotals(
+                messages_sent=totals.messages_sent
+                + (event.quantity if event.event_type == "messages_sent" else 0),
+                ai_responses=totals.ai_responses
+                + (event.quantity if event.event_type == "ai_responses" else 0),
+                tokens_used=totals.tokens_used
+                + (event.quantity if event.event_type == "tokens_used" else 0),
+                documents_created=totals.documents_created
+                + (event.quantity if event.event_type == "documents_created" else 0),
+                crawl_pages=totals.crawl_pages
+                + (event.quantity if event.event_type == "crawl_pages" else 0),
+            )
+        return totals
+
+
+class FakeSubscriptionRepository:
+    """In-memory subscription repository (Phase 14, SaaS subscriptions).
+
+    Mirrors `MongoSubscriptionRepository`: subscriptions are scoped to a
+    tenant, listing is newest-first, and `find_active_by_tenant` returns the
+    newest live-status subscription whose `end_date` is `None` or in the
+    future.
+    """
+
+    def __init__(self) -> None:
+        self._subscriptions: dict[str, Subscription] = {}
+
+    @property
+    def subscriptions(self) -> list[Subscription]:
+        return list(self._subscriptions.values())
+
+    async def create(self, subscription: Subscription) -> None:
+        self._subscriptions[subscription.id] = subscription
+
+    async def update(self, subscription: Subscription) -> None:
+        self._subscriptions[subscription.id] = subscription
+
+    async def find_active_by_tenant(
+        self, tenant_id: str, *, now: datetime
+    ) -> Subscription | None:
+        candidates = sorted(
+            (
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.tenant_id == tenant_id
+                and subscription.status in SUBSCRIPTION_LIVE_STATUSES
+                and (
+                    subscription.end_date is None or subscription.end_date >= now
+                )
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
+    async def find_by_payment_id(self, payment_id: str) -> Subscription | None:
+        return next(
+            (
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.payment_id == payment_id
+            ),
+            None,
+        )
+
+    async def list_by_tenant(
+        self, tenant_id: str, *, limit: int = 50
+    ) -> list[Subscription]:
+        candidates = sorted(
+            (
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.tenant_id == tenant_id
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        return candidates[:limit]
+
+
+class FakePaymentProvider:
+    """In-memory `PaymentProvider` for subscription tests (Phase 14).
+
+    Records every checkout/verification call, synthesizes a deterministic
+    `payment_id` per checkout, and can be instructed to fail signature
+    verification or mark payments failed/pending.
+    """
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.checkouts: list[dict] = []
+        self.verifications: list[str] = []
+        self.webhooks: list[tuple[bytes, dict]] = []
+        self._signature_ok = True
+        self._webhook_status = PAYMENT_STATUS_PAID
+        self._counter = 0
+        self.tenant_id = "tenant-1"
+        self.plan_id = "pro"
+        self.payment_id = "fake_payment_1"
+
+    @property
+    def signature_ok(self) -> bool:
+        return self._signature_ok
+
+    @signature_ok.setter
+    def signature_ok(self, value: bool) -> None:
+        self._signature_ok = value
+
+    @property
+    def webhook_status(self) -> str:
+        return self._webhook_status
+
+    @webhook_status.setter
+    def webhook_status(self, value: str) -> None:
+        self._webhook_status = value
+
+    async def create_checkout(
+        self,
+        *,
+        tenant_id: str,
+        plan_id: str,
+        amount_cents: int,
+        currency: str,
+        success_url: str,
+        cancel_url: str,
+    ) -> PaymentCheckout:
+        self._counter += 1
+        self.checkouts.append(
+            {
+                "tenant_id": tenant_id,
+                "plan_id": plan_id,
+                "amount_cents": amount_cents,
+                "currency": currency,
+                "success_url": success_url,
+                "cancel_url": cancel_url,
+            }
+        )
+        checkout_id = f"fake_checkout_{self._counter}"
+        return PaymentCheckout(
+            checkout_id=checkout_id,
+            url=f"https://checkout.example.com/{checkout_id}",
+        )
+
+    async def verify_payment(self, payment_id: str) -> PaymentVerification:
+        self.verifications.append(payment_id)
+        return PaymentVerification(
+            payment_id=payment_id,
+            status=PAYMENT_STATUS_PAID,
+            tenant_id="tenant-1",
+            plan_id="pro",
+        )
+
+    def parse_webhook(self, payload: bytes, headers: dict) -> WebhookEvent:
+        self.webhooks.append((payload, headers))
+        if not self._signature_ok:
+            from backend.core.errors import PaymentSignatureError
+
+            raise PaymentSignatureError("Invalid payment signature (test).")
+        return WebhookEvent(
+            event_type="payment.captured",
+            payment_id=self.payment_id,
+            status=self._webhook_status,
+            tenant_id=self.tenant_id,
+            plan_id=self.plan_id,
+        )
+
+
 class FakeAdminRepository:
     """In-memory platform stats over the tenant/user/usage/crawl fakes (Phase 12.5)."""
 
@@ -1174,11 +1387,13 @@ class FakeAnalyticsRepository:
         messages: FakeChatMessageRepository,
         usage: FakeUsageRecordRepository,
         websites: FakeWebsiteRepository,
+        feedback: FakeFeedbackRepository | None = None,
     ) -> None:
         self._sessions = sessions
         self._messages = messages
         self._usage = usage
         self._websites = websites
+        self._feedback = feedback
 
     async def summary(
         self,
@@ -1287,7 +1502,105 @@ class FakeAnalyticsRepository:
             slowest_response_time=round(max(response_times), 3),
         )
 
+    async def overview(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> OverviewRow:
+        messages = self._window_messages(tenant_id, website_id=website_id, since=since)
+        assistants = [m for m in messages if m.role == CHAT_ROLE_ASSISTANT]
+        response_times = [m.response_time for m in assistants if m.response_time is not None]
+        records = self._usage_records(tenant_id, website_id=website_id, since=since)
+        return OverviewRow(
+            total_conversations=self._conversations(tenant_id, website_id=website_id, since=since),
+            total_messages=sum(r.counters.get("messages", 0) for r in records),
+            total_questions=sum(1 for m in messages if m.role == CHAT_ROLE_USER),
+            total_ai_responses=len(assistants),
+            successful_answers=sum(
+                1 for m in assistants if m.content != UNKNOWN_ANSWER_FALLBACK
+            ),
+            fallback_responses=sum(1 for m in assistants if m.content == UNKNOWN_ANSWER_FALLBACK),
+            avg_response_time=(
+                round(sum(response_times) / len(response_times), 3) if response_times else None
+            ),
+        )
+
+    async def top_questions(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+        limit: int,
+    ) -> list[QuestionCountRow]:
+        counts: dict[str, int] = {}
+        for message in self._window_messages(tenant_id, website_id=website_id, since=since):
+            if message.role != CHAT_ROLE_USER:
+                continue
+            question = message.content.strip()
+            if not question:
+                continue
+            counts[question] = counts.get(question, 0) + 1
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+        return [QuestionCountRow(question=question, count=count) for question, count in ranked]
+
+    async def feedback(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None = None,
+        since: datetime,
+    ) -> FeedbackAnalyticsRow:
+        items = [
+            item
+            for item in (self._feedback.feedback if self._feedback else [])
+            if item.tenant_id == tenant_id
+            and (website_id is None or item.website_id == website_id)
+            and (since is None or item.created_at >= since)
+        ]
+        distribution: dict[int, int] = {}
+        total = 0
+        weighted = 0
+        for item in items:
+            if not 1 <= item.rating <= 5:
+                continue
+            distribution[item.rating] = distribution.get(item.rating, 0) + 1
+            total += 1
+            weighted += item.rating
+        positive = sum(
+            count for rating, count in distribution.items() if rating >= FEEDBACK_POSITIVE_RATING
+        )
+        negative = sum(
+            count for rating, count in distribution.items() if rating <= FEEDBACK_NEGATIVE_RATING
+        )
+        neutral = sum(
+            count
+            for rating, count in distribution.items()
+            if FEEDBACK_NEGATIVE_RATING < rating < FEEDBACK_POSITIVE_RATING
+        )
+        return FeedbackAnalyticsRow(
+            total=total,
+            positive=positive,
+            negative=negative,
+            neutral=neutral,
+            average_rating=round(weighted / total, 2) if total else None,
+            distribution=distribution,
+        )
+
     # ------------------------------------------------------------- internals
+
+    def _window_messages(
+        self, tenant_id: str, *, website_id: str | None, since: datetime
+    ) -> list[ChatMessage]:
+        return [
+            message
+            for message in self._messages.messages
+            if message.tenant_id == tenant_id
+            and message.created_at >= since
+            and (website_id is None or message.website_id == website_id)
+        ]
 
     def _conversations(self, tenant_id: str, *, website_id: str | None, since: datetime) -> int:
         return sum(

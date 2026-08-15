@@ -4,15 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AnalyticsPage } from './analytics-page';
 import {
+  useAnalyticsFeedback,
+  useAnalyticsOverview,
   useAnalyticsPerformance,
+  useAnalyticsQuestions,
   useAnalyticsSummary,
   useAnalyticsTimeseries,
   useAnalyticsTopWebsites,
   useFeedbackSummary,
 } from './hooks';
 import type {
+  AnalyticsOverview,
   AnalyticsSummary,
+  FeedbackAnalytics,
   FeedbackSummary,
+  QuestionCount,
   ResponseMetrics,
   TimeseriesPoint,
   TopWebsite,
@@ -28,6 +34,9 @@ vi.mock('./hooks', () => ({
   useAnalyticsTopWebsites: vi.fn(),
   useAnalyticsPerformance: vi.fn(),
   useFeedbackSummary: vi.fn(),
+  useAnalyticsOverview: vi.fn(),
+  useAnalyticsQuestions: vi.fn(),
+  useAnalyticsFeedback: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -81,6 +90,9 @@ const mockedUseTimeseries = vi.mocked(useAnalyticsTimeseries);
 const mockedUseTopWebsites = vi.mocked(useAnalyticsTopWebsites);
 const mockedUsePerformance = vi.mocked(useAnalyticsPerformance);
 const mockedUseFeedback = vi.mocked(useFeedbackSummary);
+const mockedUseOverview = vi.mocked(useAnalyticsOverview);
+const mockedUseQuestions = vi.mocked(useAnalyticsQuestions);
+const mockedUseFeedbackAnalytics = vi.mocked(useAnalyticsFeedback);
 const mockedUseRouter = vi.mocked(useRouter);
 
 const WEBSITES = [
@@ -154,6 +166,41 @@ const FEEDBACK: FeedbackSummary = {
   },
 };
 
+const OVERVIEW: AnalyticsOverview = {
+  total_conversations: 120,
+  total_messages: 340,
+  total_questions: 150,
+  total_ai_responses: 100,
+  successful_answers: 85,
+  fallback_responses: 15,
+  resolution_rate: 85,
+  fallback_percentage: 15,
+  avg_response_time: 1.25,
+};
+
+const QUESTIONS: QuestionCount[] = [
+  { question: 'What courses are available?', count: 40 },
+  { question: 'How do I reset my password?', count: 25 },
+  { question: 'What are the pricing plans?', count: 10 },
+];
+
+const FEEDBACK_ANALYTICS: FeedbackAnalytics = {
+  total: 42,
+  positive: 34,
+  negative: 4,
+  neutral: 4,
+  positive_percentage: 81,
+  negative_percentage: 9.5,
+  average_rating: 4.25,
+  distribution: {
+    '5': 22,
+    '4': 12,
+    '3': 4,
+    '2': 2,
+    '1': 2,
+  },
+};
+
 function makeQueryClient() {
   return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -211,6 +258,27 @@ function mockData() {
     error: null,
     refetch: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReturnType<typeof useFeedbackSummary>);
+  mockedUseOverview.mockReturnValue({
+    data: OVERVIEW,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn().mockResolvedValue(undefined),
+  } as unknown as ReturnType<typeof useAnalyticsOverview>);
+  mockedUseQuestions.mockReturnValue({
+    data: QUESTIONS,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn().mockResolvedValue(undefined),
+  } as unknown as ReturnType<typeof useAnalyticsQuestions>);
+  mockedUseFeedbackAnalytics.mockReturnValue({
+    data: FEEDBACK_ANALYTICS,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: vi.fn().mockResolvedValue(undefined),
+  } as unknown as ReturnType<typeof useAnalyticsFeedback>);
 }
 
 beforeEach(() => {
@@ -270,8 +338,10 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('120')).toBeInTheDocument();
     expect(screen.getByText('Messages')).toBeInTheDocument();
     expect(screen.getByText('340')).toBeInTheDocument();
-    expect(screen.getByText('AI responses')).toBeInTheDocument();
-    expect(screen.getByText('100')).toBeInTheDocument();
+    expect(screen.getByText('Resolution Rate')).toBeInTheDocument();
+    expect(screen.getByText('85%')).toBeInTheDocument();
+    expect(screen.getByText('Fallback rate')).toBeInTheDocument();
+    expect(screen.getByText('15%')).toBeInTheDocument();
     expect(screen.getByText('Estimated cost')).toBeInTheDocument();
     expect(screen.getByText('$0.0105')).toBeInTheDocument();
     expect(screen.getByText('Avg response time')).toBeInTheDocument();
@@ -285,6 +355,7 @@ describe('AnalyticsPage', () => {
     });
     expect(screen.getByTestId('token-chart')).toBeInTheDocument();
     expect(screen.getByTestId('top-websites-chart')).toBeInTheDocument();
+    expect(screen.getByTestId('popular-questions-chart')).toBeInTheDocument();
   });
 
   it('switches the time range', () => {
@@ -345,6 +416,46 @@ describe('AnalyticsPage', () => {
     expect(screen.queryByText('Awaiting first rating')).not.toBeInTheDocument();
   });
 
+  it('renders the positive/negative feedback sentiment split', () => {
+    renderPage();
+    expect(screen.getByText('81%')).toBeInTheDocument();
+    expect(screen.getByText('Positive (34)')).toBeInTheDocument();
+    expect(screen.getByText('10%')).toBeInTheDocument();
+    expect(screen.getByText('Negative (4)')).toBeInTheDocument();
+  });
+
+  it('renders the popular questions chart with the most-asked questions', () => {
+    renderPage();
+    expect(screen.getByText('Popular questions')).toBeInTheDocument();
+    // Top row (ranked) is sorted desc and reversed for the vertical layout.
+    expect(screen.getByTestId('popular-questions-chart')).toBeInTheDocument();
+  });
+
+  it('shows an empty state for popular questions when there are none', () => {
+    mockedUseQuestions.mockReturnValue({
+      data: [],
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useAnalyticsQuestions>);
+    renderPage();
+    expect(screen.getByText('No questions yet')).toBeInTheDocument();
+    expect(screen.queryByTestId('popular-questions-chart')).not.toBeInTheDocument();
+  });
+
+  it('falls back to a zero resolution rate when the overview has not loaded', () => {
+    mockedUseOverview.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useAnalyticsOverview>);
+    renderPage();
+    expect(screen.getAllByText('0%').length).toBeGreaterThanOrEqual(2);
+  });
+
   it('shows an empty state for the satisfaction chart when there are no ratings', () => {
     mockedUseFeedback.mockReturnValue({
       data: { total: 0, average_rating: null, distribution: {} },
@@ -353,6 +464,22 @@ describe('AnalyticsPage', () => {
       error: null,
       refetch: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReturnType<typeof useFeedbackSummary>);
+    mockedUseFeedbackAnalytics.mockReturnValue({
+      data: {
+        total: 0,
+        positive: 0,
+        negative: 0,
+        neutral: 0,
+        positive_percentage: 0,
+        negative_percentage: 0,
+        average_rating: null,
+        distribution: {},
+      },
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useAnalyticsFeedback>);
     renderPage();
     // The card still renders, with a friendly hint and an em-dash for the value.
     expect(screen.getAllByText('User satisfaction').length).toBeGreaterThan(0);

@@ -24,6 +24,9 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
         jwt_secret="a" * 32,
         gemini_api_key="test-key",
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
     )
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
@@ -65,6 +68,9 @@ def test_production_accepts_groq_as_generation_provider() -> None:
         jwt_secret="a" * 32,
         groq_api_key="test-key",
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
     )
     assert settings.groq_api_key == "test-key"
 
@@ -97,6 +103,9 @@ def test_production_accepts_cdn_widget_script_url() -> None:
         jwt_secret="a" * 32,
         groq_api_key="test-key",
         widget_script_url="https://assets.example.com/widget.js",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
     )
     assert "localhost" not in settings.widget_script_url
 
@@ -133,6 +142,9 @@ def test_production_accepts_public_widget_api_base_url() -> None:
         groq_api_key="test-key",
         widget_script_url="https://assets.example.com/widget.js",
         widget_api_base_url="https://api.example.com",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
     )
     assert settings.widget_api_base_url == "https://api.example.com"
 
