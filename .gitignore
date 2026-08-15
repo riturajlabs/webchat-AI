@@ -27,11 +27,16 @@ htmlcov/
 .env
 .env.*
 !.env.example
+!.env.production.example
 
 # Logs
 logs/
 *.log
 npm-debug.log*
+.pnpm-debug.log*
+
+# TLS certs mounted by docker-compose.prod.yml (never commit certs)
+tls/
 
 # Editor / OS
 .vscode/

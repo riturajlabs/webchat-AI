@@ -1,9 +1,11 @@
 """Application configuration loaded from environment variables (see .env.example)."""
 
+import json
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -34,6 +36,19 @@ class Settings(BaseSettings):
     # Reverse-proxy trust. When True, `X-Forwarded-For` is honored for client
     # IP extraction (rate limiting); must only be enabled behind a trusted proxy.
     trust_proxy: bool = False
+
+    # Trusted Host header values (Phase 16). The API rejects requests whose
+    # `Host` header is not listed here (TrustedHostMiddleware). Accepts a
+    # comma-separated string or a JSON array from the environment. Loopback
+    # hosts are always allowed on top of this list (container health checks),
+    # and production validation requires at least one public hostname.
+    allowed_hosts: Annotated[list[str], NoDecode] = [
+        "localhost",
+        "127.0.0.1",
+        "0.0.0.0",
+        "::1",
+        "testserver",
+    ]
 
     # Auth cookies (ADR-003)
     refresh_cookie_name: str = "refresh_token"
@@ -231,6 +246,38 @@ class Settings(BaseSettings):
     # Log MongoDB commands slower than this threshold (ms); 0 disables.
     mongodb_slow_query_threshold_ms: int = 0
 
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _parse_allowed_hosts(cls, value: object) -> object:
+        """Accept a comma-separated string or a JSON array for ALLOWED_HOSTS.
+
+        `NoDecode` on the field skips pydantic-settings' automatic JSON decode
+        of complex fields, so the raw environment value reaches this validator.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        "ALLOWED_HOSTS must be a JSON array or comma-separated "
+                        f"list, got: {value!r}"
+                    ) from None
+            return [host.strip() for host in value.split(",") if host.strip()]
+        return value
+
+    def effective_allowed_hosts(self) -> list[str]:
+        """Host header values the API accepts.
+
+        Loopback hosts are always appended: the API's own container health
+        checks target `localhost`, and a hosted database/queue never appears as
+        the request Host. The configured public hostnames gate real traffic.
+        """
+        hosts = set(self.allowed_hosts)
+        hosts.update({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
+        return sorted(hosts)
+
     @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":
         """Fail fast on weak production secrets (00-AI-Development-Rules §20)."""
@@ -291,6 +338,47 @@ class Settings(BaseSettings):
                     "RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET "
                     "are required in production."
                 )
+            # CORS (Phase 16): the dashboard surface sends credentials, so a
+            # wildcard/loopback origin would either leak cookies to any site or
+            # silently break every browser request. Fail fast at boot.
+            if not self.cors_origins:
+                raise ValueError("CORS_ORIGINS must not be empty in production.")
+            for origin in self.cors_origins:
+                lowered = origin.lower()
+                if "*" in lowered:
+                    raise ValueError(
+                        f"CORS_ORIGINS must not contain wildcard origins in production ({origin})."
+                    )
+                if any(
+                    marker in lowered
+                    for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+                ):
+                    raise ValueError(
+                        f"CORS_ORIGINS must not contain loopback origins in production ({origin})."
+                    )
+                if not lowered.startswith("https://"):
+                    raise ValueError(
+                        f"CORS_ORIGINS entries must be HTTPS origins in production ({origin})."
+                    )
+            # Trusted hosts (Phase 16): without an explicit allowlist, host-header
+            # poisoning could route requests anywhere. Require at least one real
+            # public hostname (loopback-only lists are a misconfiguration).
+            if not self.allowed_hosts:
+                raise ValueError("ALLOWED_HOSTS must not be empty in production.")
+            if "*" in self.allowed_hosts:
+                raise ValueError(
+                    "ALLOWED_HOSTS must not contain wildcard entries in production."
+                )
+            loopback_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "testserver"}
+            if not any(host not in loopback_hosts for host in self.allowed_hosts):
+                raise ValueError(
+                    "ALLOWED_HOSTS must include the public hostname(s) in production."
+                )
+            # Rate limiting (Phase 16): every route-level limiter gates on
+            # `rate_limit_enabled`; silently disabling it in production would
+            # expose the API to abuse.
+            if not self.rate_limit_enabled:
+                raise ValueError("RATE_LIMIT_ENABLED must be true in production.")
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled
         return self

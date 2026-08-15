@@ -8,7 +8,9 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from backend import __version__
 from backend.api.middleware import (
     RequestIDMiddleware,
     RequestTimingMiddleware,
@@ -58,7 +60,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="WebChat AI API",
         description="Multi-tenant RAG SaaS backend.",
-        version="0.1.0",
+        version=__version__,
         docs_url="/api/docs" if settings.debug else None,
         redoc_url=None,
         openapi_url="/api/openapi.json" if settings.debug else None,
@@ -81,6 +83,9 @@ def create_app() -> FastAPI:
     # Outermost: measures the full request (incl. the middlewares above). No-op
     # unless PERF_TIMING_LOG_ENABLED=true (Phase 12.1 instrumentation).
     app.add_middleware(RequestTimingMiddleware)
+    # Outermost: rejects requests with an unknown Host header before any app
+    # middleware or handler runs (Phase 16, `ALLOWED_HOSTS`).
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.effective_allowed_hosts())
 
     @app.exception_handler(AppError)
     async def app_error_handler(_: FastAPI, exc: AppError) -> JSONResponse:

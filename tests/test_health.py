@@ -15,6 +15,28 @@ def test_health_returns_ok() -> None:
     assert body["status"] == "ok"
     assert "database" in body["checks"]
     assert "redis" in body["checks"]
+    assert body["version"] == "0.1.0"
+    assert "environment" in body
+
+
+def test_health_live_returns_alive_without_dependency_io() -> None:
+    # Liveness must not touch Mongo/Redis: a partition on either must not stall
+    # the probe (orchestrators use this for restart decisions).
+    client = TestClient(create_app())
+    response = client.get("/api/health/live")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "alive"
+    assert body["version"] == "0.1.0"
+
+
+def test_health_ready_includes_service_info() -> None:
+    client = TestClient(create_app())
+    response = client.get("/api/health/ready")
+    assert response.status_code in {200, 503}
+    body = response.json()
+    assert "version" in body
+    assert "environment" in body
 
 
 def test_health_ready_returns_503_when_dependencies_unavailable(monkeypatch) -> None:

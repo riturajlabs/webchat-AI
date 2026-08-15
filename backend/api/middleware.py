@@ -28,6 +28,13 @@ _SAFE_HEADERS: dict[str, str] = {
     "Content-Security-Policy": "default-src 'none'",
 }
 
+# HSTS is sent only when the deployment is HTTPS (Phase 16): `cookie_secure`
+# is required true for a production HTTPS stack, so it is a reliable proxy.
+# The reverse proxy terminates TLS in the reference stack; this is belt-and-
+# braces for deployments where the API is exposed directly over TLS.
+_HSTS_HEADER = "Strict-Transport-Security"
+_HSTS_VALUE = "max-age=63072000; includeSubDomains"
+
 _HEADER_NAME = "X-Request-ID"
 
 
@@ -77,9 +84,12 @@ class SecurityHeadersMiddleware:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 existing = {name.decode("latin1").lower() for name, _ in headers}
+                base_headers = dict(_SAFE_HEADERS)
+                if get_settings().cookie_secure:
+                    base_headers[_HSTS_HEADER] = _HSTS_VALUE
                 headers.extend(
                     (name.lower().encode("latin1"), value.encode("latin1"))
-                    for name, value in _SAFE_HEADERS.items()
+                    for name, value in base_headers.items()
                     if name.lower() not in existing
                 )
                 message["headers"] = headers

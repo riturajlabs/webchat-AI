@@ -1,15 +1,37 @@
-"""Health and readiness endpoints."""
+"""Health and readiness endpoints (Phase 16 monitoring)."""
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from backend import __version__
+from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.redis import ping_redis
 
 router = APIRouter(tags=["system"])
 
 
-@router.get("/health", summary="Liveness probe")
+def _service_info() -> dict[str, str]:
+    """Version + environment pair attached to every health payload."""
+    settings = get_settings()
+    return {
+        "version": __version__,
+        "environment": settings.environment,
+    }
+
+
+@router.get("/health/live", summary="Liveness probe")
+async def live() -> dict[str, str]:
+    """Return 200 as long as the process is up and accepting requests.
+
+    Liveness deliberately avoids dependency I/O (Mongo/Redis pings can stall
+    on a network partition); orchestrators that distinguish liveness from
+    readiness should use this for restarts and `/health/ready` for routing.
+    """
+    return {"status": "alive", **_service_info()}
+
+
+@router.get("/health", summary="Liveness probe with dependency status")
 async def health() -> dict[str, object]:
     """Return 200 when the API process is alive, with dependency status."""
     database_ok = await MongoDB.ping()
@@ -20,6 +42,7 @@ async def health() -> dict[str, object]:
             "database": database_ok,
             "redis": redis_ok,
         },
+        **_service_info(),
     }
 
 
@@ -40,6 +63,6 @@ async def ready() -> JSONResponse:
     if not database_ok or not redis_ok:
         return JSONResponse(
             status_code=503,
-            content={"status": "degraded", "checks": checks},
+            content={"status": "degraded", "checks": checks, **_service_info()},
         )
-    return JSONResponse(status_code=200, content={"status": "ready"})
+    return JSONResponse(status_code=200, content={"status": "ready", **_service_info()})

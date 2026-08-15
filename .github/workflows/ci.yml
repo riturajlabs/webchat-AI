@@ -86,6 +86,81 @@ jobs:
       - name: Build Widget image
         run: docker build -f docker/Dockerfile.widget -t webchat-widget:ci .
 
+      - name: Build Nginx image
+        run: docker build -f docker/Dockerfile.nginx -t webchat-nginx:ci .
+
+  prod-smoke:
+    name: Prod stack smoke (compose + nginx)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    # Dummy-but-production-valid values: every `:?` in docker-compose.prod.yml
+    # must resolve, and config.py's fail-fast validators must pass (CORS/trusted
+    # hosts non-loopback HTTPS, >=32-byte JWT, gateway keys, RATE_LIMIT on).
+    # Local Mongo/Redis come from docker-compose.smoke.yml.
+    env:
+      TAG: ci
+      JWT_SECRET: smoke-secret-0123456789abcdef0123456789abcdef
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: webchat_ai
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGINS: '["https://app.example.test"]'
+      ALLOWED_HOSTS: app.example.test
+      PUBLIC_BASE_URL: https://app.example.test
+      WIDGET_SCRIPT_URL: https://app.example.test/widget/webchat-widget.iife.min.js
+      WIDGET_API_BASE_URL: https://app.example.test
+      NEXT_PUBLIC_API_URL: https://app.example.test
+      RESEND_API_KEY: re_smoke_dummy
+      EMAIL_FROM: WebChat AI <no-reply@example.test>
+      GEMINI_API_KEY: smoke-dummy-key
+      PAYMENT_PROVIDER: stripe
+      STRIPE_SECRET_KEY: sk_test_smoke
+      STRIPE_WEBHOOK_SECRET: whsec_smoke
+      SUPER_ADMIN_EMAILS: '["ops@example.test"]'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production stack images
+        run: docker compose -f docker-compose.smoke.yml build
+
+      - name: Start the stack (nginx -> api + dashboard + widget, local mongo/redis)
+        run: docker compose -f docker-compose.smoke.yml up -d --wait --wait-timeout 600
+
+      - name: Smoke - nginx healthcheck endpoint
+        run: curl -fsS http://127.0.0.1/healthz | grep -q ok
+
+      - name: Smoke - API readiness through nginx
+        run: curl -fsS http://127.0.0.1/api/health/ready | grep -q '"status":"ready"'
+
+      - name: Smoke - API liveness reports version
+        run: curl -fsS http://127.0.0.1/api/health/live | grep -q '"version"'
+
+      - name: Smoke - dashboard (root and /dashboard alias)
+        run: |
+          curl -fsS -o /dev/null http://127.0.0.1/
+          curl -fsS -o /dev/null http://127.0.0.1/dashboard/
+
+      - name: Smoke - widget SDK bundle through nginx
+        run: curl -fsS -o /dev/null http://127.0.0.1/widget/webchat-widget.iife.min.js
+
+      - name: Smoke - security headers (nosniff, no versioned Server header)
+        run: |
+          curl -fsS -D - -o /dev/null http://127.0.0.1/api/health/live | grep -i "x-content-type-options: nosniff"
+          curl -fsS -D - -o /dev/null http://127.0.0.1/healthz | grep -i "^server: nginx$"
+
+      - name: Smoke - gzip on large assets
+        run: |
+          curl -fsS -D - -o /dev/null -H 'Accept-Encoding: gzip' \
+            http://127.0.0.1/widget/webchat-widget.iife.min.js | grep -i "content-encoding: gzip"
+
+      - name: Smoke - untrusted Host header is rejected (400)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: evil.test" http://127.0.0.1/api/health/live)
+          [ "$code" = "400" ]
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.smoke.yml down -v --remove-orphans
+
   # Widget E2E (Playwright) - full no-mock flow via scripts/e2e-widget.sh.
   #
   # Required services (docker/compose.dev.yml):

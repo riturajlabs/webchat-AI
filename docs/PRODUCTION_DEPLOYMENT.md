@@ -1,7 +1,12 @@
 # WebChat AI v1.0.0 — Production Deployment Guide
 
+> **Superseded:** this guide describes the original multi-origin layout. The
+> canonical Phase 16 deployment (single-origin nginx reverse proxy) is
+> documented in `docs/DEPLOYMENT.md`. This file is kept for historical detail
+> (MongoDB/Redis/Resend setup, E2E wiring).
+
 This guide covers deploying WebChat AI to production with the provided
-`docker/compose.prod.yml` stack, external MongoDB Atlas, managed Redis, and the
+`docker-compose.prod.yml` stack, external MongoDB Atlas, managed Redis, and the
 Resend email provider. It complements `docs/PRODUCTION_AUDIT_REPORT.md` and
 `docs/DEPLOYMENT_READINESS_REPORT.md`.
 
@@ -56,7 +61,7 @@ Resend email provider. It complements `docs/PRODUCTION_AUDIT_REPORT.md` and
 
 ### 2.1 Runtime — API and Worker (identical set)
 
-`docker/compose.prod.yml` fails fast (`:?`) when a required variable is
+`docker-compose.prod.yml` fails fast (`:?`) when a required variable is
 missing. Provide all of these via your secret manager / CI environment:
 
 | Variable                        | Required | Notes                                                                   |
@@ -207,8 +212,8 @@ the **ARQ job queue**. Use a managed TLS-enabled Redis (Upstash / Redis Cloud).
 ### 6.2 Build and start
 
 ```bash
-docker compose -f docker/compose.prod.yml build
-docker compose -f docker/compose.prod.yml up -d
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### 6.3 Deployment order

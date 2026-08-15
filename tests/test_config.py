@@ -27,6 +27,8 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
     )
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
@@ -71,6 +73,8 @@ def test_production_accepts_groq_as_generation_provider() -> None:
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
     )
     assert settings.groq_api_key == "test-key"
 
@@ -106,6 +110,8 @@ def test_production_accepts_cdn_widget_script_url() -> None:
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
     )
     assert "localhost" not in settings.widget_script_url
 
@@ -145,6 +151,8 @@ def test_production_accepts_public_widget_api_base_url() -> None:
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
     )
     assert settings.widget_api_base_url == "https://api.example.com"
 
@@ -169,3 +177,89 @@ def test_provider_order_parses_from_json_list() -> None:
     assert settings.generation_provider_order == ["gemini", "openrouter"]
     assert settings.embedding_provider_order == ["ollama"]
     assert settings.ai_provider_timeout_seconds == 60.0
+
+
+# --- Phase 16: production CORS / trusted hosts / rate-limit validation ---
+
+_PRODUCTION_BASE = dict(
+    _env_file=None,
+    environment="production",
+    jwt_secret="a" * 32,
+    gemini_api_key="test-key",
+    widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+    payment_provider="stripe",
+    stripe_secret_key="sk_test",
+    stripe_webhook_secret="whsec_test",
+    cors_origins=["https://app.example.com"],
+    allowed_hosts=["app.example.com"],
+)
+
+
+def _prod(**overrides: object) -> dict[str, object]:
+    base = dict(_PRODUCTION_BASE)
+    base.update(overrides)
+    return base
+
+
+def test_production_rejects_empty_cors_origins() -> None:
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_prod(cors_origins=[]))
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "*",
+        "https://*.example.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://app.example.com",
+    ],
+)
+def test_production_rejects_unsafe_cors_origins(origin: str) -> None:
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_prod(cors_origins=[origin]))
+
+
+def test_production_rejects_any_unsafe_cors_origin_in_list() -> None:
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_prod(cors_origins=["https://app.example.com", "https://evil.test/*"]))
+
+
+def test_allowed_hosts_accepts_comma_separated_string() -> None:
+    settings = Settings(_env_file=None, allowed_hosts="app.example.com, api.example.com")
+    assert settings.allowed_hosts == ["app.example.com", "api.example.com"]
+
+
+def test_production_rejects_empty_allowed_hosts() -> None:
+    with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
+        Settings(**_prod(allowed_hosts=[]))
+
+
+def test_production_rejects_wildcard_allowed_hosts() -> None:
+    with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
+        Settings(**_prod(allowed_hosts=["*"]))
+
+
+def test_production_rejects_loopback_only_allowed_hosts() -> None:
+    with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
+        Settings(**_prod(allowed_hosts=["localhost"]))
+
+
+def test_effective_allowed_hosts_always_includes_loopback() -> None:
+    settings = Settings(**_prod(allowed_hosts=["app.example.com"]))
+    hosts = set(settings.effective_allowed_hosts())
+    assert "app.example.com" in hosts
+    assert "localhost" in hosts
+    assert "127.0.0.1" in hosts
+
+
+def test_production_rejects_disabled_rate_limiting() -> None:
+    with pytest.raises(ValueError, match="RATE_LIMIT_ENABLED"):
+        Settings(**_prod(rate_limit_enabled=False))
+
+
+def test_production_accepts_phase16_validation_passing_settings() -> None:
+    settings = Settings(**_prod())
+    assert settings.environment == "production"
+    assert settings.cors_origins == ["https://app.example.com"]

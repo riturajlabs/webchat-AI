@@ -1,20 +1,27 @@
-# WebChat AI - production stack
+# WebChat AI - production stack (Phase 16)
+# Canonical deployment: nginx reverse proxy -> API + Dashboard + Widget.
 # Usage:
 #   export TAG=v1.0.0
-#   docker compose -f docker/compose.prod.yml build
-#   docker compose -f docker/compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml up -d
 #
 # Environment: every required variable must be provided (the `:?` marker makes
 # compose fail fast when one is missing). Load them from your secret manager /
-# CI environment - never commit a .env with production secrets.
+# CI environment - never commit a .env with production secrets. A fillable
+# template lives at .env.production.example.
 #
 # External dependencies (managed outside this stack):
 #   * MongoDB Atlas (M7+ with Vector Search)          -> MONGODB_URI
 #   * Redis (Upstash / Redis Cloud with TLS)          -> REDIS_URL
 #   * Resend (email delivery)                         -> RESEND_API_KEY
 #
-# TLS is terminated by the fronting proxy / load balancer; the containers
-# serve plain HTTP on the compose network.
+# Single-origin routing (see docs/DEPLOYMENT.md):
+#   nginx:80|443  /api/*    -> api:8000   (override via NGINX_API_UPSTREAM)
+#                  /widget/* -> widget:80  (override via NGINX_WIDGET_UPSTREAM)
+#                  /*         -> dashboard:3000 (override via NGINX_DASHBOARD_UPSTREAM)
+# The nginx image also runs as the Railway public gateway (PORT + upstream env
+# vars + ENABLE_TLS=0); see docs/RAILWAY_DEPLOYMENT.md.
+# TLS is optional via ENABLE_TLS=1 with certs mounted at ./tls (or TLS_CERT_DIR).
 
 name: webchat-ai-prod
 
@@ -28,6 +35,9 @@ x-app-env: &app-env
   # Trusted-proxy deployments only. Set false when the API is exposed directly.
   TRUST_PROXY: ${TRUST_PROXY:-true}
   RATE_LIMIT_ENABLED: "true"
+  # Host-header allowlist enforced by TrustedHostMiddleware (Phase 16). Accepts
+  # a comma-separated list or JSON array. Must include the public hostname(s).
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS is required (public hostname(s), e.g. app.example.com)}
   # Per-API-key sliding window (Sprint 2).
   API_KEY_RATE_LIMIT_PER_MINUTE: ${API_KEY_RATE_LIMIT_PER_MINUTE:-300}
 
@@ -43,6 +53,7 @@ x-app-env: &app-env
   REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
 
   # --- CORS / public URLs ---
+  # Single-origin deployments: every origin here equals the public hostname.
   CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required (JSON array of dashboard origins)}
   PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (production dashboard origin)}
   WIDGET_SCRIPT_URL: ${WIDGET_SCRIPT_URL:?WIDGET_SCRIPT_URL is required (HTTPS content-hashed widget bundle)}
@@ -82,17 +93,34 @@ x-app-env: &app-env
   # --- Observability (keep off in production) ---
   PERF_TIMING_LOG_ENABLED: ${PERF_TIMING_LOG_ENABLED:-false}
 
+  # --- Payments (Phase 14; config.py fails fast without a real gateway) ---
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:?PAYMENT_PROVIDER is required in production (stripe or razorpay)}
+  PAYMENT_CURRENCY: ${PAYMENT_CURRENCY:-USD}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+  RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+
+  # --- Platform operations (Phase 15) ---
+  # Comma-separated emails granted `super_admin`; empty = admin API disabled.
+  SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS:-}
+
 services:
   api:
     image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-api}:${TAG:-v1.0.0}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.api
+      # Build with host networking (documented Docker MTU/VPN issue): outbound
+      # TLS from the default build bridge can drop oversized packets.
+      network: host
     container_name: webchat-api-prod
+    # tini init reaps zombie children (Audit 17).
+    init: true
     networks: [webchat]
     restart: unless-stopped
     environment: *app-env
-    # Fronted by the TLS proxy/load balancer; expose the port the proxy routes to.
     expose:
       - "8000"
     healthcheck:
@@ -112,9 +140,12 @@ services:
   worker:
     image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-worker}:${TAG:-v1.0.0}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.worker
+      network: host
     container_name: webchat-worker-prod
+    # Playwright launches Chromium; init reaps child processes.
+    init: true
     networks: [webchat]
     restart: unless-stopped
     environment: *app-env
@@ -136,13 +167,16 @@ services:
   dashboard:
     image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-dashboard}:${TAG:-v1.0.0}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.dashboard
+      network: host
       args:
         # Baked into the client bundle at build time (B2 fix). Must be the
-        # public HTTPS API origin reachable from the browser.
+        # public HTTPS origin reachable from the browser. In the single-origin
+        # deployment this equals the dashboard origin (nginx routes /api/*).
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?NEXT_PUBLIC_API_URL is required (public API origin)}
     container_name: webchat-dashboard-prod
+    init: true
     networks: [webchat]
     restart: unless-stopped
     environment:
@@ -163,13 +197,15 @@ services:
   widget:
     image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-widget}:${TAG:-v1.0.0}
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile.widget
+      network: host
       args:
         # Baked into the SDK bundle at build time; the same origin as
         # WIDGET_API_BASE_URL so `data-api-base-url` and the bundle agree.
         VITE_WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL:?WIDGET_API_BASE_URL is required (public API origin)}
     container_name: webchat-widget-prod
+    init: true
     networks: [webchat]
     restart: unless-stopped
     expose:
@@ -187,6 +223,47 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # --- Reverse proxy / edge (Phase 16) ---
+  nginx:
+    image: ${REGISTRY:-ghcr.io/${ORG:-your-org}/webchat-nginx}:${TAG:-v1.0.0}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nginx
+      network: host
+    container_name: webchat-nginx-prod
+    networks: [webchat]
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:${PORT:-80}"
+      - "${HTTPS_PORT:-443}:${NGINX_HTTPS_PORT:-443}"
+    environment:
+      # 1 -> serve the TLS vhost (certs must be mounted below); 0 -> plain HTTP.
+      ENABLE_TLS: ${ENABLE_TLS:-0}
+      # Container listen port. Railway injects PORT; compose defaults to 80.
+      PORT: ${PORT:-80}
+      NGINX_HTTPS_PORT: ${NGINX_HTTPS_PORT:-443}
+      # Gateway upstreams (host:port). Compose defaults target the services in
+      # this file; on Railway point these at the private service URLs.
+      NGINX_API_UPSTREAM: ${NGINX_API_UPSTREAM:-api:8000}
+      NGINX_WIDGET_UPSTREAM: ${NGINX_WIDGET_UPSTREAM:-widget:80}
+      NGINX_DASHBOARD_UPSTREAM: ${NGINX_DASHBOARD_UPSTREAM:-dashboard:3000}
+    volumes:
+      # Read-only certs for the optional TLS vhost: fullchain.pem + privkey.pem.
+      - ${TLS_CERT_DIR:-./tls}:/etc/nginx/tls:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+      widget:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 networks:
   webchat:

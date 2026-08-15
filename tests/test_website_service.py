@@ -418,6 +418,8 @@ async def test_build_embed_script_omits_api_base_when_unset_in_production(
     monkeypatch.setenv("PAYMENT_PROVIDER", "stripe")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test")
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setenv("CORS_ORIGINS", '["https://app.example.com"]')
+    monkeypatch.setenv("ALLOWED_HOSTS", "app.example.com")
     get_settings.cache_clear()
     try:
         env = build_website_env()

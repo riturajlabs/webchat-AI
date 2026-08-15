@@ -58,6 +58,7 @@ def _prod_settings() -> Settings:
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         # Real production dashboard origins; localhost is not auto-permitted.
         cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",

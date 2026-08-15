@@ -77,6 +77,8 @@ def test_configure_logging_is_environment_aware(monkeypatch) -> None:
             payment_provider="stripe",
             stripe_secret_key="sk_test",
             stripe_webhook_secret="whsec_test",
+            cors_origins=["https://app.example.com"],
+            allowed_hosts=["app.example.com"],
             _env_file=None,
         ),
     )
