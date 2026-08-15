@@ -27,7 +27,6 @@ htmlcov/
 .env
 .env.*
 !.env.example
-!.env.production.example
 
 # Package manager caches
 .npm/
@@ -42,7 +41,7 @@ pnpm-debug.log*
 yarn-error.log*
 yarn-debug.log*
 
-# TLS certs mounted by docker-compose.prod.yml (never commit certs)
+# TLS certs (never commit certs)
 tls/
 
 # Editor / OS

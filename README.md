@@ -28,11 +28,15 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
    cp .env.example .env
    ```
 
-2. Start infrastructure (MongoDB, Redis, Mailpit) and the backend/worker:
+2. Start the full development stack (MongoDB, Redis, Mailpit, API, Worker,
+   Dashboard, Widget):
 
    ```bash
-   docker compose -f docker/compose.dev.yml up --build
+   docker compose --env-file .env -f docker/compose.dev.yml up --build
    ```
+
+   (or `scripts/docker-up.sh`). The `--env-file .env` flag loads your local
+   secrets (AI keys, JWT secret) into the api/worker containers.
 
 3. Install frontend dependencies and run the dashboard:
 
@@ -45,17 +49,28 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
 
 > MongoDB Atlas and managed Redis are used for production (Phase 13/14). Local
 > development uses the Docker `mongo`/`redis` services or a native local
-> instance; `docker/compose.dev.yml` overrides the URIs to the service names.
+> instance; the service URIs come from `.env`.
+>
+> **Environment configuration**: see `.env.example` for the full variable
+> reference. `docker/compose.dev.yml` is fully `.env`-driven - it passes every
+> variable straight through to the api/worker containers via `${VAR:-default}`
+> and only supplies local-dev fallbacks (`ENVIRONMENT=development`,
+> `MONGODB_URI=mongodb://mongo:27017`, `REDIS_URL=redis://redis:6379`,
+> `MAILPIT_API_URL=http://mailpit:8025`) when `.env` does not set them. All
+> secrets come from `.env`. For production, set `ENVIRONMENT=production` in
+> `.env` with external managed services; `backend/core/config.py` fails fast at
+> boot on weak production values (loopback CORS/hosts, short JWT secret, missing
+> AI keys, mock payments).
 
 ## Development scripts
 
-| Script                     | Purpose                                                      |
-| -------------------------- | ------------------------------------------------------------ |
-| `scripts/setup.sh`         | One-time setup (`.env`, pnpm install, uv sync)               |
-| `scripts/dev-api.sh`       | FastAPI dev server (hot reload, `:8000`)                     |
-| `scripts/dev-worker.sh`    | ARQ background worker (`python -m backend.workers`)          |
-| `scripts/docker-up.sh`     | Start full Docker stack (Mongo, Redis, Mailpit, API, worker) |
-| `scripts/check-backend.sh` | ruff + mypy + pytest                                         |
+| Script                     | Purpose                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `scripts/setup.sh`         | One-time setup (`.env`, pnpm install, uv sync)                                  |
+| `scripts/dev-api.sh`       | FastAPI dev server (hot reload, `:8000`)                                        |
+| `scripts/dev-worker.sh`    | ARQ background worker (`python -m backend.workers`)                             |
+| `scripts/docker-up.sh`     | Start full Docker stack (Mongo, Redis, Mailpit, API, Worker, Dashboard, Widget) |
+| `scripts/check-backend.sh` | ruff + mypy + pytest                                                            |
 
 ## Verification
 

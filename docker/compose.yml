@@ -1,0 +1,226 @@
+# WebChat AI - local development stack
+# MongoDB + Redis + Mailpit + API + Worker + Dashboard + Widget.
+# Start everything with:  docker compose --env-file .env -f docker/compose.dev.yml up --build
+# (or scripts/docker-up.sh).
+#
+# Environment configuration is fully .env-driven (api/worker resolve every
+# variable from .env via ${VAR:-default}); this file only provides local-dev
+# fallbacks for a bare `docker compose` run with no .env:
+#   ENVIRONMENT   -> development
+#   DEBUG         -> true
+#   MONGODB_URI   -> mongodb://mongo:27017   (local `mongo` service)
+#   REDIS_URL     -> redis://redis:6379      (local `redis` service)
+#   MAILPIT_API_URL -> http://mailpit:8025   (local Mailpit service)
+#   COOKIE_SECURE -> false
+# Switching modes means editing .env only (see .env.example header):
+#   ENVIRONMENT=development -> local docker services (or set your own URIs)
+#   ENVIRONMENT=production  -> external managed services (Atlas MONGODB_URI,
+#     managed REDIS_URL, Resend, HTTPS URLs, COOKIE_SECURE=true); config.py
+#     fails fast at boot on weak production values.
+#   All secrets (AI keys, JWT_SECRET, payment keys) always come from .env.
+
+name: webchat-ai
+
+networks:
+  webchat:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: ${DOCKER_BRIDGE_MTU:-1500}
+
+volumes:
+  mongo_data:
+  redis_data:
+
+services:
+
+  mongo:
+    image: mongo:7
+    container_name: webchat-mongo
+    networks: [webchat]
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: webchat-redis
+    networks: [webchat]
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mailpit:
+    image: axllent/mailpit:v1.20
+    container_name: webchat-mailpit
+    networks: [webchat]
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8025/api/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      network: host
+    container_name: webchat-api
+    networks: [webchat]
+    restart: unless-stopped
+    environment:
+      # Mode/debug are .env-driven (default: development / true).
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      DEBUG: ${DEBUG:-true}
+
+      # Database is .env-driven; falls back to the local `mongo` service.
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
+      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
+
+      # Redis is .env-driven; falls back to the local `redis` service.
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
+
+      # Auth secrets (from .env when present; safe dev fallback otherwise).
+      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me}
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-30}
+      # .env-driven; false for dev over plain HTTP, true for HTTPS-only cookies.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:8000","http://127.0.0.1:5500","http://localhost:5500"]}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+
+      # Widget: runtime API origin baked into the generated embed snippet
+      # (data-api-base-url). The build-time VITE_WIDGET_API_BASE_URL stays
+      # empty so the local bundle remains loopback-free (check-assets gate).
+      WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL:-http://localhost:8000}
+      WIDGET_SCRIPT_URL: ${WIDGET_SCRIPT_URL:-http://localhost:8080/webchat-widget.iife.min.js}
+
+      # Email: .env-driven; falls back to the local Mailpit service. Production
+      # uses Resend (RESEND_API_KEY) and can leave MAILPIT_API_URL empty.
+      MAILPIT_API_URL: ${MAILPIT_API_URL:-http://mailpit:8025}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-WebChat AI <no-reply@webchatai.example>}
+
+      # AI keys (from .env when present).
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER:-["gemini","groq","openrouter"]}
+      EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER:-["gemini"]}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-3072}
+
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+      network: host
+    container_name: webchat-worker
+    networks: [webchat]
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
+      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
+
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
+
+      MAILPIT_API_URL: ${MAILPIT_API_URL:-http://mailpit:8025}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER:-["gemini","groq","openrouter"]}
+      EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER:-["gemini"]}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-3072}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+      network: host
+      args:
+        # Inlined into the Next.js client bundle at build time.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: webchat-dashboard
+    networks: [webchat]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  widget:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.widget
+      network: host
+      args:
+        # Keep empty for local dev: the bundle must stay loopback-free
+        # (apps/widget/scripts/check-assets.mjs). The widget reaches the API
+        # at runtime via data-api-base-url from WIDGET_API_BASE_URL.
+        VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL:-}
+    container_name: webchat-widget
+    networks: [webchat]
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--spider", "http://127.0.0.1/webchat-widget.iife.min.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
