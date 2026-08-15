@@ -567,6 +567,37 @@ class FakeDocumentRepository:
             ]
         )
 
+    async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int:
+        from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED
+
+        return len(
+            [
+                document
+                for document in self._documents.values()
+                if document.tenant_id == tenant_id
+                and document.website_id == website_id
+                and document.knowledge_status == KNOWLEDGE_STATUS_FAILED
+            ]
+        )
+
+    async def count_non_terminal_by_website(self, tenant_id: str, website_id: str) -> int:
+        from backend.models.knowledge_chunk import (
+            KNOWLEDGE_STATUS_NONE,
+            KNOWLEDGE_STATUS_PENDING,
+            KNOWLEDGE_STATUS_PROCESSING,
+        )
+
+        return len(
+            [
+                document
+                for document in self._documents.values()
+                if document.tenant_id == tenant_id
+                and document.website_id == website_id
+                and document.knowledge_status
+                in (KNOWLEDGE_STATUS_NONE, KNOWLEDGE_STATUS_PENDING, KNOWLEDGE_STATUS_PROCESSING)
+            ]
+        )
+
     async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]:
         return [
             document.checksum

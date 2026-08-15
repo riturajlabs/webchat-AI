@@ -147,6 +147,20 @@ class Settings(BaseSettings):
     embedding_retry_base_delay_ms: int = 500
     # Fail a document's embedding pass when a single batch error exceeds this.
     embedding_request_timeout_seconds: float = 60.0
+    # Document-level embedding retries (production hardening): a temporary
+    # embedding outage must not permanently fail every queued document in one
+    # crawl fan-out. A failed attempt re-enqueues the document with a growing
+    # delay; only permanent failures (missing API key, insufficient content,
+    # retries exhausted) land in the dashboard's failed list.
+    knowledge_max_document_retries: int = 3
+    # First retry waits this long (seconds); each subsequent retry multiplies
+    # by the factor => 5s, 30s, 180s for the default 3-retry budget.
+    knowledge_retry_base_delay_seconds: float = 5.0
+    knowledge_retry_backoff_factor: float = 6.0
+    # Cleaned page text below this length is too thin to embed usefully; such
+    # pages are marked failed with "Insufficient content" instead of silently
+    # skipped or embedded into near-empty chunks.
+    knowledge_min_content_chars: int = 100
 
     # Ingestion engine (Phase 4, docs/06 implementation plan).
     crawl_max_pages: int = 50

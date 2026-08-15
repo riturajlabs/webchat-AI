@@ -39,14 +39,35 @@ _BOILERPLATE_MARKERS = (
     "share",
     "newsletter",
     "cookie",
+    "consent",
+    "gdpr",
     "popup",
     "modal",
     "menu",
     "sidebar",
+    "breadcrumb",
+    "paywall",
+    "sticky",
+    "floating",
+    "related",
+    "recommend",
+    "copyright",
+    "disclaimer",
+    "legal",
+    "footer-",
+    "site-footer",
+    "site-header",
 )
 
 _WHITESPACE = re.compile(r"[ \t\u00a0]+")
 _BLANK_LINES = re.compile(r"\n\s*\n+")
+
+# Common legal/footer boilerplate lines that survive markup removal.
+_FOOTER_LINE_RE = re.compile(
+    r"(?:©\s*|&copy;)|(?:all rights reserved)|(?:privacy policy)|(?:terms of service)|"
+    r"(?:cookie policy)|(?:powered by)|(?:sitemap)",
+    re.IGNORECASE,
+)
 
 
 def clean_html(html: str, *, max_chars: int = 200_000) -> str:
@@ -72,4 +93,30 @@ def clean_html(html: str, *, max_chars: int = 200_000) -> str:
     text = main.get_text(" ", strip=True)
     text = _WHITESPACE.sub(" ", text)
     text = _BLANK_LINES.sub("\n", text).strip()
+
+    lines = [line for line in text.split("\n") if line.strip() and not _FOOTER_LINE_RE.search(line)]
+    text = "\n".join(_dedupe_repeated_lines(lines))
     return text[:max_chars]
+
+
+def _dedupe_repeated_lines(lines: list[str]) -> list[str]:
+    """Drop lines that repeat across the page (repeated footer/nav leftovers).
+
+    A phrase (e.g. a menu label, phone number, or footer tagline) that appears
+    more than 3 times is boilerplate rather than content; keep one copy so the
+    surrounding text still reads naturally.
+    """
+    counts: dict[str, int] = {}
+    for line in lines:
+        key = line.strip().casefold()
+        counts[key] = counts.get(key, 0) + 1
+    seen: set[str] = set()
+    result: list[str] = []
+    for line in lines:
+        key = line.strip().casefold()
+        if counts[key] > 3:
+            if key in seen:
+                continue
+            seen.add(key)
+        result.append(line)
+    return result

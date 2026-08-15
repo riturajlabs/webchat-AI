@@ -2,15 +2,20 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Database, ExternalLink } from 'lucide-react';
+import { Database, ExternalLink, RotateCcw } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 
-import { useWebsites } from '@/features/websites/hooks';
-import type { KnowledgeStatus } from '@/features/websites/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useWebsites } from '@/features/websites/hooks';
+import type { KnowledgeStatus } from '@/features/websites/types';
 import { cn } from '@/lib/utils';
+
+import { useKnowledgeDocuments, useRetryDocument } from './hooks';
+import type { KnowledgeDocumentSummary } from './types';
 
 const KNOWLEDGE_STYLES: Record<KnowledgeStatus, string> = {
   none: 'bg-muted text-muted-foreground',
@@ -32,17 +37,6 @@ function KnowledgeBadge({ status }: { status: KnowledgeStatus }) {
   );
 }
 
-function formatDate(value: string | null): string {
-  if (!value) {
-    return '—';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '—';
-  }
-  return date.toLocaleDateString();
-}
-
 function KnowledgeStat({ label, value }: { label: string; value: number }) {
   return (
     <Card>
@@ -53,6 +47,213 @@ function KnowledgeStat({ label, value }: { label: string; value: number }) {
         <p className="font-sans text-3xl font-bold tracking-tight">{value}</p>
       </CardContent>
     </Card>
+  );
+}
+
+function DocumentSummary({ summary }: { summary: KnowledgeDocumentSummary }) {
+  return (
+    <div className="grid gap-2 text-sm sm:grid-cols-4">
+      <div>
+        <dt className="text-muted-foreground">Total</dt>
+        <dd className="font-medium">{summary.total}</dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">Processed</dt>
+        <dd className="font-medium text-green-700">{summary.completed}</dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">Failed</dt>
+        <dd className="font-medium text-red-700">{summary.failed}</dd>
+      </div>
+      <div>
+        <dt className="text-muted-foreground">Pending</dt>
+        <dd className="font-medium">{summary.pending + summary.processing}</dd>
+      </div>
+    </div>
+  );
+}
+
+function ProcessingProgress({ summary }: { summary: KnowledgeDocumentSummary }) {
+  if (summary.total === 0 || (summary.pending === 0 && summary.processing === 0)) {
+    return null;
+  }
+  const done = summary.completed + summary.failed;
+  const ratio = Math.min(1, done / summary.total);
+  return (
+    <div className="space-y-1" role="status" aria-label="Embedding progress">
+      <p className="text-xs text-muted-foreground">
+        Embedding… {done}/{summary.total} documents processed
+      </p>
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(ratio * 100)}
+      >
+        <div
+          className="h-full rounded-full bg-primary transition-all"
+          style={{ width: `${ratio * 100}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface FailedDocumentProps {
+  documentId: string;
+  url: string;
+  reason: string;
+  onRetry: (documentId: string) => void;
+  retrying: boolean;
+}
+
+function FailedDocument({ documentId, url, reason, onRetry, retrying }: FailedDocumentProps) {
+  return (
+    <li className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex max-w-full items-center gap-1 truncate text-sm font-medium hover:underline"
+        >
+          <span className="truncate">{url}</span>
+          <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </a>
+        <p className="mt-0.5 truncate text-xs text-destructive">{reason}</p>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={retrying}
+        onClick={() => onRetry(documentId)}
+        className="shrink-0"
+      >
+        <RotateCcw className="size-3" aria-hidden="true" />
+        {retrying ? 'Retrying…' : 'Retry'}
+      </Button>
+    </li>
+  );
+}
+
+function WebsiteKnowledgeDetail({ websiteId }: { websiteId: string }) {
+  const { data, isPending, isError, error } = useKnowledgeDocuments(websiteId);
+  const retry = useRetryDocument(websiteId);
+  const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+
+  if (isPending) {
+    return (
+      <div className="space-y-2" aria-label="Loading document status">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        {error?.message ?? 'Failed to load document status.'}
+      </p>
+    );
+  }
+
+  const failed = data.documents.filter((document) => document.status === 'failed');
+
+  const handleRetry = async (documentId: string) => {
+    setRetryingIds((ids) => new Set(ids).add(documentId));
+    try {
+      await retry.mutateAsync(documentId);
+      toast.success('Document re-queued for embedding.');
+    } catch (retryError) {
+      toast.error(
+        retryError instanceof Error ? retryError.message : 'Failed to retry the document.',
+      );
+    } finally {
+      setRetryingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(documentId);
+        return next;
+      });
+    }
+  };
+
+  return (
+    <div className="space-y-3" data-testid="website-knowledge-detail">
+      <ProcessingProgress summary={data.summary} />
+      <DocumentSummary summary={data.summary} />
+
+      {failed.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Failed documents
+          </p>
+          <ul className="flex flex-col gap-2">
+            {failed.map((document) => (
+              <FailedDocument
+                key={document.id}
+                documentId={document.id}
+                url={document.url}
+                reason={document.failure_reason ?? 'Unknown error'}
+                onRetry={(id) => void handleRetry(id)}
+                retrying={retryingIds.has(document.id)}
+              />
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WebsiteRow({
+  website,
+}: {
+  website: { id: string; name: string; url: string; knowledge_status: KnowledgeStatus };
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <li className="py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Database className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <Link href="/websites" className="truncate font-medium hover:underline">
+              {website.name}
+            </Link>
+            <KnowledgeBadge status={website.knowledge_status} />
+          </div>
+          <a
+            href={website.url}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-0.5 inline-flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
+          >
+            <span className="truncate">{website.url}</span>
+            <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
+          </a>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+          >
+            {open ? 'Hide documents' : 'Documents'}
+          </Button>
+        </div>
+      </div>
+      {open ? (
+        <div className="mt-3 rounded-lg border bg-muted/20 p-4">
+          <WebsiteKnowledgeDetail websiteId={website.id} />
+        </div>
+      ) : null}
+    </li>
   );
 }
 
@@ -122,50 +323,15 @@ export function KnowledgePage() {
             <Card>
               <CardHeader>
                 <CardTitle>Websites</CardTitle>
-                <CardDescription>Embedding and retrieval status per website.</CardDescription>
+                <CardDescription>
+                  Embedding status per website. Open a website to see per-document progress and
+                  failed pages.
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="flex flex-col divide-y">
                   {websites.map((website) => (
-                    <li key={website.id} className="flex items-center justify-between gap-4 py-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <Database
-                            className="size-4 shrink-0 text-muted-foreground"
-                            aria-hidden="true"
-                          />
-                          <Link href="/websites" className="truncate font-medium hover:underline">
-                            {website.name}
-                          </Link>
-                          <KnowledgeBadge status={website.knowledge_status} />
-                        </div>
-                        <a
-                          href={website.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-0.5 inline-flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
-                        >
-                          <span className="truncate">{website.url}</span>
-                          <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
-                        </a>
-                      </div>
-                      <dl className="hidden text-right text-xs sm:block">
-                        <div className="flex gap-6">
-                          <div>
-                            <dt className="text-muted-foreground">Chunks</dt>
-                            <dd className="font-medium">{website.knowledge_chunks}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-muted-foreground">Documents</dt>
-                            <dd className="font-medium">{website.knowledge_documents}</dd>
-                          </div>
-                          <div>
-                            <dt className="text-muted-foreground">Last updated</dt>
-                            <dd className="font-medium">{formatDate(website.last_knowledge_at)}</dd>
-                          </div>
-                        </div>
-                      </dl>
-                    </li>
+                    <WebsiteRow key={website.id} website={website} />
                   ))}
                 </ul>
               </CardContent>

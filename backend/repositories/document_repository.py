@@ -11,6 +11,12 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 
 from backend.models.document import Document
+from backend.models.knowledge_chunk import (
+    KNOWLEDGE_STATUS_FAILED,
+    KNOWLEDGE_STATUS_NONE,
+    KNOWLEDGE_STATUS_PENDING,
+    KNOWLEDGE_STATUS_PROCESSING,
+)
 
 
 class DocumentRepository(Protocol):
@@ -19,6 +25,10 @@ class DocumentRepository(Protocol):
     async def upsert(self, document: Document) -> None: ...
 
     async def count_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
+    async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
+    async def count_non_terminal_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
     async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]: ...
 
@@ -62,6 +72,31 @@ class MongoDocumentRepository:
     async def count_by_website(self, tenant_id: str, website_id: str) -> int:
         return await self._collection.count_documents(
             {"tenant_id": tenant_id, "website_id": website_id}
+        )
+
+    async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int:
+        return await self._collection.count_documents(
+            {
+                "tenant_id": tenant_id,
+                "website_id": website_id,
+                "knowledge_status": KNOWLEDGE_STATUS_FAILED,
+            }
+        )
+
+    async def count_non_terminal_by_website(self, tenant_id: str, website_id: str) -> int:
+        """Documents not yet in a terminal knowledge state (pending/processing)."""
+        return await self._collection.count_documents(
+            {
+                "tenant_id": tenant_id,
+                "website_id": website_id,
+                "knowledge_status": {
+                    "$in": [
+                        KNOWLEDGE_STATUS_NONE,
+                        KNOWLEDGE_STATUS_PENDING,
+                        KNOWLEDGE_STATUS_PROCESSING,
+                    ],
+                },
+            }
         )
 
     async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]:

@@ -46,6 +46,18 @@ async def enqueue_process_document(document_id: str) -> None:
     await _arq_redis().enqueue_job("process_document", document_id)
 
 
+async def enqueue_process_document_deferred(document_id: str, delay_seconds: float) -> None:
+    """Enqueue a per-document embedding job after a backoff delay.
+
+    ARQ deferred jobs live in a Redis zset and only become runnable after
+    `_defer_by` seconds, so the exponential document-level retry schedule
+    survives worker restarts and never blocks a worker slot while sleeping.
+    """
+    await _arq_redis().enqueue_job(
+        "process_document", document_id, _defer_by=delay_seconds
+    )
+
+
 async def enqueue_process_website_documents(website_id: str) -> None:
     """Enqueue a whole-website knowledge pass."""
     await _arq_redis().enqueue_job("process_website_documents", website_id)
@@ -70,15 +82,27 @@ def _embedder(ctx: dict[str, Any]) -> EmbeddingClient:
 
 
 async def process_document(ctx: dict[str, Any], document_id: str) -> dict[str, Any]:
-    """Worker task: embed one document (registered in tasks.TASKS)."""
-    return await _run_process_document(ctx, document_id, _processor(ctx, _embedder(ctx)))
+    """Worker task: embed one document (registered in tasks.TASKS).
+
+    Temporary embedding failures are retried at the document level: the
+    processor schedules a deferred re-run with exponential backoff instead of
+    letting the job fail, so a transient provider outage cannot permanently
+    fail an entire crawl fan-out.
+    """
+    processor = _processor(ctx, _embedder(ctx))
+    return await _run_process_document(
+        ctx, document_id, processor, on_retry=enqueue_process_document_deferred
+    )
 
 
 async def _run_process_document(
-    ctx: dict[str, Any], document_id: str, processor: KnowledgeProcessor
+    ctx: dict[str, Any],
+    document_id: str,
+    processor: KnowledgeProcessor,
+    on_retry: Any = None,
 ) -> dict[str, Any]:
     """Core logic, testable with an injected fake-backed processor."""
-    return await processor.process_document(document_id)
+    return await processor.process_document(document_id, on_retry=on_retry)
 
 
 async def process_website_documents(ctx: dict[str, Any], website_id: str) -> dict[str, Any]:

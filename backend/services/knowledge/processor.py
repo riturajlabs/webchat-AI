@@ -9,13 +9,25 @@ and no Google SDK or Mongo import leaks into this core.
 Incremental rule (docs/06 Phase 5): when a document's content checksum is
 unchanged and it already has chunks, embedding is skipped entirely. When the
 content changed, the old chunks are deleted and rebuilt.
+
+Failure handling (production hardening): embedding failures are classified
+permanent vs temporary. Temporary failures (generic `EmbeddingError` from
+timeouts/rate limits/provider errors) are retried at the document level with an
+exponential backoff schedule (5s, 30s, 180s by default); a retry re-enqueues
+the document through the injected `on_retry` callback (the ARQ worker binds a
+deferred job). Permanent failures (missing API key, insufficient content,
+retries exhausted) land in the dashboard's failed list with a reason and can be
+re-processed manually via the retry endpoint. Every failure is logged as a
+structured record carrying the document's URL, ids, stage, error type and
+message so the exact failure point is traceable.
 """
 
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from backend.core.errors import EmbeddingError
+from backend.core.config import get_settings
+from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
 from backend.core.security import utcnow
 from backend.models.audit_log import (
     AUDIT_KNOWLEDGE_FAILED,
@@ -38,6 +50,10 @@ from backend.services.knowledge.embedding import EmbeddingClient
 logger = logging.getLogger("webchat_ai")
 
 EnqueueFn = Callable[[str], Awaitable[None]]
+# `(document_id, delay_seconds)` -> schedules a deferred re-processing pass.
+RetryFn = Callable[[str, float], Awaitable[None]]
+
+INSUFFICIENT_CONTENT_REASON = "Insufficient content"
 
 
 class KnowledgeProcessor:
@@ -55,7 +71,12 @@ class KnowledgeProcessor:
         usage: UsageRecordRepository | None = None,
         chunk_size: int | None = None,
         overlap: int | None = None,
+        max_retries: int | None = None,
+        retry_base_delay_seconds: float | None = None,
+        retry_backoff_factor: float | None = None,
+        min_content_chars: int | None = None,
     ) -> None:
+        settings = get_settings()
         self._documents = documents
         self._vector = vector
         self._chunks = chunks
@@ -65,6 +86,24 @@ class KnowledgeProcessor:
         self._usage = usage
         self._chunk_size = chunk_size
         self._overlap = overlap
+        self._max_retries = (
+            max_retries if max_retries is not None else settings.knowledge_max_document_retries
+        )
+        self._retry_base_delay = (
+            retry_base_delay_seconds
+            if retry_base_delay_seconds is not None
+            else settings.knowledge_retry_base_delay_seconds
+        )
+        self._retry_backoff_factor = (
+            retry_backoff_factor
+            if retry_backoff_factor is not None
+            else settings.knowledge_retry_backoff_factor
+        )
+        self._min_content_chars = (
+            min_content_chars
+            if min_content_chars is not None
+            else settings.knowledge_min_content_chars
+        )
 
     async def process_website_documents(
         self, website_id: str, *, enqueue: EnqueueFn
@@ -86,11 +125,18 @@ class KnowledgeProcessor:
             await enqueue(document.id)
         return {"status": "queued", "documents": len(documents)}
 
-    async def process_document(self, document_id: str) -> dict[str, Any]:
+    async def process_document(
+        self,
+        document_id: str,
+        *,
+        on_retry: RetryFn | None = None,
+    ) -> dict[str, Any]:
         """Embed one document into the knowledge base (idempotent).
 
         Skips embedding when the document is unchanged (checksum match + chunks
         already stored); otherwise deletes stale chunks and rebuilds them.
+        Returns a structured result; temporary embedding failures schedule a
+        document-level retry through `on_retry` when retries remain.
         """
         document = await self._documents.find_by_id_any(document_id)
         if document is None:
@@ -103,6 +149,26 @@ class KnowledgeProcessor:
         if document.knowledge_checksum == document.checksum and existing_chunks > 0:
             return {"status": "unchanged"}
 
+        document.knowledge_status = KNOWLEDGE_STATUS_PROCESSING
+        document.knowledge_last_attempt_at = utcnow()
+        await self._documents.upsert(document)
+
+        if len(document.content.strip()) < self._min_content_chars:
+            # Nothing meaningful to embed: drop stale chunks and record a
+            # permanent failure the dashboard can show and the owner can retry
+            # once real content lands (a re-crawl replaces the document).
+            await self._vector.delete_by_document(document.tenant_id, document.id)
+            await self._record_failure(
+                document,
+                website,
+                stage="chunk",
+                error_type="InsufficientContent",
+                error_message=INSUFFICIENT_CONTENT_REASON,
+                permanent=True,
+                audit=True,
+            )
+            return {"status": "insufficient_content"}
+
         text_chunks = chunk_text(
             document.content,
             chunk_size=self._chunk_size,
@@ -110,31 +176,68 @@ class KnowledgeProcessor:
         )
         try:
             if not text_chunks:
-                # Nothing embeddable (empty page): drop stale chunks and record
-                # a clean "processed with no content" state.
+                # Content stripped to nothing by the chunker: permanent failure.
                 await self._vector.delete_by_document(document.tenant_id, document.id)
-                await self._record_document(
+                await self._record_failure(
                     document,
-                    status=KNOWLEDGE_STATUS_READY,
-                    checksum=document.checksum,
-                    chunks=0,
+                    website,
+                    stage="chunk",
+                    error_type="InsufficientContent",
+                    error_message=INSUFFICIENT_CONTENT_REASON,
+                    permanent=True,
+                    audit=True,
                 )
-                await self._refresh_website(website)
-                return {"status": "no_content"}
+                return {"status": "insufficient_content"}
 
             vectors = await self._embedder.embed([text_chunk.text for text_chunk in text_chunks])
-        except EmbeddingError:
-            await self._record_document(
+        except EmbeddingUnavailableError as exc:
+            # Configuration error (e.g. missing API key): retrying cannot fix
+            # it, so fail the document permanently and surface the reason.
+            await self._record_failure(
                 document,
-                status=KNOWLEDGE_STATUS_FAILED,
-                checksum=document.knowledge_checksum,
-                chunks=existing_chunks,
+                website,
+                stage="embedding",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                permanent=True,
+                audit=True,
             )
-            await self._refresh_website(website)
-            await self._audit.create(
-                AuditLog.new(action=AUDIT_KNOWLEDGE_FAILED, tenant_id=document.tenant_id)
+            return {"status": "failed", "retryable": False, "reason": str(exc)}
+        except EmbeddingError as exc:
+            # Temporary provider failure (timeout/rate limit/provider error
+            # after the client's own batch retries). Retry at the document
+            # level with exponential backoff until the budget is exhausted.
+            retries_used = document.knowledge_retry_count
+            if retries_used >= self._max_retries:
+                await self._record_failure(
+                    document,
+                    website,
+                    stage="embedding",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    permanent=True,
+                    audit=True,
+                )
+                return {"status": "failed", "retryable": False, "reason": str(exc)}
+
+            delay = self._retry_base_delay * (self._retry_backoff_factor**retries_used)
+            await self._record_failure(
+                document,
+                website,
+                stage="embedding",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                permanent=False,
+                audit=True,
             )
-            raise
+            if on_retry is None:
+                return {"status": "failed", "retryable": True, "reason": str(exc)}
+            await on_retry(document_id, delay)
+            return {
+                "status": "retry_scheduled",
+                "retry_in_seconds": delay,
+                "attempt": retries_used + 1,
+            }
 
         # Changed (or first run): replace old chunks with freshly embedded ones.
         chunks = self._build_chunks(document, text_chunks, vectors)
@@ -202,9 +305,73 @@ class KnowledgeProcessor:
         document.knowledge_chunks = chunks
         if status == KNOWLEDGE_STATUS_READY:
             document.knowledge_processed_at = utcnow()
+            # A successful pass clears prior failure state (attempt accounting).
+            document.knowledge_failure_reason = None
+            document.knowledge_retry_count = 0
         document.updated_at = utcnow()
         # Persist knowledge state on the shared document (upsert is idempotent).
         await self._documents.upsert(document)
+
+    async def _record_failure(
+        self,
+        document: Document,
+        website: Website,
+        *,
+        stage: str,
+        error_type: str,
+        error_message: str,
+        permanent: bool,
+        audit: bool,
+    ) -> None:
+        """Record a failed embedding pass on the document.
+
+        `permanent=True` keeps the current retry count (the document will not
+        be retried automatically); `permanent=False` increments the retry count
+        so the next pass computes the next backoff delay.
+        """
+        if not permanent:
+            document.knowledge_retry_count += 1
+        document.knowledge_status = KNOWLEDGE_STATUS_FAILED
+        document.knowledge_failure_reason = f"{error_type}: {error_message}"
+        document.knowledge_checksum = document.knowledge_checksum or document.checksum
+        document.updated_at = utcnow()
+        await self._documents.upsert(document)
+        await self._refresh_website(website)
+        if audit:
+            await self._audit.create(
+                AuditLog.new(action=AUDIT_KNOWLEDGE_FAILED, tenant_id=document.tenant_id)
+            )
+        self._log_failure(document, stage=stage, error_type=error_type, error_message=error_message)
+
+    @staticmethod
+    def _log_failure(
+        document: Document,
+        *,
+        stage: str,
+        error_type: str,
+        error_message: str,
+    ) -> None:
+        """Structured per-document failure record (00-AI-Development-Rules §17).
+
+        The JSON formatter merges the `extra` payload into each log line so
+        ops can group failures by url/error_type/stage without parsing message
+        text. The development formatter ignores `extra`, which is fine.
+        """
+        logger.warning(
+            "knowledge processing failed: %s",
+            error_message,
+            extra={
+                "timestamp": utcnow().isoformat(),
+                "url": document.url,
+                "document_id": document.id,
+                "website_id": document.website_id,
+                "tenant_id": document.tenant_id,
+                "stage": stage,
+                "error_type": error_type,
+                "error_message": error_message,
+                "retry_count": document.knowledge_retry_count,
+            },
+        )
 
     async def _refresh_website(self, website: Website) -> None:
         """Recompute and persist dashboard knowledge statistics for a website."""
@@ -214,9 +381,27 @@ class KnowledgeProcessor:
         website.knowledge_documents = await self._chunks.count_documents_by_website(
             website.tenant_id, website.id
         )
-        website.knowledge_status = (
-            KNOWLEDGE_STATUS_READY if website.knowledge_chunks > 0 else website.knowledge_status
-        )
+        if website.knowledge_chunks > 0:
+            website.knowledge_status = KNOWLEDGE_STATUS_READY
+        elif (
+            website.knowledge_status != KNOWLEDGE_STATUS_PROCESSING
+            and await self._documents.count_failed_by_website(website.tenant_id, website.id) > 0
+        ):
+            # Not mid-fan-out and every embeddable page failed: surface the
+            # failure at the website level instead of leaving it stuck in
+            # `processing` forever (dashboard visibility).
+            website.knowledge_status = KNOWLEDGE_STATUS_FAILED
+        elif (
+            website.knowledge_status == KNOWLEDGE_STATUS_PROCESSING
+            and await self._documents.count_non_terminal_by_website(
+                website.tenant_id, website.id
+            )
+            == 0
+            and await self._documents.count_failed_by_website(website.tenant_id, website.id) > 0
+        ):
+            # The fan-out has drained and every page failed: the website is
+            # done (nothing left processing) and should read `failed`.
+            website.knowledge_status = KNOWLEDGE_STATUS_FAILED
         website.last_knowledge_at = utcnow()
         website.updated_at = utcnow()
         await self._websites.update(website)

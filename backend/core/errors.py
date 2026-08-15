@@ -131,6 +131,25 @@ class EmbeddingUnavailableError(EmbeddingError):
     code = "EMBEDDING_UNAVAILABLE"
 
 
+class InsufficientContentError(AppError):
+    """Cleaned page text is too short to embed usefully (pipeline stage).
+
+    Raised internally by the knowledge pipeline when a document's content falls
+    below the minimum-length threshold; it is never returned over HTTP, only
+    recorded as the document's permanent failure reason.
+    """
+
+    status_code = 422
+    code = "INSUFFICIENT_CONTENT"
+
+
+class DocumentNotFoundError(AppError):
+    """Knowledge document does not exist for this tenant (retry/status APIs)."""
+
+    status_code = 404
+    code = "DOCUMENT_NOT_FOUND"
+
+
 class InvalidQuestionError(AppError):
     """Chat question rejected after sanitization (Phase 6)."""
 

@@ -82,7 +82,9 @@ async def test_deduplicates_normalized_links(guard) -> None:
     session = _session(fetcher, guard)
     stored = await session.run()
     assert stored == 3
-    assert session.errors == []
+    # The thin pricing page is stored but flagged as insufficient content
+    # (content-length validation), not silently dropped or embedded.
+    assert any(e.url == "https://acme.example/pricing" for e in session.errors)
 
 
 async def test_respects_max_depth(guard) -> None:
@@ -183,8 +185,12 @@ async def test_skips_pages_without_extractable_content(guard) -> None:
     )
     session = _session(fetcher, guard)
     stored = await session.run()
-    assert stored == 0
+    # The empty page is stored as a failed document (dashboard visibility)
+    # rather than dropped entirely: it is recorded as insufficient content.
+    assert stored == 1
     assert any(e.url == SEED and "content" in e.message for e in session.errors)
+    stored_doc = next(iter(session._documents.documents.values()))
+    assert stored_doc.knowledge_status == "failed"
 
 
 async def test_skips_pages_exceeding_response_size_limit(guard) -> None:

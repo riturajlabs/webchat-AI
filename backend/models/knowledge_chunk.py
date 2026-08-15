@@ -18,12 +18,17 @@ KNOWLEDGE_SCHEMA_VERSION = 1
 
 # Knowledge-base status of a document or website (dashboard "embedding status").
 KNOWLEDGE_STATUS_NONE = "none"
+# Crawled but not yet handed to the embedding pipeline (queued/fan-out pending).
+# `none` is kept for backward compatibility with pre-status documents; both
+# normalize to "pending" for the dashboard.
+KNOWLEDGE_STATUS_PENDING = "pending"
 KNOWLEDGE_STATUS_PROCESSING = "processing"
 KNOWLEDGE_STATUS_READY = "ready"
 KNOWLEDGE_STATUS_FAILED = "failed"
 
 KNOWLEDGE_STATUSES = {
     KNOWLEDGE_STATUS_NONE,
+    KNOWLEDGE_STATUS_PENDING,
     KNOWLEDGE_STATUS_PROCESSING,
     KNOWLEDGE_STATUS_READY,
     KNOWLEDGE_STATUS_FAILED,
@@ -100,6 +105,7 @@ __all__ = [
     "KNOWLEDGE_STATUSES",
     "KNOWLEDGE_STATUS_FAILED",
     "KNOWLEDGE_STATUS_NONE",
+    "KNOWLEDGE_STATUS_PENDING",
     "KNOWLEDGE_STATUS_PROCESSING",
     "KNOWLEDGE_STATUS_READY",
     "KnowledgeChunk",

@@ -21,6 +21,7 @@ from backend.core.config import Settings, get_settings
 from backend.core.errors import InvalidUrlError
 from backend.models.crawl_job import CrawlJobError
 from backend.models.document import Document
+from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED
 from backend.repositories import DocumentRepository
 from backend.services.ingestion.cleaner import clean_html
 from backend.services.ingestion.extractor import extract_page
@@ -31,6 +32,8 @@ from backend.utils.url_validator import normalize_crawl_url, validate_hostname
 logger = logging.getLogger("webchat_ai")
 
 _MAX_RECORDED_ERRORS = 50
+
+INSUFFICIENT_CONTENT_REASON = "Insufficient content"
 
 
 class FetchError(Exception):
@@ -124,9 +127,6 @@ class CrawlSession:
             extracted = extract_page(page.html, page.url)
             final_url = normalize_crawl_url(page.url, page.url) or page.url
             content = clean_html(page.html, max_chars=self._settings.crawl_max_content_bytes)
-            if not content:
-                self._record_error(final_url, "No extractable content found.")
-                continue
             checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
             document = Document.new(
                 tenant_id=self._tenant_id,
@@ -137,6 +137,14 @@ class CrawlSession:
                 checksum=checksum,
                 language=extracted.language,
             )
+            # Content-length validation: pages with no (or too little) cleaned
+            # text cannot be embedded usefully, so they are stored as failed
+            # documents the dashboard can surface and the owner can re-crawl
+            # (instead of being silently dropped or embedded into junk).
+            if len(content.strip()) < self._settings.knowledge_min_content_chars:
+                document.knowledge_status = KNOWLEDGE_STATUS_FAILED
+                document.knowledge_failure_reason = INSUFFICIENT_CONTENT_REASON
+                self._record_error(final_url, INSUFFICIENT_CONTENT_REASON)
             await self._documents.upsert(document)
             stored += 1
             if self._on_progress is not None:

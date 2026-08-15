@@ -17,10 +17,13 @@ class FakeProcessor:
     document_ids: list[str] = field(default_factory=list)
     website_ids: list[str] = field(default_factory=list)
     enqueues: list[list[str]] = field(default_factory=list)
+    on_retries: list[object] = field(default_factory=list)
     processor: KnowledgeProcessor | None = None
 
-    async def process_document(self, document_id: str) -> dict:
+    async def process_document(self, document_id: str, on_retry=None) -> dict:
         self.document_ids.append(document_id)
+        if on_retry is not None:
+            self.on_retries.append(on_retry)
         return {"status": "processed", "chunks": 3}
 
     async def process_website_documents(self, website_id: str, *, enqueue) -> dict:
@@ -30,12 +33,25 @@ class FakeProcessor:
         return {"status": "queued", "documents": 2}
 
 
+async def _retry_callback(document_id: str, delay: float) -> None:  # pragma: no cover
+    pass
+
+
 async def test_run_process_document_calls_processor() -> None:
     fake = FakeProcessor()
     result = await _run_process_document({}, "doc-1", fake)  # type: ignore[arg-type]
 
     assert result == {"status": "processed", "chunks": 3}
     assert fake.document_ids == ["doc-1"]
+
+
+async def test_run_process_document_forwards_retry_callback() -> None:
+    """The deferred-retry callback bound by the worker task must reach the
+    processor so a temporary embedding failure can schedule a backoff re-run."""
+    fake = FakeProcessor()
+    await _run_process_document({}, "doc-1", fake, on_retry=_retry_callback)  # type: ignore[arg-type]
+
+    assert fake.on_retries == [_retry_callback]
 
 
 async def test_run_process_website_fans_out_via_enqueue() -> None:

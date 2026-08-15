@@ -38,6 +38,7 @@ from backend.repositories import (
     MongoChatMessageRepository,
     MongoChatSessionRepository,
     MongoCrawlJobRepository,
+    MongoDocumentRepository,
     MongoFeedbackRepository,
     MongoMemberRepository,
     MongoRefreshTokenRepository,
@@ -57,10 +58,12 @@ from backend.services.chat.rag_service import RagService
 from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
 from backend.services.feedback import FeedbackService
+from backend.services.knowledge import KnowledgeService
 from backend.services.website import WebsiteService
 from backend.services.widget import WidgetConfigService, WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
+from backend.workers.jobs.knowledge import enqueue_process_document
 
 
 def get_db() -> AsyncIOMotorDatabase[Any]:
@@ -110,6 +113,22 @@ def get_crawl_service(
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         enqueue=enqueue_crawl_website,
+    )
+
+
+def get_knowledge_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> KnowledgeService:
+    """Build the knowledge service with MongoDB-backed repositories.
+
+    `enqueue` submits the per-document embedding job to the ARQ worker, so the
+    manual retry action never blocks on worker execution (ADR-002).
+    """
+    return KnowledgeService(
+        websites=MongoWebsiteRepository(db),
+        documents=MongoDocumentRepository(db),
+        audit=MongoAuditLogRepository(db),
+        enqueue=enqueue_process_document,
     )
 
 

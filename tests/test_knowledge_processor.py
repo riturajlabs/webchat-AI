@@ -7,8 +7,7 @@ FakeWebsiteRepository, FakeAuditLogRepository and FakeEmbeddingClient.
 
 from dataclasses import dataclass, field
 
-import pytest
-from backend.core.errors import EmbeddingError
+from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
 from backend.models.audit_log import AUDIT_KNOWLEDGE_FAILED, AUDIT_KNOWLEDGE_PROCESSED
 from backend.models.document import Document
 from backend.models.knowledge_chunk import (
@@ -212,17 +211,33 @@ async def test_replaces_chunks_when_content_changed() -> None:
     assert stored.knowledge_checksum == "changed-456"
 
 
-async def test_no_content_records_ready_with_zero_chunks() -> None:
+async def test_no_content_records_failed_with_reason() -> None:
+    """Cleaned content below the threshold is a permanent `InsufficientContent`
+    failure surfaced on the dashboard - it is never embedded into junk chunks."""
     env = await _env(content="   \n\n  ")
 
     result = await env.processor.process_document(env.document.id)
 
-    assert result == {"status": "no_content"}
+    assert result == {"status": "insufficient_content"}
     assert env.vector.chunks == []
     stored = env.documents.documents[env.document.id]
-    assert stored.knowledge_status == KNOWLEDGE_STATUS_READY
-    assert stored.knowledge_chunks == 0
-    assert stored.knowledge_checksum == "abc123"
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.knowledge_failure_reason == "InsufficientContent: Insufficient content"
+    assert any(log.action == AUDIT_KNOWLEDGE_FAILED for log in env.audit.logs)
+
+
+async def test_thin_content_records_failed_with_reason() -> None:
+    """Short but non-empty pages (boilerplate-only) fail permanently instead of
+    producing near-empty embeddings."""
+    env = await _env(content="Short page")
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result == {"status": "insufficient_content"}
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.processing_status == "failed"
+    assert "Insufficient content" in (stored.knowledge_failure_reason or "")
 
 
 async def test_embedding_failure_records_failed_state_and_audits() -> None:
@@ -243,11 +258,13 @@ async def test_embedding_failure_records_failed_state_and_audits() -> None:
         overlap=5,
     )
 
-    with pytest.raises(EmbeddingError):
-        await env.processor.process_document(env.document.id)
+    result = await env.processor.process_document(env.document.id)
 
+    assert result["status"] == "failed"
     stored = env.documents.documents[env.document.id]
     assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.processing_status == "failed"
+    assert stored.knowledge_retry_count == 1
     assert any(log.action == AUDIT_KNOWLEDGE_FAILED for log in env.audit.logs)
     assert env.vector.chunks == []
 
@@ -399,8 +416,7 @@ async def test_embedding_failure_does_not_increment_embeddings_created() -> None
         overlap=5,
     )
 
-    with pytest.raises(EmbeddingError):
-        await env.processor.process_document(env.document.id)
+    await env.processor.process_document(env.document.id)
 
     record = env.usage.get_record(env.document.tenant_id, env.website.id, usage_date_key())
     assert record is None or record.counters.get("embeddings_created", 0) == 0
@@ -451,3 +467,207 @@ async def test_usage_increment_failure_does_not_fail_processing() -> None:
 
     assert result["status"] == "processed"
     assert len(env.vector.chunks) == result["chunks"]
+
+
+# ---------------------------------------------------------------------------
+# Document-level retry system (production hardening)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RecordingRetry:
+    """Records deferred retries instead of touching Redis."""
+
+    scheduled: list[tuple[str, float]] = field(default_factory=list)
+
+    async def __call__(self, document_id: str, delay_seconds: float) -> None:
+        self.scheduled.append((document_id, delay_seconds))
+
+
+def _failing_processor(
+    env: Env,
+    *,
+    error: Exception,
+    max_retries: int = 3,
+    retry_base_delay_seconds: float = 5.0,
+    retry_backoff_factor: float = 6.0,
+) -> KnowledgeProcessor:
+    class FailingEmbedder(FakeEmbeddingClient):
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise error
+
+    return KnowledgeProcessor(
+        documents=env.documents,
+        vector=env.vector,
+        chunks=env.chunks,
+        websites=env.websites,
+        audit=env.audit,
+        embedder=FailingEmbedder(),
+        usage=env.usage,
+        chunk_size=30,
+        overlap=5,
+        max_retries=max_retries,
+        retry_base_delay_seconds=retry_base_delay_seconds,
+        retry_backoff_factor=retry_backoff_factor,
+    )
+
+
+async def test_temporary_embedding_failure_schedules_backoff_retry() -> None:
+    """A transient embedding error must schedule a deferred re-run with the
+    configured backoff delay instead of losing the document permanently."""
+    env = await _env()
+    retries = RecordingRetry()
+    env.processor = _failing_processor(env, error=EmbeddingError("provider timeout"))
+
+    result = await env.processor.process_document(env.document.id, on_retry=retries)
+
+    assert result["status"] == "retry_scheduled"
+    assert result["retry_in_seconds"] == 5.0
+    assert result["attempt"] == 1
+    assert retries.scheduled == [(env.document.id, 5.0)]
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.knowledge_retry_count == 1
+    assert stored.knowledge_last_attempt_at is not None
+
+
+async def test_retry_backoff_grows_exponentially() -> None:
+    """The backoff schedule follows 5s, 30s, 180s (base * factor**attempt)."""
+    env = await _env()
+    retries = RecordingRetry()
+    env.processor = _failing_processor(env, error=EmbeddingError("provider timeout"))
+
+    for attempt, expected_delay in enumerate((5.0, 30.0, 180.0), start=1):
+        result = await env.processor.process_document(env.document.id, on_retry=retries)
+        assert result["status"] == "retry_scheduled"
+        assert result["retry_in_seconds"] == expected_delay
+        assert result["attempt"] == attempt
+
+    assert retries.scheduled == [
+        (env.document.id, 5.0),
+        (env.document.id, 30.0),
+        (env.document.id, 180.0),
+    ]
+    assert env.documents.documents[env.document.id].knowledge_retry_count == 3
+
+
+async def test_retries_exhausted_is_permanent_and_does_not_loop_forever() -> None:
+    """Once the retry budget is spent the document fails permanently and no
+    further retry is scheduled (Case 4: no infinite retry)."""
+    env = await _env()
+    retries = RecordingRetry()
+    env.processor = _failing_processor(env, error=EmbeddingError("provider timeout"), max_retries=2)
+
+    await env.processor.process_document(env.document.id, on_retry=retries)  # attempt 1
+    await env.processor.process_document(env.document.id, on_retry=retries)  # attempt 2
+
+    result = await env.processor.process_document(env.document.id, on_retry=retries)
+
+    assert result["status"] == "failed"
+    assert result["retryable"] is False
+    assert len(retries.scheduled) == 2  # no third retry
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.processing_status == "failed"
+    assert stored.knowledge_failure_reason is not None
+
+
+async def test_embedding_unavailable_is_permanent_without_retry() -> None:
+    """A configuration error (e.g. missing API key) cannot be fixed by retrying,
+    so it fails immediately and never schedules a retry."""
+    env = await _env()
+    retries = RecordingRetry()
+    env.processor = _failing_processor(
+        env, error=EmbeddingUnavailableError("GEMINI_API_KEY is not configured")
+    )
+
+    result = await env.processor.process_document(env.document.id, on_retry=retries)
+
+    assert result["status"] == "failed"
+    assert result["retryable"] is False
+    assert retries.scheduled == []
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.knowledge_retry_count == 0
+
+
+async def test_success_after_retry_clears_failure_state() -> None:
+    """A document that fails once then succeeds on the retry pass must reset its
+    retry accounting so the next outage starts a fresh budget."""
+    env = await _env()
+    retries = RecordingRetry()
+
+    class FlakyEmbedder(FakeEmbeddingClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_once = True
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            if self.fail_once:
+                self.fail_once = False
+                raise EmbeddingError("transient")
+            return await super().embed(texts)
+
+    env.processor = KnowledgeProcessor(
+        documents=env.documents,
+        vector=env.vector,
+        chunks=env.chunks,
+        websites=env.websites,
+        audit=env.audit,
+        embedder=FlakyEmbedder(),
+        usage=env.usage,
+        chunk_size=30,
+        overlap=5,
+    )
+
+    first = await env.processor.process_document(env.document.id, on_retry=retries)
+    assert first["status"] == "retry_scheduled"
+    assert len(retries.scheduled) == 1
+
+    second = await env.processor.process_document(env.document.id, on_retry=retries)
+    assert second["status"] == "processed"
+
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_READY
+    assert stored.knowledge_retry_count == 0
+    assert stored.knowledge_failure_reason is None
+
+
+async def test_retry_returns_failed_without_callback_when_on_retry_missing() -> None:
+    """When no retry callback is bound, a temporary failure still records the
+    failure and reports `retryable` so callers can decide what to do."""
+    env = await _env()
+    env.processor = _failing_processor(env, error=EmbeddingError("provider timeout"))
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "failed"
+    assert result["retryable"] is True
+    assert env.documents.documents[env.document.id].knowledge_retry_count == 1
+
+
+async def test_failure_is_logged_with_structured_fields(caplog) -> None:
+    """Every failed document must emit a structured record carrying url,
+    document_id, website_id, stage, error_type and error_message."""
+    import logging
+
+    env = await _env()
+    env.processor = _failing_processor(env, error=EmbeddingError("provider timeout"))
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        await env.processor.process_document(env.document.id)
+
+    records = [
+        r
+        for r in caplog.records
+        if getattr(r, "document_id", None) == env.document.id
+        and "knowledge processing failed" in r.getMessage()
+    ]
+    assert records, "no structured failure log emitted"
+    record = records[0]
+    assert record.url == env.document.url
+    assert record.website_id == env.website.id
+    assert record.stage == "embedding"
+    assert record.error_type == "EmbeddingError"
+    assert record.error_message == "provider timeout"
+    assert record.timestamp is not None

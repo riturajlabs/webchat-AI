@@ -24,6 +24,7 @@ from backend.api.routes.conversations import router as conversations_router
 from backend.api.routes.crawl_jobs import router as crawl_jobs_router
 from backend.api.routes.feedback import router as feedback_router
 from backend.api.routes.health import router as health_router
+from backend.api.routes.knowledge import router as knowledge_router
 from backend.api.routes.websites import router as websites_router
 from backend.api.routes.widget import router as widget_router
 from backend.core.config import get_settings
@@ -136,6 +137,7 @@ def create_app() -> FastAPI:
     app.include_router(analytics_router, prefix="/api")
     app.include_router(api_keys_router, prefix="/api")
     app.include_router(feedback_router, prefix="/api")
+    app.include_router(knowledge_router, prefix="/api")
     app.include_router(widget_router, prefix="/api")
     app.include_router(admin_router, prefix="/api")
 

@@ -11,6 +11,7 @@ from backend.services.knowledge.embedding import (
     EmbeddingUsage,
     GoogleEmbeddingClient,
 )
+from backend.services.knowledge.knowledge_service import KnowledgeService
 from backend.services.knowledge.processor import KnowledgeProcessor
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "EmbeddingUsage",
     "GoogleEmbeddingClient",
     "KnowledgeProcessor",
+    "KnowledgeService",
     "TextChunk",
     "chunk_text",
     "count_tokens",

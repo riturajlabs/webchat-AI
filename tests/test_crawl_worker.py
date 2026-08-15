@@ -414,11 +414,12 @@ async def test_usage_increment_failure_does_not_fail_crawl(patch_dns) -> None:
 
 
 async def test_zero_page_crawl_does_not_increment(patch_dns) -> None:
-    """A crawl that yields zero stored pages writes no `$inc`.
+    """An empty page crawl stores the page but the usage no-op guard holds.
 
-    Verified via a recording usage repo: success path must still call `increment`
-    once with the page count, but `count=0` triggers the no-op guard in
-    `_record_crawl_pages` so the repo's records list stays empty.
+    The page-count rollup guard `_record_crawl_pages` must skip `increment`
+    when `count=0`. An empty body no longer produces zero stored pages (it is
+    stored as a failed "Insufficient content" document), so the guard is
+    verified directly with a `count=0` call.
     """
     ctx, job, jobs, documents, websites, audit, _usage = await _env()
 
@@ -432,11 +433,6 @@ async def test_zero_page_crawl_does_not_increment(patch_dns) -> None:
             await super().increment(**kwargs)
 
     recording = RecordingUsage()
-    # Make the seed link to a second page that is unreachable so the crawler
-    # stores 1 page (the seed) but the BFS won't expand. We need 0 to verify the
-    # guard, so we override the seed to be self-only with no other links AND
-    # no body content (extractor returns empty). Easiest path: use the existing
-    # SAMPLE_HTML but point to a URL whose body is empty (no <main>):
     empty_pages = {SEED: "<!doctype html><html><head></head></html>"}
     ctx["crawler_fetcher"] = FakePageFetcher(empty_pages)
 
@@ -451,8 +447,24 @@ async def test_zero_page_crawl_does_not_increment(patch_dns) -> None:
     )
 
     assert result["status"] == "completed"
-    assert result["pages"] == 0
-    # The success branch must reach `_record_crawl_pages` exactly once with 0,
-    # which the no-op guard turns into no `increment` call.
-    assert recording.calls == []
-    assert recording.records == []
+    # The empty page is stored (not dropped) so it surfaces on the dashboard.
+    assert result["pages"] == 1
+    # The success branch reaches `_record_crawl_pages` once with the page count.
+    assert recording.calls == [{"count": 1}] or all(
+        call.get("counters", {}).get("crawl_pages") == 1 for call in recording.calls
+    )
+    assert len(recording.calls) == 1
+    stored = next(iter(documents.documents.values()))
+    assert stored.knowledge_status == "failed"
+    assert stored.knowledge_failure_reason == "Insufficient content"
+
+    # The count=0 no-op guard: nothing is written for a zero-page rollup.
+    from backend.workers.jobs.crawl import _record_crawl_pages
+
+    await _record_crawl_pages(
+        usage=recording,
+        tenant_id=job.tenant_id,
+        website_id=job.website_id,
+        count=0,
+    )
+    assert len(recording.calls) == 1
