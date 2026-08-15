@@ -57,3 +57,15 @@ export function formatCompact(value: number): string {
     .format(value)
     .toLowerCase();
 }
+
+/** Minor units (cents) -> localized currency, e.g. 2900 -> "$29.00". */
+export function formatCents(cents: number | null | undefined, currency = 'USD'): string {
+  if (cents == null) {
+    return '—';
+  }
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency,
+    currencyDisplay: 'narrowSymbol',
+  }).format(cents / 100);
+}

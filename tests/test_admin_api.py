@@ -7,14 +7,18 @@ the same fake repositories as the auth service, so registered accounts are the
 tenants/users the admin manages.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
 import pytest
 from backend.api.deps import get_admin_service, get_auth_service
 from backend.core.config import get_settings
+from backend.core.rbac import ROLE_SUPER_ADMIN
 from backend.main import create_app
 from backend.models.crawl_job import CrawlJob
+from backend.models.subscription import Subscription
 from backend.models.website import Website
 from fastapi.testclient import TestClient
 
@@ -56,14 +60,46 @@ def _register(test_client: TestClient, *, name: str = "Alice") -> dict:
 
 
 def _register_admin(test_client: TestClient, admin_env, *, name: str = "Root") -> dict:
+    """Register an account and promote it to the platform `super_admin` role.
+
+    `AuthService.authenticate` re-resolves the role from the live membership
+    on every request, so mutating the member after registration is enough for
+    the access token to carry `super_admin`.
+    """
     account = _register(test_client, name=name)
     member = next(
         member
         for member in admin_env.auth.members.members.values()
         if member.user_id == account["user_id"]
     )
-    member.role = "admin"
+    member.role = ROLE_SUPER_ADMIN
     return account
+
+
+async def _create_subscription(
+    admin_env,
+    *,
+    tenant_id: str,
+    amount_cents: int,
+    status: str = "active",
+    start: datetime | None = None,
+) -> Subscription:
+    subscription = Subscription.new(
+        tenant_id=tenant_id,
+        plan_id="pro",
+        status=status,
+        payment_provider="mock",
+        payment_id=f"pay_{amount_cents}_{len(admin_env.subscriptions.subscriptions)}",
+        start_date=start or datetime.now(UTC),
+        amount_cents=amount_cents,
+        currency="USD",
+    )
+    await admin_env.subscriptions.create(subscription)
+    return subscription
+
+
+def _seed_subscription(admin_env, **kwargs: Any) -> Subscription:
+    return asyncio.run(_create_subscription(admin_env, **kwargs))
 
 
 def _seed_job(admin_env, *, tenant_id: str, status: str = "completed") -> CrawlJob:
@@ -86,6 +122,11 @@ def test_admin_requires_authentication(client) -> None:
         "/api/admin/stats",
         "/api/admin/crawl-jobs",
         "/api/admin/audit-logs",
+        "/api/admin/overview",
+        "/api/admin/usage",
+        "/api/admin/revenue",
+        "/api/admin/system-health",
+        "/api/admin/audit",
     ):
         assert test_client.get(path).status_code == 401
 
@@ -100,6 +141,11 @@ def test_owner_cannot_access_admin_endpoints(client) -> None:
         ("GET", "/api/admin/crawl-jobs"),
         ("GET", "/api/admin/audit-logs"),
         ("GET", "/api/admin/users"),
+        ("GET", "/api/admin/overview"),
+        ("GET", "/api/admin/usage"),
+        ("GET", "/api/admin/revenue"),
+        ("GET", "/api/admin/system-health"),
+        ("GET", "/api/admin/audit"),
     ):
         response = getattr(test_client, method.lower())(path, headers=headers)
         assert response.status_code == 403, path
@@ -113,6 +159,28 @@ def test_owner_cannot_access_admin_endpoints(client) -> None:
     )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_tenant_admin_role_cannot_access_admin_endpoints(client) -> None:
+    """Phase 15 RBAC: tenant `admin` is below the platform `super_admin`."""
+    test_client, admin_env = client
+    account = _register(test_client)
+    member = next(
+        member
+        for member in admin_env.auth.members.members.values()
+        if member.user_id == account["user_id"]
+    )
+    member.role = "admin"
+
+    for path in (
+        "/api/admin/tenants",
+        "/api/admin/stats",
+        "/api/admin/overview",
+        "/api/admin/revenue",
+    ):
+        response = test_client.get(path, headers=account["headers"])
+        assert response.status_code == 403, path
+        assert response.json()["error"]["code"] == "FORBIDDEN"
 
 
 def test_admin_can_access_admin_endpoints(client) -> None:
@@ -488,11 +556,13 @@ def test_admin_pagination_and_filter_validation(client) -> None:
         test_client.get("/api/admin/tenants?search=" + "x" * 101, headers=headers).status_code
         == 422
     )
+    assert test_client.get("/api/admin/tenants?status=evil", headers=headers).status_code == 422
     assert test_client.get("/api/admin/users?status=evil", headers=headers).status_code == 422
     assert test_client.get("/api/admin/crawl-jobs?status=evil", headers=headers).status_code == 422
     assert (
         test_client.get("/api/admin/audit-logs?since=garbage", headers=headers).status_code == 422
     )
+    assert test_client.get("/api/admin/audit?since=garbage", headers=headers).status_code == 422
 
 
 def test_admin_tenant_update_requires_known_status(client) -> None:
@@ -507,3 +577,318 @@ def test_admin_tenant_update_requires_known_status(client) -> None:
     )
 
     assert response.status_code == 422
+
+
+# ------------------------------------------------ Phase 15: tenant operations
+
+
+def test_tenants_list_plan_and_status_filters(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root Inc")
+    alpha = _register(test_client, name="Alpha Corp")
+    beta = _register(test_client, name="Beta Works")
+    admin_env.tenants.tenants[beta["tenant_id"]].plan = "pro"
+    admin_env.tenants.tenants[alpha["tenant_id"]].status = "suspended"
+
+    response = test_client.get("/api/admin/tenants?plan=pro", headers=admin["headers"])
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["company_name"] == "Beta Works"
+
+    response = test_client.get("/api/admin/tenants?status=suspended", headers=admin["headers"])
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["company_name"] == "Alpha Corp"
+
+    response = test_client.get(
+        "/api/admin/tenants?plan=free&status=active", headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["company_name"] == "Root Inc"
+
+
+def test_tenant_suspend_activate_endpoints(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env)
+    target = _register(test_client, name="Target Co")
+    tenant_id = target["tenant_id"]
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "suspended"
+    assert admin_env.tenants.tenants[tenant_id].status == "suspended"
+    assert any(log.action == "TENANT_SUSPENDED" for log in admin_env.auth.audit.logs)
+    # The dedicated admin trail records the operator (actor), not the tenant.
+    assert any(
+        log.action == "TENANT_SUSPENDED"
+        and log.actor_user_id == admin["user_id"]
+        and log.tenant_id == tenant_id
+        for log in admin_env.admin_audit.logs
+    )
+
+    # Idempotent: a second suspend writes no new audit event.
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert (
+        len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_SUSPENDED"]) == 1
+    )
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/activate", headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert any(
+        log.action == "TENANT_ACTIVATED" and log.actor_user_id == admin["user_id"]
+        for log in admin_env.admin_audit.logs
+    )
+
+
+def test_tenant_plan_change_endpoint(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env)
+    target = _register(test_client, name="Target Co")
+    tenant_id = target["tenant_id"]
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/plan", json={"plan": "pro"}, headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert response.json()["plan"] == "pro"
+    assert any(log.action == "TENANT_PLAN_CHANGED" for log in admin_env.auth.audit.logs)
+    assert any(
+        log.action == "TENANT_PLAN_CHANGED"
+        and log.plan_id == "pro"
+        and log.actor_user_id == admin["user_id"]
+        for log in admin_env.admin_audit.logs
+    )
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/plan", json={"plan": "gold"}, headers=admin["headers"]
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PLAN_NOT_FOUND"
+
+    # Re-applying the same plan is a no-op (no duplicate audit event).
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/plan", json={"plan": "pro"}, headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    assert (
+        len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_PLAN_CHANGED"])
+        == 1
+    )
+
+
+def test_super_admin_cannot_suspend_own_tenant(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env)
+
+    response = test_client.post(
+        f"/api/admin/tenants/{admin['tenant_id']}/suspend", headers=admin["headers"]
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_activate_user(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    user_id = target["user_id"]
+    asyncio.run(admin_env.users.set_status(user_id, "suspended", datetime.now(UTC)))
+
+    response = test_client.post(
+        f"/api/admin/tenants/{target['tenant_id']}/users/{user_id}/activate",
+        headers=admin["headers"],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert admin_env.users.users[user_id].status == "active"
+    assert any(
+        log.action == "USER_ACTIVATED" and log.user_id == user_id
+        for log in admin_env.admin_audit.logs
+    )
+
+
+# ------------------------------------------- Phase 15: platform read surface
+
+
+def test_overview(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    _register(test_client, name="Alpha")
+    _seed_subscription(admin_env, tenant_id=admin["tenant_id"], amount_cents=2900)
+
+    response = test_client.get("/api/admin/overview", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stats"]["tenants"] == {"total": 2, "active": 2, "suspended": 0}
+    assert body["counts"]["users"] == 2
+    assert body["counts"]["tenants"] == 2
+    assert body["active_subscriptions"] == 1
+    assert body["total_revenue_cents"] == 2900
+    assert body["currency"] == "USD"
+
+
+async def test_usage_endpoint(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    await admin_env.usage.increment(
+        tenant_id=target["tenant_id"],
+        website_id="web-1",
+        date=datetime.now(UTC).date().isoformat(),
+        counters={
+            "chats": 3,
+            "messages": 9,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "embeddings_created": 7,
+            "vector_queries": 20,
+            "crawl_pages": 4,
+        },
+    )
+
+    response = test_client.get("/api/admin/usage", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["conversations"] == 3
+    assert body["messages"] == 9
+    assert body["input_tokens"] == 100
+    assert body["output_tokens"] == 50
+    assert body["total_tokens"] == 150
+    assert body["embeddings_created"] == 7
+    assert body["vector_queries"] == 20
+    assert body["crawl_pages"] == 4
+
+
+async def test_revenue_report(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    now = datetime.now(UTC)
+    await _create_subscription(
+        admin_env, tenant_id=target["tenant_id"], amount_cents=2900, start=now
+    )
+    await _create_subscription(
+        admin_env,
+        tenant_id=target["tenant_id"],
+        amount_cents=2900,
+        start=now - timedelta(days=40),
+    )
+    await _create_subscription(admin_env, tenant_id=admin["tenant_id"], amount_cents=0)
+
+    response = test_client.get("/api/admin/revenue", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    # Zero-amount "payments" are excluded from revenue but still live subs.
+    assert body["total_revenue_cents"] == 5800
+    assert body["paid_payments"] == 2
+    assert body["active_subscriptions"] == 3
+    assert body["currency"] == "USD"
+    assert len(body["periods"]) == 2
+    assert body["periods"][0]["period"] >= body["periods"][1]["period"]
+    assert sum(period["revenue_cents"] for period in body["periods"]) == 5800
+    assert body["recent_payments"][0]["amount_cents"] == 2900
+    assert body["recent_payments"][0]["tenant_id"] == target["tenant_id"]
+
+
+def test_system_health_reports_probes_and_counts(client, monkeypatch) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    _register(test_client, name="Alpha")
+
+    from backend.api.routes import admin as admin_module
+
+    async def fake_db_ping() -> bool:
+        return True
+
+    async def fake_redis_ping() -> bool:
+        return True
+
+    monkeypatch.setattr(admin_module.MongoDB, "ping", fake_db_ping)
+    monkeypatch.setattr(admin_module, "ping_redis", fake_redis_ping)
+
+    response = test_client.get("/api/admin/system-health", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert {check["name"]: check["status"] for check in body["checks"]} == {
+        "database": "ok",
+        "redis": "ok",
+    }
+    assert body["counts"]["users"] == 2
+    assert body["counts"]["tenants"] == 2
+
+
+def test_system_health_fails_closed_when_dependency_down(client, monkeypatch) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+
+    from backend.api.routes import admin as admin_module
+
+    async def fake_db_ping() -> bool:
+        return False
+
+    async def fake_redis_ping() -> bool:
+        return False
+
+    monkeypatch.setattr(admin_module.MongoDB, "ping", fake_db_ping)
+    monkeypatch.setattr(admin_module, "ping_redis", fake_redis_ping)
+
+    response = test_client.get("/api/admin/system-health", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert all(check["status"] == "degraded" for check in body["checks"])
+
+
+def test_admin_audit_dedicated_trail_viewer(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    tenant_id = target["tenant_id"]
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
+    )
+    assert response.status_code == 200
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/plan", json={"plan": "pro"}, headers=admin["headers"]
+    )
+    assert response.status_code == 200
+
+    response = test_client.get("/api/admin/audit", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert {item["action"] for item in body["items"]} == {
+        "TENANT_SUSPENDED",
+        "TENANT_PLAN_CHANGED",
+    }
+    assert all(item["actor_user_id"] == admin["user_id"] for item in body["items"])
+
+    response = test_client.get(
+        "/api/admin/audit?action=TENANT_PLAN_CHANGED",
+        headers=admin["headers"],
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["plan_id"] == "pro"
+    assert body["items"][0]["tenant_id"] == tenant_id

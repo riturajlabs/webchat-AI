@@ -4,6 +4,7 @@ from datetime import datetime
 
 from backend.ai.gemini import GenerationUsage
 from backend.core.security import utcnow
+from backend.models.admin_audit_log import AdminAuditLog
 from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
 from backend.models.audit_log import AuditLog
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER, ChatMessage
@@ -28,7 +29,11 @@ from backend.models.user import User
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.models.widget import Widget
 from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK
-from backend.repositories.admin_repository import PlatformStats
+from backend.repositories.admin_repository import (
+    CollectionCounts,
+    PlatformStats,
+    PlatformUsage,
+)
 from backend.repositories.analytics_repository import (
     FEEDBACK_NEGATIVE_RATING,
     FEEDBACK_POSITIVE_RATING,
@@ -143,6 +148,8 @@ class FakeTenantRepository:
         self,
         *,
         search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Tenant]:
@@ -151,15 +158,25 @@ class FakeTenantRepository:
             (
                 tenant
                 for tenant in self._tenants.values()
-                if needle is None or needle in tenant.company_name.casefold()
+                if (needle is None or needle in tenant.company_name.casefold())
+                and (plan is None or tenant.plan == plan)
+                and (status is None or tenant.status == status)
             ),
             key=lambda tenant: tenant.created_at,
             reverse=True,
         )
         return candidates[offset : offset + limit]
 
-    async def count_tenants(self, *, search: str | None = None) -> int:
-        return len(await self.list_tenants(search=search, limit=10**9))
+    async def count_tenants(
+        self,
+        *,
+        search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        return len(
+            await self.list_tenants(search=search, plan=plan, status=status, limit=10**9)
+        )
 
     async def update(self, tenant: Tenant) -> None:
         self._tenants[tenant.id] = tenant
@@ -256,6 +273,66 @@ class FakeAuditLogRepository:
                 action=action,
                 tenant_id=tenant_id,
                 user_id=user_id,
+                since=since,
+                until=until,
+                limit=10**9,
+            )
+        )
+
+
+class FakeAdminAuditLogRepository:
+    """In-memory dedicated admin trail (Phase 15, `admin_audit_logs`)."""
+
+    def __init__(self) -> None:
+        self._logs: list[AdminAuditLog] = []
+
+    @property
+    def logs(self) -> list[AdminAuditLog]:
+        return self._logs
+
+    async def create(self, log: AdminAuditLog) -> None:
+        self._logs.append(log)
+
+    async def list_logs(
+        self,
+        *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        tenant_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AdminAuditLog]:
+        candidates = sorted(
+            (
+                log
+                for log in self._logs
+                if (action is None or log.action == action)
+                and (actor_user_id is None or log.actor_user_id == actor_user_id)
+                and (tenant_id is None or log.tenant_id == tenant_id)
+                and (since is None or log.created_at >= since)
+                and (until is None or log.created_at <= until)
+            ),
+            key=lambda log: log.created_at,
+            reverse=True,
+        )
+        return candidates[offset : offset + limit]
+
+    async def count_logs(
+        self,
+        *,
+        action: str | None = None,
+        actor_user_id: str | None = None,
+        tenant_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> int:
+        return len(
+            await self.list_logs(
+                action=action,
+                actor_user_id=actor_user_id,
+                tenant_id=tenant_id,
                 since=since,
                 until=until,
                 limit=10**9,
@@ -1243,6 +1320,37 @@ class FakeSubscriptionRepository:
         )
         return candidates[:limit]
 
+    async def count_active(self, *, now: datetime) -> int:
+        return len(
+            [
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.status in SUBSCRIPTION_LIVE_STATUSES
+                and (subscription.end_date is None or subscription.end_date >= now)
+            ]
+        )
+
+    async def list_paid(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 500,
+    ) -> list[Subscription]:
+        candidates = sorted(
+            (
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.status == "active"
+                and (subscription.amount_cents or 0) > 0
+                and (since is None or subscription.created_at >= since)
+                and (until is None or subscription.created_at <= until)
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        return candidates[:limit]
+
 
 class FakePaymentProvider:
     """In-memory `PaymentProvider` for subscription tests (Phase 14).
@@ -1333,7 +1441,7 @@ class FakePaymentProvider:
 
 
 class FakeAdminRepository:
-    """In-memory platform stats over the tenant/user/usage/crawl fakes (Phase 12.5)."""
+    """In-memory platform stats over the tenant/user/usage/crawl fakes (Phase 12.5 + 15)."""
 
     def __init__(
         self,
@@ -1367,6 +1475,34 @@ class FakeAdminRepository:
             total_crawl_jobs=len(jobs),
             active_crawl_jobs=len([j for j in jobs if j.status in CRAWL_ACTIVE_STATUSES]),
             failed_crawl_jobs=len([j for j in jobs if j.status == "failed"]),
+        )
+
+    async def usage_totals(self) -> PlatformUsage:
+        usage_records = self._usage.records
+        return PlatformUsage(
+            conversations=sum(r.counters.get("chats", 0) for r in usage_records),
+            messages=sum(r.counters.get("messages", 0) for r in usage_records),
+            input_tokens=sum(r.counters.get("input_tokens", 0) for r in usage_records),
+            output_tokens=sum(r.counters.get("output_tokens", 0) for r in usage_records),
+            embeddings_created=sum(r.counters.get("embeddings_created", 0) for r in usage_records),
+            vector_queries=sum(r.counters.get("vector_queries", 0) for r in usage_records),
+            crawl_pages=sum(r.counters.get("crawl_pages", 0) for r in usage_records),
+        )
+
+    async def collection_counts(self) -> CollectionCounts:
+        return CollectionCounts(
+            users=len(self._users.users),
+            tenants=len(self._tenants.tenants),
+            websites=0,
+            widgets=0,
+            documents=0,
+            chat_sessions=0,
+            messages=0,
+            usage_records=len(self._usage.records),
+            api_keys=0,
+            subscriptions=0,
+            audit_logs=0,
+            admin_audit_logs=0,
         )
 
 

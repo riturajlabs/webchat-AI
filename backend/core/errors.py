@@ -271,6 +271,13 @@ class TenantNotFoundError(AppError):
     code = "TENANT_NOT_FOUND"
 
 
+class PlanNotFoundError(AppError):
+    """Plan id is not a purchasable/assignable plan (Phase 15 admin ops)."""
+
+    status_code = 404
+    code = "PLAN_NOT_FOUND"
+
+
 class UserNotFoundError(AppError):
     """User does not exist for the admin operation (Phase 12.5)."""
 

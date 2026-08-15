@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 
+from backend.core.config import Settings
 from backend.models.user import User
 from backend.services.auth import AuthService
 from backend.services.mail.base import EmailMessage
@@ -32,7 +33,7 @@ class AuthEnv:
     service: AuthService
 
 
-def build_auth_env() -> AuthEnv:
+def build_auth_env(settings: Settings | None = None) -> AuthEnv:
     users = FakeUserRepository()
     tenants = FakeTenantRepository()
     members = FakeMemberRepository()
@@ -46,6 +47,7 @@ def build_auth_env() -> AuthEnv:
         refresh_tokens=refresh_tokens,
         audit=audit,
         mail_dispatcher=mail,
+        settings=settings,
     )
     return AuthEnv(
         users=users,

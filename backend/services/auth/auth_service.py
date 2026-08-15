@@ -17,6 +17,7 @@ from backend.core.errors import (
     InvalidTokenError,
     TokenReuseError,
 )
+from backend.core.rbac import ROLE_SUPER_ADMIN
 from backend.core.security import (
     create_access_token,
     create_email_verification_token,
@@ -383,8 +384,20 @@ class AuthService:
     # ------------------------------------------------------------- internals
 
     async def _resolve_role(self, user: User) -> str:
+        """Resolve the effective RBAC role for a user (Phase 15).
+
+        Configured `super_admin_emails` take precedence over the tenant
+        membership role: a super admin is a platform-level identity, not a
+        tenant membership. Everyone else resolves through the tenant member
+        role (falling back to `user.role`, the signup default).
+        """
+        if user.email.casefold() in self._super_admin_emails():
+            return ROLE_SUPER_ADMIN
         member = await self._members.find_by_user_id(user.id)
         return member.role if member is not None else user.role
+
+    def _super_admin_emails(self) -> set[str]:
+        return {email.casefold() for email in self._settings.super_admin_emails}
 
     async def _issue_tokens(self, user: User, role: str) -> AuthResult:
         access_token, expires_in = create_access_token(user.id, user.tenant_id, role)

@@ -207,19 +207,204 @@ class AdminAuditLogListResponse(BaseModel):
     per_page: int
 
 
+class AdminSystemCountsOut(BaseModel):
+    """Per-collection row counts for the system page (Phase 15)."""
+
+    users: int
+    tenants: int
+    websites: int
+    widgets: int
+    documents: int
+    chat_sessions: int
+    messages: int
+    usage_records: int
+    api_keys: int
+    subscriptions: int
+    audit_logs: int
+    admin_audit_logs: int
+
+    @classmethod
+    def from_counts(cls, counts: Any) -> "AdminSystemCountsOut":
+        return cls(
+            users=counts.users,
+            tenants=counts.tenants,
+            websites=counts.websites,
+            widgets=counts.widgets,
+            documents=counts.documents,
+            chat_sessions=counts.chat_sessions,
+            messages=counts.messages,
+            usage_records=counts.usage_records,
+            api_keys=counts.api_keys,
+            subscriptions=counts.subscriptions,
+            audit_logs=counts.audit_logs,
+            admin_audit_logs=counts.admin_audit_logs,
+        )
+
+
+class AdminOverviewOut(BaseModel):
+    """Dashboard overview (`GET /api/admin/overview`, Phase 15).
+
+    One payload for the overview page: the KPI stats, collection counts, and
+    the revenue headline (active subscriptions + total collected).
+    """
+
+    stats: AdminStatsOut
+    counts: AdminSystemCountsOut
+    active_subscriptions: int
+    total_revenue_cents: int
+    currency: str
+
+
+class AdminUsageOut(BaseModel):
+    """All-time platform usage (`GET /api/admin/usage`, Phase 15)."""
+
+    conversations: int
+    messages: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    embeddings_created: int
+    vector_queries: int
+    crawl_pages: int
+
+
+class AdminSubscriptionOut(BaseModel):
+    """A payment-history row for the revenue page (Phase 15)."""
+
+    id: str
+    tenant_id: str
+    plan_id: str
+    status: str
+    payment_provider: str | None
+    payment_id: str | None
+    start_date: datetime
+    end_date: datetime | None
+    amount_cents: int | None
+    currency: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_subscription(cls, subscription: Any) -> "AdminSubscriptionOut":
+        return cls(
+            id=subscription.id,
+            tenant_id=subscription.tenant_id,
+            plan_id=subscription.plan_id,
+            status=subscription.status,
+            payment_provider=subscription.payment_provider,
+            payment_id=subscription.payment_id,
+            start_date=subscription.start_date,
+            end_date=subscription.end_date,
+            amount_cents=subscription.amount_cents,
+            currency=subscription.currency,
+            created_at=subscription.created_at,
+        )
+
+
+class AdminRevenuePeriodOut(BaseModel):
+    """One calendar month of collected revenue (Phase 15)."""
+
+    period: str
+    revenue_cents: int
+    payments: int
+
+
+class AdminRevenueReportOut(BaseModel):
+    """Platform revenue report (`GET /api/admin/revenue`, Phase 15)."""
+
+    total_revenue_cents: int
+    paid_payments: int
+    active_subscriptions: int
+    currency: str
+    periods: list[AdminRevenuePeriodOut]
+    recent_payments: list[AdminSubscriptionOut]
+
+
+class AdminCheckOut(BaseModel):
+    """A dependency probe result for the system page (Phase 15)."""
+
+    name: str
+    status: str  # "ok" | "degraded"
+
+
+class AdminSystemHealthOut(BaseModel):
+    """System health (`GET /api/admin/system-health`, Phase 15).
+
+    Fails closed on any probe: `status` is `degraded` unless every check is
+    `ok`. `counts` reuses the per-collection row counts so the system page
+    renders storage at a glance.
+    """
+
+    status: str
+    checks: list[AdminCheckOut]
+    counts: AdminSystemCountsOut
+    checked_at: datetime
+
+
+class AdminTenantPlanRequest(BaseModel):
+    """POST body for `POST /api/admin/tenants/{tenant_id}/plan` (Phase 15)."""
+
+    plan: str = Field(min_length=1, max_length=50)
+
+
+class AdminAdminAuditLogOut(BaseModel):
+    """A platform operator action row (dedicated admin trail, Phase 15)."""
+
+    id: str
+    actor_user_id: str | None
+    action: str
+    tenant_id: str | None
+    user_id: str | None
+    plan_id: str | None
+    ip_address: str | None
+    user_agent: str | None
+    created_at: datetime
+
+    @classmethod
+    def from_log(cls, log: Any) -> "AdminAdminAuditLogOut":
+        return cls(
+            id=log.id,
+            actor_user_id=log.actor_user_id,
+            action=log.action,
+            tenant_id=log.tenant_id,
+            user_id=log.user_id,
+            plan_id=log.plan_id,
+            ip_address=log.ip_address,
+            user_agent=log.user_agent,
+            created_at=log.created_at,
+        )
+
+
+class AdminAdminAuditLogListResponse(BaseModel):
+    items: list[AdminAdminAuditLogOut]
+    total: int
+    page: int
+    per_page: int
+
+
 __all__ = [
+    "AdminAdminAuditLogListResponse",
+    "AdminAdminAuditLogOut",
     "AdminAuditLogListResponse",
     "AdminAuditLogOut",
+    "AdminCheckOut",
     "AdminCrawlJobListResponse",
     "AdminCrawlJobOut",
     "AdminCrawlStats",
+    "AdminOverviewOut",
+    "AdminRevenuePeriodOut",
+    "AdminRevenueReportOut",
     "AdminStatsOut",
+    "AdminSubscriptionOut",
+    "AdminSystemCountsOut",
+    "AdminSystemHealthOut",
     "AdminTenantCounts",
     "AdminTenantDetailOut",
     "AdminTenantListResponse",
     "AdminTenantOut",
+    "AdminTenantPlanRequest",
     "AdminTenantUpdateRequest",
     "AdminTenantUsageOut",
+    "AdminUsageOut",
     "AdminUsageTotals",
     "AdminUserCounts",
     "AdminUserListResponse",

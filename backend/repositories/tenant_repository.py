@@ -21,16 +21,25 @@ class TenantRepository(Protocol):
 
     async def find_by_id(self, tenant_id: str) -> Tenant | None: ...
 
-    # Phase 12.5 admin surface (ADR-006).
+    # Phase 12.5 admin surface (ADR-006). Phase 15 adds `plan`/`status`
+    # filters so the SaaS operations panel can segment the tenant base.
     async def list_tenants(
         self,
         *,
         search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Tenant]: ...
 
-    async def count_tenants(self, *, search: str | None = None) -> int: ...
+    async def count_tenants(
+        self,
+        *,
+        search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
+    ) -> int: ...
 
     async def update(self, tenant: Tenant) -> None: ...
 
@@ -52,23 +61,38 @@ class MongoTenantRepository:
         self,
         *,
         search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Tenant]:
-        query = self._query(search=search)
+        query = self._query(search=search, plan=plan, status=status)
         cursor = (
             self._collection.find(query).sort("created_at", DESCENDING).skip(offset).limit(limit)
         )
         return [Tenant.from_doc(doc) async for doc in cursor]
 
-    async def count_tenants(self, *, search: str | None = None) -> int:
-        return await self._collection.count_documents(self._query(search=search))
+    async def count_tenants(
+        self,
+        *,
+        search: str | None = None,
+        plan: str | None = None,
+        status: str | None = None,
+    ) -> int:
+        return await self._collection.count_documents(
+            self._query(search=search, plan=plan, status=status)
+        )
 
     async def update(self, tenant: Tenant) -> None:
         await self._collection.replace_one({"_id": tenant.id}, tenant.to_doc())
 
     @staticmethod
-    def _query(*, search: str | None) -> dict[str, Any]:
-        if not search:
-            return {}
-        return {"company_name": {"$regex": search, "$options": "i"}}
+    def _query(*, search: str | None, plan: str | None, status: str | None) -> dict[str, Any]:
+        query: dict[str, Any] = {}
+        if search:
+            query["company_name"] = {"$regex": search, "$options": "i"}
+        if plan:
+            query["plan"] = plan
+        if status:
+            query["status"] = status
+        return query

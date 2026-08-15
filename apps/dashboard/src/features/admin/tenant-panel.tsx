@@ -14,15 +14,30 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ConfirmDialog } from './confirm-dialog';
 import { formatDate, statusLabel } from './format';
 import {
+  useAdminActivateTenant,
+  useAdminChangeTenantPlan,
+  useAdminSuspendTenant,
   useAdminTenantDetail,
   useAdminTenants,
-  useAdminUpdateTenant,
   type AdminTenant,
   type AdminTenantDetail,
 } from './hooks';
 
 const DEFAULT_PER_PAGE = 20;
 const SEARCH_DEBOUNCE_MS = 300;
+
+const PLAN_OPTIONS = [
+  { value: '', label: 'All plans' },
+  { value: 'free', label: 'Free' },
+  { value: 'pro', label: 'Pro' },
+  { value: 'enterprise', label: 'Enterprise' },
+];
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'active', label: 'Active' },
+  { value: 'suspended', label: 'Suspended' },
+];
 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
@@ -41,9 +56,27 @@ function TenantDetailDialog({
   onClose: () => void;
 }) {
   const { data, isPending, isError, refetch } = useAdminTenantDetail(tenantId);
+  const changePlan = useAdminChangeTenantPlan();
+  const [planInput, setPlanInput] = useState('');
+
+  useEffect(() => {
+    setPlanInput(data?.plan ?? '');
+  }, [data?.plan]);
 
   if (!tenantId) {
     return null;
+  }
+
+  async function handleChangePlan() {
+    if (!data || planInput === data.plan) {
+      return;
+    }
+    try {
+      await changePlan.mutateAsync({ tenantId: data.id, plan: planInput });
+      toast.success(`Plan changed to ${planInput}`);
+    } catch {
+      toast.error('Failed to change plan');
+    }
   }
 
   return (
@@ -88,9 +121,33 @@ function TenantDetailDialog({
           <div className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-4">
               <DetailField label="Company" value={data.company_name} />
-              <DetailField label="Plan" value={data.plan} />
               <DetailField label="Status" value={statusLabel(data.status)} />
               <DetailField label="Created" value={formatDate(data.created_at)} />
+            </div>
+            <div className="flex items-end justify-between gap-3 rounded-md border bg-muted/30 p-3">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="tenant-plan-select">Plan</Label>
+                <select
+                  id="tenant-plan-select"
+                  value={planInput}
+                  onChange={(event) => setPlanInput(event.target.value)}
+                  className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {PLAN_OPTIONS.filter((option) => option.value).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleChangePlan()}
+                disabled={changePlan.isPending || planInput === data.plan}
+              >
+                {changePlan.isPending ? 'Saving…' : 'Save plan'}
+              </Button>
             </div>
             <div className="grid grid-cols-3 gap-4 rounded-md bg-muted/50 p-4 text-center">
               <div>
@@ -130,18 +187,24 @@ function TenantDetailDialog({
   );
 }
 
+/** Workspace management (Phase 15 `/api/admin/tenants` with plan/status filters). */
 export function TenantPanel() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
+  const [planFilter, setPlanFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [detailTenantId, setDetailTenantId] = useState<string | null>(null);
   const [pendingTenant, setPendingTenant] = useState<AdminTenant | null>(null);
 
-  const updateTenant = useAdminUpdateTenant();
+  const suspendTenant = useAdminSuspendTenant();
+  const activateTenant = useAdminActivateTenant();
   const { data, isPending, isError, error, refetch } = useAdminTenants(
     page,
     DEFAULT_PER_PAGE,
     search,
+    planFilter,
+    statusFilter,
   );
 
   useEffect(() => {
@@ -154,7 +217,7 @@ export function TenantPanel() {
 
   const tenants = data?.items ?? [];
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / DEFAULT_PER_PAGE));
-  const hasFilters = Boolean(search);
+  const hasFilters = Boolean(search || planFilter || statusFilter);
 
   async function handleStatusToggle(tenant: AdminTenant) {
     if (!pendingTenant) {
@@ -162,10 +225,11 @@ export function TenantPanel() {
     }
     const nextStatus = tenant.status === 'suspended' ? 'active' : 'suspended';
     try {
-      await updateTenant.mutateAsync({
-        tenantId: tenant.id,
-        body: { status: nextStatus },
-      });
+      if (nextStatus === 'suspended') {
+        await suspendTenant.mutateAsync({ tenantId: tenant.id });
+      } else {
+        await activateTenant.mutateAsync({ tenantId: tenant.id });
+      }
       toast.success(
         nextStatus === 'suspended'
           ? `${tenant.company_name} suspended`
@@ -178,6 +242,16 @@ export function TenantPanel() {
     }
   }
 
+  const isMutating = suspendTenant.isPending || activateTenant.isPending;
+
+  function clearFilters() {
+    setSearchInput('');
+    setSearch('');
+    setPlanFilter('');
+    setStatusFilter('');
+    setPage(1);
+  }
+
   const openConfirmFor = pendingTenant
     ? pendingTenant.status === 'suspended'
       ? `Activate ${pendingTenant.company_name}?`
@@ -186,28 +260,72 @@ export function TenantPanel() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <CardHeader className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div>
           <CardTitle>Tenants</CardTitle>
-          <CardDescription>Workspaces on the platform (ADR-006).</CardDescription>
+          <CardDescription>
+            Workspaces on the platform, filterable by plan and status.
+          </CardDescription>
         </div>
-        <div className="sm:w-72">
-          <Label htmlFor="tenant-search" className="sr-only">
-            Search tenants
-          </Label>
-          <div className="relative">
-            <Search
-              className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <Input
-              id="tenant-search"
-              type="search"
-              placeholder="Search by company…"
-              value={searchInput}
-              onChange={(event) => setSearchInput(event.target.value)}
-              className="pl-9"
-            />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <div className="sm:w-60">
+            <Label htmlFor="tenant-search" className="sr-only">
+              Search tenants
+            </Label>
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <Input
+                id="tenant-search"
+                type="search"
+                placeholder="Search by company…"
+                value={searchInput}
+                onChange={(event) => setSearchInput(event.target.value)}
+                className="pl-9"
+              />
+            </div>
+          </div>
+          <div>
+            <Label htmlFor="tenant-plan-filter" className="sr-only">
+              Filter by plan
+            </Label>
+            <select
+              id="tenant-plan-filter"
+              value={planFilter}
+              onChange={(event) => {
+                setPlanFilter(event.target.value);
+                setPage(1);
+              }}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:w-36"
+            >
+              {PLAN_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label htmlFor="tenant-status-filter" className="sr-only">
+              Filter by status
+            </Label>
+            <select
+              id="tenant-status-filter"
+              value={statusFilter}
+              onChange={(event) => {
+                setStatusFilter(event.target.value);
+                setPage(1);
+              }}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:w-36"
+            >
+              {STATUS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </CardHeader>
@@ -241,13 +359,9 @@ export function TenantPanel() {
             <EmptyState
               icon={Building2}
               title="No matching tenants"
-              description="Try a different company name."
-              actionLabel="Clear search"
-              onAction={() => {
-                setSearchInput('');
-                setSearch('');
-                setPage(1);
-              }}
+              description="Try different search or filters."
+              actionLabel="Clear filters"
+              onAction={clearFilters}
             />
           ) : (
             <EmptyState
@@ -314,7 +428,7 @@ export function TenantPanel() {
                             variant={tenant.status === 'suspended' ? 'outline' : 'destructive'}
                             size="sm"
                             onClick={() => setPendingTenant(tenant)}
-                            disabled={updateTenant.isPending}
+                            disabled={isMutating}
                           >
                             {tenant.status === 'suspended' ? 'Activate' : 'Suspend'}
                           </Button>
@@ -374,7 +488,7 @@ export function TenantPanel() {
         }
         confirmLabel={pendingTenant?.status === 'suspended' ? 'Activate tenant' : 'Suspend tenant'}
         variant={pendingTenant?.status === 'suspended' ? 'default' : 'destructive'}
-        isPending={updateTenant.isPending}
+        isPending={isMutating}
       />
     </Card>
   );

@@ -1,7 +1,7 @@
 /**
- * React Query hooks for the admin feature (Phase 12.5, ADR-006).
- * Every endpoint is guarded by `role=admin` on the backend; these hooks only
- * run for admin principals (see AdminGuard).
+ * React Query hooks for the admin feature (Phase 12.5 + Phase 15, ADR-006).
+ * Every endpoint is guarded by `role=super_admin` on the backend; these hooks
+ * only run for super-admin principals (see AdminGuard).
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -9,11 +9,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 
 import type {
+  AdminAdminAuditLog,
+  AdminAdminAuditLogListResponse,
   AdminAuditLog,
   AdminAuditLogListResponse,
   AdminCrawlJob,
   AdminCrawlJobListResponse,
+  AdminOverview,
+  AdminRevenueReport,
   AdminStats,
+  AdminSystemHealth,
   AdminTenant,
   AdminTenantDetail,
   AdminTenantListResponse,
@@ -24,8 +29,11 @@ import type {
 export const adminKeys = {
   all: ['admin'] as const,
   stats: ['admin', 'stats'] as const,
-  tenants: (page: number, perPage: number, search: string) =>
-    ['admin', 'tenants', { page, perPage, search }] as const,
+  overview: ['admin', 'overview'] as const,
+  revenue: ['admin', 'revenue'] as const,
+  systemHealth: ['admin', 'system-health'] as const,
+  tenants: (page: number, perPage: number, search: string, plan: string, status: string) =>
+    ['admin', 'tenants', { page, perPage, search, plan, status }] as const,
   tenantDetail: (tenantId: string) => ['admin', 'tenants', tenantId] as const,
   users: (page: number, perPage: number, search: string, status: string) =>
     ['admin', 'users', { page, perPage, search, status }] as const,
@@ -33,6 +41,8 @@ export const adminKeys = {
     ['admin', 'crawl-jobs', { page, perPage, status }] as const,
   auditLogs: (page: number, perPage: number, action: string) =>
     ['admin', 'audit-logs', { page, perPage, action }] as const,
+  adminAuditLogs: (page: number, perPage: number, action: string, tenantId: string) =>
+    ['admin', 'audit', { page, perPage, action, tenantId }] as const,
 };
 
 function queryParams(extra: Record<string, string | undefined>): string {
@@ -45,6 +55,13 @@ function queryParams(extra: Record<string, string | undefined>): string {
   return params.toString();
 }
 
+export function useAdminOverview() {
+  return useQuery({
+    queryKey: adminKeys.overview,
+    queryFn: () => api.get<AdminOverview>('/api/admin/overview'),
+  });
+}
+
 export function useAdminStats() {
   return useQuery({
     queryKey: adminKeys.stats,
@@ -52,10 +69,37 @@ export function useAdminStats() {
   });
 }
 
-export function useAdminTenants(page: number, perPage: number, search: string) {
-  const query = queryParams({ page: String(page), per_page: String(perPage), search });
+export function useAdminRevenue() {
   return useQuery({
-    queryKey: adminKeys.tenants(page, perPage, search),
+    queryKey: adminKeys.revenue,
+    queryFn: () => api.get<AdminRevenueReport>('/api/admin/revenue'),
+  });
+}
+
+export function useAdminSystemHealth() {
+  return useQuery({
+    queryKey: adminKeys.systemHealth,
+    queryFn: () => api.get<AdminSystemHealth>('/api/admin/system-health'),
+    refetchInterval: 30_000,
+  });
+}
+
+export function useAdminTenants(
+  page: number,
+  perPage: number,
+  search: string,
+  plan: string,
+  status: string,
+) {
+  const query = queryParams({
+    page: String(page),
+    per_page: String(perPage),
+    search,
+    plan,
+    status,
+  });
+  return useQuery({
+    queryKey: adminKeys.tenants(page, perPage, search, plan, status),
     queryFn: () => api.get<AdminTenantListResponse>(`/api/admin/tenants?${query}`),
   });
 }
@@ -68,21 +112,47 @@ export function useAdminTenantDetail(tenantId: string | null) {
   });
 }
 
-export function useAdminUpdateTenant() {
+export function useAdminSuspendTenant() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      tenantId,
-      body,
-    }: {
-      tenantId: string;
-      body: { status?: string; plan?: string };
-    }) => api.patch<AdminTenant>(`/api/admin/tenants/${tenantId}`, body),
+    mutationFn: ({ tenantId }: { tenantId: string }) =>
+      api.post<AdminTenant>(`/api/admin/tenants/${tenantId}/suspend`),
     onSuccess: (data) => {
       queryClient.setQueryData<AdminTenantDetail>(adminKeys.tenantDetail(data.id), (current) =>
         current ? { ...current, status: data.status, plan: data.plan } : current,
       );
       void queryClient.invalidateQueries({ queryKey: adminKeys.stats });
+      void queryClient.invalidateQueries({ queryKey: adminKeys.overview });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
+    },
+  });
+}
+
+export function useAdminActivateTenant() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tenantId }: { tenantId: string }) =>
+      api.post<AdminTenant>(`/api/admin/tenants/${tenantId}/activate`),
+    onSuccess: (data) => {
+      queryClient.setQueryData<AdminTenantDetail>(adminKeys.tenantDetail(data.id), (current) =>
+        current ? { ...current, status: data.status, plan: data.plan } : current,
+      );
+      void queryClient.invalidateQueries({ queryKey: adminKeys.stats });
+      void queryClient.invalidateQueries({ queryKey: adminKeys.overview });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
+    },
+  });
+}
+
+export function useAdminChangeTenantPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tenantId, plan }: { tenantId: string; plan: string }) =>
+      api.post<AdminTenant>(`/api/admin/tenants/${tenantId}/plan`, { plan }),
+    onSuccess: (data) => {
+      queryClient.setQueryData<AdminTenantDetail>(adminKeys.tenantDetail(data.id), (current) =>
+        current ? { ...current, status: data.status, plan: data.plan } : current,
+      );
       void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
     },
   });
@@ -143,4 +213,33 @@ export function useAdminAuditLogs(page: number, perPage: number, action: string)
   });
 }
 
-export type { AdminAuditLog, AdminCrawlJob, AdminStats, AdminTenant, AdminTenantDetail, AdminUser };
+export function useAdminAdminAuditLogs(
+  page: number,
+  perPage: number,
+  action: string,
+  tenantId: string,
+) {
+  const query = queryParams({
+    page: String(page),
+    per_page: String(perPage),
+    action,
+    tenant_id: tenantId,
+  });
+  return useQuery({
+    queryKey: adminKeys.adminAuditLogs(page, perPage, action, tenantId),
+    queryFn: () => api.get<AdminAdminAuditLogListResponse>(`/api/admin/audit?${query}`),
+  });
+}
+
+export type {
+  AdminAdminAuditLog,
+  AdminAuditLog,
+  AdminCrawlJob,
+  AdminOverview,
+  AdminRevenueReport,
+  AdminStats,
+  AdminSystemHealth,
+  AdminTenant,
+  AdminTenantDetail,
+  AdminUser,
+};

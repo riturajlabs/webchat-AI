@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 import pytest
+from backend.core.config import Settings
 from backend.core.errors import (
     AccountSuspendedError,
     DuplicateEmailError,
@@ -482,6 +483,70 @@ async def test_rbac_role_resolved_from_membership() -> None:
     assert principal.role == "viewer"
     assert principal.user_id == user.id
     assert principal.email == "alice@example.com"
+
+
+async def test_super_admin_role_granted_from_config_emails() -> None:
+    """Phase 15 RBAC: `SUPER_ADMIN_EMAILS` outranks the tenant membership."""
+    env = build_auth_env(
+        settings=Settings(super_admin_emails=["ops@webchat.example", "root@example.com"])
+    )
+    await env.service.register(
+        name="Ops",
+        email="OPS@webchat.example",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+
+    result = await env.service.login(
+        email="ops@webchat.example", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    assert result.role == "super_admin"
+
+    principal = await env.service.authenticate(result.access_token)
+    assert principal.role == "super_admin"
+
+
+async def test_super_admin_emails_are_case_insensitive() -> None:
+    env = build_auth_env(settings=Settings(super_admin_emails=["OPS@Example.com"]))
+    await env.service.register(
+        name="Ops",
+        email="ops@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+
+    result = await env.service.login(
+        email="ops@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    assert result.role == "super_admin"
+
+
+async def test_super_admin_email_without_membership_still_gets_role() -> None:
+    """The config grant applies to any account, even without a member record."""
+    env = build_auth_env(settings=Settings(super_admin_emails=["ops@webchat.example"]))
+    await env.service.register(
+        name="Ops",
+        email="ops@webchat.example",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    env.members.members.clear()  # drop the tenant membership entirely
+
+    principal = await env.service.authenticate(
+        (await env.service.login(
+            email="ops@webchat.example",
+            password=VALID_PASSWORD,
+            ip_address=None,
+            user_agent=None,
+        )).access_token
+    )
+    assert principal.role == "super_admin"
 
 
 async def test_authenticate_rejects_wrong_tenant_token() -> None:

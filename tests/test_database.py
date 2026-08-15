@@ -110,6 +110,31 @@ async def test_init_indexes_declares_audit_log_ttl_of_one_year(monkeypatch) -> N
     )
 
 
+async def test_init_indexes_declares_admin_audit_log_indexes(monkeypatch) -> None:
+    """Phase 15: the dedicated admin trail has no TTL (10-year compliance)."""
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["admin_audit_logs"])
+    # List + filter sort keys used by GET /api/admin/audit.
+    assert any(
+        keys == (("tenant_id", 1), ("created_at", -1)) and not unique
+        for (keys, unique) in indexes
+    )
+    assert any(
+        keys == (("action", 1), ("created_at", -1)) and not unique
+        for (keys, unique) in indexes
+    )
+    assert any(
+        keys == (("actor_user_id", 1), ("created_at", -1)) and not unique
+        for (keys, unique) in indexes
+    )
+    # No TTL index: the platform admin trail outlives the 1-year tenant audit.
+    assert not any("expireAfterSeconds" in kwargs for _, kwargs in indexes.items())
+
+
 async def test_init_indexes_declares_website_indexes(monkeypatch) -> None:
     db = _FakeDb()
     monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)

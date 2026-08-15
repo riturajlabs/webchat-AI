@@ -13,8 +13,10 @@ from backend.services.admin import AdminService
 
 from tests.auth_helpers import AuthEnv, build_auth_env
 from tests.fakes import (
+    FakeAdminAuditLogRepository,
     FakeAdminRepository,
     FakeCrawlJobRepository,
+    FakeSubscriptionRepository,
     FakeTenantRepository,
     FakeUsageRecordRepository,
     FakeUserRepository,
@@ -29,6 +31,8 @@ class AdminEnv:
     websites: FakeWebsiteRepository
     usage: FakeUsageRecordRepository
     crawl_jobs: FakeCrawlJobRepository
+    subscriptions: FakeSubscriptionRepository
+    admin_audit: FakeAdminAuditLogRepository
     auth: AuthEnv
     admin: AdminService
 
@@ -38,6 +42,8 @@ def build_admin_env() -> AdminEnv:
     websites = FakeWebsiteRepository()
     usage = FakeUsageRecordRepository()
     crawl_jobs = FakeCrawlJobRepository()
+    subscriptions = FakeSubscriptionRepository()
+    admin_audit = FakeAdminAuditLogRepository()
     stats = FakeAdminRepository(
         tenants=auth.tenants,
         users=auth.users,
@@ -53,6 +59,8 @@ def build_admin_env() -> AdminEnv:
         audit=auth.audit,
         refresh_tokens=auth.refresh_tokens,
         stats=stats,
+        subscriptions=subscriptions,
+        admin_audit=admin_audit,
     )
     return AdminEnv(
         users=auth.users,
@@ -60,6 +68,8 @@ def build_admin_env() -> AdminEnv:
         websites=websites,
         usage=usage,
         crawl_jobs=crawl_jobs,
+        subscriptions=subscriptions,
+        admin_audit=admin_audit,
         auth=auth,
         admin=admin,
     )

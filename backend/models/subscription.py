@@ -62,6 +62,12 @@ class Subscription(BaseModel):
     payment_id: str | None = None
     start_date: datetime
     end_date: datetime | None = None
+    # Revenue accounting (Phase 15): the amount actually charged for this
+    # billing period in minor units plus the currency. Optional so pre-existing
+    # documents (created before Phase 15) remain readable; the activation path
+    # fills it from the plan's `price_cents` going forward.
+    amount_cents: int | None = None
+    currency: str | None = None
     created_at: datetime
     updated_at: datetime
     schema_version: int = SUBSCRIPTION_SCHEMA_VERSION
@@ -78,6 +84,8 @@ class Subscription(BaseModel):
         start_date: datetime | None = None,
         end_date: datetime | None = None,
         period_days: int | None = None,
+        amount_cents: int | None = None,
+        currency: str | None = None,
     ) -> "Subscription":
         now = start_date or utcnow()
         if end_date is None and period_days:
@@ -91,6 +99,8 @@ class Subscription(BaseModel):
             payment_id=payment_id,
             start_date=now,
             end_date=end_date,
+            amount_cents=amount_cents,
+            currency=currency,
             created_at=now,
             updated_at=now,
         )

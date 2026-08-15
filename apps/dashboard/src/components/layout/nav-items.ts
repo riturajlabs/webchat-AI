@@ -20,7 +20,7 @@ export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
-  /** Shown only to platform admins (`role=admin`, ADR-006 §Admin UI). */
+  /** Shown only to platform super admins (Phase 15, `/api/admin` is super_admin-only). */
   adminOnly?: boolean;
 }
 
@@ -41,7 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/admin', label: 'Admin', icon: ShieldCheck, adminOnly: true },
 ];
 
-/** Nav items visible to the authenticated principal's role (ADR-006 §Admin UI). */
+/** Nav items visible to the authenticated principal's role (Phase 15). */
 export function visibleNavItems(role: string | undefined): NavItem[] {
-  return NAV_ITEMS.filter((item) => !item.adminOnly || role === 'admin');
+  return NAV_ITEMS.filter((item) => !item.adminOnly || role === 'super_admin');
 }

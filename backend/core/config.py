@@ -204,6 +204,12 @@ class Settings(BaseSettings):
     cost_per_million_input_tokens: float = 0.30
     cost_per_million_output_tokens: float = 1.50
 
+    # Platform operations (Phase 15): emails granted the `super_admin` role,
+    # the only role allowed on the `/api/admin/*` surface (backend/core/rbac.py).
+    # Comma-separated, case-insensitive. Empty = no super admins configured
+    # (every admin API call returns 403).
+    super_admin_emails: list[str] = []
+
     # Payments (Phase 14, SaaS subscriptions). `payment_provider` selects the
     # abstraction implementation: "stripe", "razorpay" or "mock" (dev/tests).
     # In production only stripe/razorpay pass validation, with the provider's

@@ -199,6 +199,12 @@ class MongoDB:
         await db["members"].create_index([("tenant_id", 1), ("user_id", 1)], unique=True)
         await db["audit_logs"].create_index([("tenant_id", 1), ("created_at", -1)])
         await db["audit_logs"].create_index("created_at", expireAfterSeconds=_AUDIT_LOG_TTL_SECONDS)
+        # Phase 15 platform admin trail (backend/models/admin_audit_log.py).
+        # No TTL: retained for the 10-year platform compliance window (the
+        # collection is append-only and small relative to tenant audit_logs).
+        await db["admin_audit_logs"].create_index([("tenant_id", 1), ("created_at", -1)])
+        await db["admin_audit_logs"].create_index([("action", 1), ("created_at", -1)])
+        await db["admin_audit_logs"].create_index([("actor_user_id", 1), ("created_at", -1)])
         # Phase 3 website management (docs/05 §5-6, ADR-005 §5.3).
         # (tenant_id, url) is unique *among active websites*: the race-free
         # duplicate gatekeeper. Soft-deleted websites must not block URL

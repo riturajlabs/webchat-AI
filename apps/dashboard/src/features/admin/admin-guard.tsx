@@ -6,9 +6,9 @@ import { useAuth } from '@/features/auth/auth-context';
 import { EmptyState } from '@/components/ui/empty-state';
 
 /**
- * Admin-only gate for the admin route (Phase 12.5, ADR-006).
- * The backend independently enforces `role=admin` on every /api/admin
- * endpoint (403 otherwise); this gate only hides the UI for non-admins.
+ * Admin-only gate for the admin routes (Phase 15).
+ * The backend independently enforces `role=super_admin` on every /api/admin
+ * endpoint (403 otherwise); this gate only hides the UI for non-super-admins.
  */
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { user, status } = useAuth();
@@ -17,13 +17,13 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
     return null;
   }
 
-  if (user?.role !== 'admin') {
+  if (user?.role !== 'super_admin') {
     return (
       <div className="flex min-h-[60vh] items-center justify-center p-6">
         <EmptyState
           icon={ShieldX}
           title="Admin access required"
-          description="You need an admin role to view platform operations."
+          description="You need a super admin role to view platform operations."
           actionLabel="Back to dashboard"
           onAction={() => {
             window.location.assign('/');

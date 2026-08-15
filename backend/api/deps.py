@@ -24,6 +24,7 @@ from backend.core.errors import (
     ServiceUnavailableError,
 )
 from backend.core.rate_limit import SlidingWindowRateLimiter
+from backend.core.rbac import ADMIN_ROLES, meets_any
 from backend.core.redis import get_redis
 from backend.core.security import (
     API_KEY_PREFIX,
@@ -31,6 +32,7 @@ from backend.core.security import (
     decode_widget_session_token,
 )
 from backend.repositories import (
+    MongoAdminAuditLogRepository,
     MongoAdminRepository,
     MongoAnalyticsRepository,
     MongoApiKeyRepository,
@@ -267,11 +269,14 @@ def get_feedback_service(
 def get_admin_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
 ) -> AdminService:
-    """Build the platform admin service with MongoDB-backed repositories (Phase 12.5).
+    """Build the platform admin service (Phase 12.5 + Phase 15).
 
-    Reuses the same collections the tenant surfaces read/write (ADR-006: no new
-    collections). Mutations go through the shared audit system.
+    Reuses the same collections the tenant surfaces read/write (ADR-006: no
+    new collections) plus the Phase 14 `subscriptions` append-log for revenue.
+    Tenant mutations keep the shared audit write AND append the dedicated
+    `admin_audit_logs` trail (ADR-006 §Security).
     """
+    settings = get_settings()
     return AdminService(
         tenants=MongoTenantRepository(db),
         users=MongoUserRepository(db),
@@ -281,6 +286,9 @@ def get_admin_service(
         audit=MongoAuditLogRepository(db),
         refresh_tokens=MongoRefreshTokenRepository(db),
         stats=MongoAdminRepository(db),
+        subscriptions=MongoSubscriptionRepository(db),
+        admin_audit=MongoAdminAuditLogRepository(db),
+        currency=settings.payment_currency,
     )
 
 
@@ -360,16 +368,29 @@ def require_role(*roles: str) -> Callable[[Principal], None]:
     """Return a FastAPI dependency guarding a route for one of `roles`.
 
     Usage: `Depends(require_role("admin"))` or `Depends(require_role("owner", "admin"))`.
-    The authenticated principal's resolved tenant role must be in `roles`;
-    otherwise a 403 `FORBIDDEN` error is raised (tenant isolation is enforced
-    by `current_user`/`authenticate`, which always re-checks the live tenant).
+    Role checks use the Phase 15 hierarchy (`backend/core/rbac.py`): a
+    principal whose role ranks at or above a required role passes, so
+    `super_admin` satisfies every tenant-level requirement while remaining the
+    only role that satisfies `require_role("super_admin")`. Otherwise a 403
+    `FORBIDDEN` error is raised (tenant isolation is enforced by
+    `current_user`/`authenticate`, which always re-checks the live tenant).
     """
 
     def _require(principal: Annotated[Principal, Depends(current_user)]) -> None:
-        if principal.role not in roles:
+        if not meets_any(principal.role, roles):
             raise ForbiddenError("Insufficient permissions for this action.")
 
     return _require
+
+
+def require_admin() -> Callable[[Principal], None]:
+    """Guard the `/api/admin/*` surface for platform super admins (Phase 15).
+
+    `super_admin` is granted only through `SUPER_ADMIN_EMAILS` configuration
+    (`AuthService._resolve_role`), so an empty configuration disables the
+    admin API entirely (every call raises 403 FORBIDDEN).
+    """
+    return require_role(*ADMIN_ROLES)
 
 
 async def current_principal(
@@ -397,16 +418,17 @@ async def current_principal(
 def require_principal_role(*roles: str) -> Callable[[Principal | ApiKeyPrincipal], None]:
     """Return a dependency guarding a route for one of `roles`, API-key aware.
 
-    Same contract as `require_role`, but the principal may come from either a
-    user access token or a `wc_*` API key (which authenticates as `owner`).
-    Routes that must never accept API keys (user management, website CRUD,
-    widget configuration, admin) keep `require_role`/`current_user`.
+    Same contract as `require_role` (hierarchy-aware, Phase 15), but the
+    principal may come from either a user access token or a `wc_*` API key
+    (which authenticates as `owner`). Routes that must never accept API keys
+    (user management, website CRUD, widget configuration, admin) keep
+    `require_role`/`current_user`.
     """
 
     def _require(
         principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     ) -> None:
-        if principal.role not in roles:
+        if not meets_any(principal.role, roles):
             raise ForbiddenError("Insufficient permissions for this action.")
 
     return _require

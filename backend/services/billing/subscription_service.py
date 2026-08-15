@@ -118,6 +118,10 @@ class SubscriptionService:
             payment_id=event.payment_id,
             start_date=now,
             period_days=period_days,
+            # Phase 15 revenue accounting: the price actually charged for this
+            # period, persisted so `/api/admin/revenue` can aggregate it.
+            amount_cents=plan.price_cents,
+            currency=self._currency,
         )
         await self._subscriptions.create(subscription)
         return subscription

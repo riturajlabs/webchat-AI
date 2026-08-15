@@ -127,9 +127,9 @@ describe('MobileNav', () => {
     expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
   });
 
-  it('shows the Admin link for admins', () => {
+  it('shows the Admin link for super admins', () => {
     mockedUseAuth.mockReturnValue({
-      user: { role: 'admin' },
+      user: { role: 'super_admin' },
     } as never);
     render(<MobileNav />);
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));

@@ -29,8 +29,8 @@ describe('AdminGuard', () => {
     expect(screen.queryByText('Admin access required')).not.toBeInTheDocument();
   });
 
-  it('shows an access-denied state for non-admins', () => {
-    mockedUseAuth.mockReturnValue({ status: 'ready', user: { role: 'owner' } } as never);
+  it('shows an access-denied state for non-super-admins', () => {
+    mockedUseAuth.mockReturnValue({ status: 'ready', user: { role: 'admin' } } as never);
 
     render(<AdminGuard>admin content</AdminGuard>);
 
@@ -39,8 +39,8 @@ describe('AdminGuard', () => {
     expect(screen.getByRole('button', { name: 'Back to dashboard' })).toBeInTheDocument();
   });
 
-  it('renders children for admins', () => {
-    mockedUseAuth.mockReturnValue({ status: 'ready', user: { role: 'admin' } } as never);
+  it('renders children for super admins', () => {
+    mockedUseAuth.mockReturnValue({ status: 'ready', user: { role: 'super_admin' } } as never);
 
     render(<AdminGuard>admin content</AdminGuard>);
 
