@@ -29,11 +29,18 @@ htmlcov/
 !.env.example
 !.env.production.example
 
+# Package manager caches
+.npm/
+.pnpm-store/
+
 # Logs
 logs/
 *.log
 npm-debug.log*
+pnpm-debug.log*
 .pnpm-debug.log*
+yarn-error.log*
+yarn-debug.log*
 
 # TLS certs mounted by docker-compose.prod.yml (never commit certs)
 tls/
@@ -43,6 +50,7 @@ tls/
 .idea/
 .DS_Store
 *.swp
+*.swo
 
 # Test / tooling artifacts
 playwright-report/
