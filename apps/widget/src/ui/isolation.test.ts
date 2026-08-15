@@ -25,11 +25,11 @@ describe('asset self-containment', () => {
     expect(WIDGET_STYLES).not.toMatch(/\.(woff2?|ttf|eot|otf|svg|png|jpe?g|gif|webp)\b/i);
   });
 
-  it('launcher icon is a text glyph, not an external image', () => {
+  it('launcher icon is an inline SVG, not an external image', () => {
     const onToggle = vi.fn();
     const button = createLauncher({ position: 'bottom-right', onToggle, isOpen: () => false });
     const icon = button.querySelector('.wc-launcher-icon');
-    expect(icon?.textContent).toBe('💬');
+    expect(icon?.querySelector('svg')).not.toBeNull();
     expect(button.querySelector('img')).toBeNull();
     expect(button.querySelector('[src]')).toBeNull();
   });

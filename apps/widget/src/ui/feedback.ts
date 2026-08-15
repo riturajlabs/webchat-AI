@@ -1,20 +1,17 @@
 /**
- * Visitor feedback control (Phase 12.4, ADR-005 §5.6, WCAG 2.2 AA).
+ * Visitor feedback control (compact UX).
  *
- * A compact, keyboard-accessible control rendered under a completed assistant
- * answer. Flow: thumbs up / thumbs down → optional category + comment →
- * Submit. The control owns its internal selection (thumb, category, comment);
- * the host (mount) owns the network call and drives `sync()` with the
- * feedback status so the control reflects submitting / submitted / error
- * without losing the visitor's input. All interactive elements are native
- * buttons / textarea with labels and `aria-pressed` state.
+ * A single row of two thumbs — 👍 👎 — under a completed assistant answer.
+ * Clicking a thumb immediately submits the rating through the existing
+ * feedback API (unchanged) and the control shows a short confirmation line.
+ * There is deliberately no modal, no category picker, no comment textarea and
+ * no submit button: rating is one tap.
+ *
+ * The host (mount) owns the network call and drives `sync()` with the
+ * feedback status so the control reflects submitting / submitted / error.
  */
 
 import type { FeedbackStatus } from '../stream/chat';
-
-/** Widget feedback categories the backend accepts (ADR-005 §5.6). */
-const UP_CATEGORIES = ['helpful', 'other'];
-const DOWN_CATEGORIES = ['wrong', 'incomplete', 'offensive', 'other'];
 
 export interface FeedbackSubmitPayload {
   /** 1-5 scale: thumbs up → 5, thumbs down → 1. */
@@ -66,15 +63,6 @@ export function createFeedbackControl(options: FeedbackControlOptions): Feedback
   const root = document.createElement('div');
   root.className = 'wc-feedback';
 
-  // --- Body: prompt + thumbs + category/comment panel ---------------------
-  const body = document.createElement('div');
-  body.className = 'wc-feedback-body';
-
-  const prompt = document.createElement('span');
-  prompt.className = 'wc-feedback-prompt';
-  prompt.textContent = 'Was this helpful?';
-  body.appendChild(prompt);
-
   const thumbs = document.createElement('div');
   thumbs.className = 'wc-feedback-thumbs';
   thumbs.setAttribute('role', 'group');
@@ -90,201 +78,59 @@ export function createFeedbackControl(options: FeedbackControlOptions): Feedback
 
   thumbs.appendChild(upButton);
   thumbs.appendChild(downButton);
-  body.appendChild(thumbs);
 
-  // Category + comment panel (revealed once a thumb is selected).
-  const panel = document.createElement('div');
-  panel.className = 'wc-feedback-panel';
-  panel.hidden = true;
+  const note = document.createElement('span');
+  note.className = 'wc-feedback-note';
+  note.setAttribute('role', 'status');
+  note.hidden = true;
 
-  const panelLabel = document.createElement('span');
-  panelLabel.className = 'wc-feedback-panel-label';
-  body.appendChild(panelLabel);
+  root.appendChild(thumbs);
+  root.appendChild(note);
 
-  const categories = document.createElement('div');
-  categories.className = 'wc-feedback-categories';
-  categories.setAttribute('role', 'radiogroup');
-  categories.setAttribute('aria-label', 'Choose a category');
-
-  const commentWrap = document.createElement('div');
-  commentWrap.className = 'wc-feedback-comment-wrap';
-
-  const commentLabel = document.createElement('label');
-  commentLabel.className = 'wc-feedback-comment-label';
-  commentLabel.textContent = 'Add a comment (optional)';
-  commentLabel.htmlFor = 'wc-feedback-comment';
-  commentWrap.appendChild(commentLabel);
-
-  const comment = document.createElement('textarea');
-  comment.id = 'wc-feedback-comment';
-  comment.className = 'wc-feedback-comment';
-  comment.rows = 2;
-  comment.placeholder = 'Share more detail…';
-  commentWrap.appendChild(comment);
-
-  const actions = document.createElement('div');
-  actions.className = 'wc-feedback-actions';
-
-  const submit = button('Submit feedback', 'wc-feedback-submit');
-  submit.textContent = 'Submit';
-  const cancel = button('Cancel feedback', 'wc-feedback-cancel');
-  cancel.textContent = 'Cancel';
-  actions.appendChild(submit);
-  actions.appendChild(cancel);
-
-  panel.appendChild(categories);
-  panel.appendChild(commentWrap);
-  panel.appendChild(actions);
-
-  body.appendChild(panel);
-  body.insertBefore(panelLabel, panel);
-
-  // --- Status / success / error surfaces ---------------------------------
-  const status = document.createElement('div');
-  status.className = 'wc-feedback-status';
-  status.setAttribute('role', 'status');
-
-  const error = document.createElement('div');
-  error.className = 'wc-feedback-error';
-  error.setAttribute('role', 'alert');
-  error.hidden = true;
-  const errorText = document.createElement('span');
-  errorText.className = 'wc-feedback-error-text';
-  errorText.textContent = "Couldn't send feedback.";
-  const retry = button('Retry sending feedback', 'wc-feedback-retry');
-  retry.textContent = 'Retry';
-  const dismiss = button('Dismiss feedback error', 'wc-feedback-dismiss');
-  dismiss.textContent = 'Dismiss';
-  error.appendChild(errorText);
-  error.appendChild(retry);
-  error.appendChild(dismiss);
-
-  const thanks = document.createElement('div');
-  thanks.className = 'wc-feedback-thanks';
-  thanks.textContent = 'Thanks for your feedback!';
-
-  root.appendChild(body);
-  root.appendChild(status);
-  root.appendChild(error);
-  root.appendChild(thanks);
-
-  // --- Internal selection state -------------------------------------------
   let selection: 'up' | 'down' | null = null;
-  let category: string | null = null;
-  let commentValue = '';
-  let lastPayload: FeedbackSubmitPayload | null = null;
-  let chipButtons: HTMLButtonElement[] = [];
-
-  function rating(): 1 | 5 {
-    return selection === 'down' ? 1 : 5;
-  }
-
-  function defaultCategory(): string {
-    return selection === 'down' ? 'other' : 'helpful';
-  }
-
-  function renderChips(): void {
-    chipButtons.forEach((chip) => chip.remove());
-    chipButtons = [];
-    const items = selection === 'down' ? DOWN_CATEGORIES : UP_CATEGORIES;
-    for (const value of items) {
-      const chip = button(`Category ${value}`, 'wc-feedback-chip');
-      chip.textContent = value;
-      chip.setAttribute('aria-pressed', String(category === value));
-      chip.addEventListener('click', () => {
-        category = value;
-        renderChips();
-      });
-      categories.appendChild(chip);
-      chipButtons.push(chip);
-    }
-  }
-
-  function showPanel(): void {
-    category = defaultCategory();
-    commentValue = comment.value;
-    panelLabel.textContent = selection === 'down' ? 'What went wrong?' : 'What did you think?';
-    renderChips();
-    panel.hidden = false;
-    comment.focus();
-  }
-
-  function hidePanel(): void {
-    panel.hidden = true;
-    category = null;
-  }
 
   function setPressing(): void {
     upButton.setAttribute('aria-pressed', String(selection === 'up'));
     downButton.setAttribute('aria-pressed', String(selection === 'down'));
   }
 
-  function sync(statusValue: FeedbackStatus): void {
-    status.textContent = statusValue === 'submitting' ? 'Submitting…' : '';
-    status.hidden = statusValue !== 'submitting';
-    const interactiveDisabled = statusValue === 'submitting' || statusValue === 'submitted';
-    upButton.disabled = interactiveDisabled;
-    downButton.disabled = interactiveDisabled;
-    submit.disabled = interactiveDisabled;
-    cancel.disabled = statusValue === 'submitting' || statusValue === 'submitted';
-    comment.disabled = statusValue === 'submitting' || statusValue === 'submitted';
-    chipButtons.forEach((chip) => {
-      chip.disabled = statusValue === 'submitting' || statusValue === 'submitted';
+  function rate(direction: 'up' | 'down'): void {
+    selection = direction;
+    setPressing();
+    options.onSubmit({
+      rating: direction === 'up' ? 5 : 1,
+      category: direction === 'up' ? 'helpful' : 'other',
+      comment: '',
     });
-    body.hidden = statusValue === 'submitted';
-    thanks.hidden = statusValue !== 'submitted';
-    error.hidden = statusValue !== 'error';
-    if (statusValue !== 'error') {
-      lastPayload = null;
-    }
   }
 
-  function send(): void {
-    const payload: FeedbackSubmitPayload = {
-      rating: rating(),
-      category: category ?? defaultCategory(),
-      comment: commentValue.trim(),
-    };
-    lastPayload = payload;
-    options.onSubmit(payload);
-  }
+  upButton.addEventListener('click', () => rate('up'));
+  downButton.addEventListener('click', () => rate('down'));
 
-  upButton.addEventListener('click', () => {
-    selection = 'up';
-    setPressing();
-    showPanel();
-  });
-
-  downButton.addEventListener('click', () => {
-    selection = 'down';
-    setPressing();
-    showPanel();
-  });
-
-  comment.addEventListener('input', () => {
-    commentValue = comment.value;
-  });
-
-  submit.addEventListener('click', () => {
-    commentValue = comment.value;
-    send();
-  });
-
-  cancel.addEventListener('click', () => {
-    hidePanel();
-    selection = null;
-    setPressing();
-  });
-
-  retry.addEventListener('click', () => {
-    if (lastPayload) {
-      options.onSubmit(lastPayload);
+  function sync(status: FeedbackStatus): void {
+    if (status === 'submitted') {
+      note.textContent =
+        selection === 'down' ? "Thanks, we'll improve" : 'Thanks for your feedback';
+      note.hidden = false;
+      upButton.disabled = true;
+      downButton.disabled = true;
+    } else if (status === 'error') {
+      note.textContent = "Couldn't save. Tap again to retry.";
+      note.hidden = false;
+      upButton.disabled = false;
+      downButton.disabled = false;
+    } else if (status === 'submitting') {
+      note.textContent = 'Sending…';
+      note.hidden = false;
+      upButton.disabled = true;
+      downButton.disabled = true;
+    } else {
+      note.textContent = '';
+      note.hidden = true;
+      upButton.disabled = false;
+      downButton.disabled = false;
     }
-  });
-
-  dismiss.addEventListener('click', () => {
-    error.hidden = true;
-  });
+  }
 
   return { element: root, sync };
 }

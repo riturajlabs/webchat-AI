@@ -43,18 +43,31 @@ export interface ChatMessage {
   error?: boolean;
   /** True when the user stopped the turn early (partial answer kept). */
   stopped?: boolean;
+  /** True while a local conversational reply (greeting/thanks) is "typing". */
+  thinking?: boolean;
   /** Citation list attached to an assistant turn (Phase 10). */
   sources?: ChatSource[];
   /** Backend `message_id` from the SSE `done` event (Phase 12.4). */
   messageId?: string;
   /** Visitor feedback state (Phase 12.4). */
   feedback?: FeedbackState;
+  /** Local wall-clock timestamp used for the optional bubble timestamp. */
+  createdAt?: number;
 }
 
 export interface ConversationState {
   messages: ChatMessage[];
   sessionId: string | null;
+  /**
+   * True while an assistant turn is in flight — either a real SSE stream or a
+   * local conversational reply pending its short typing delay.
+   */
   streaming: boolean;
+  /**
+   * True when the in-flight turn is a real SSE stream that the Stop button can
+   * cancel (false for local greeting/thanks replies).
+   */
+  stoppable: boolean;
   error: string | null;
 }
 
@@ -73,6 +86,7 @@ export class Conversation {
   private messages: ChatMessage[] = [];
   private sessionId: string | null;
   private streaming = false;
+  private stoppable = false;
   private error: string | null = null;
   onChange?: (state: ConversationState) => void;
 
@@ -86,6 +100,7 @@ export class Conversation {
       messages: [...this.messages],
       sessionId: this.sessionId,
       streaming: this.streaming,
+      stoppable: this.stoppable,
       error: this.error,
     };
   }
@@ -95,15 +110,43 @@ export class Conversation {
   }
 
   addUserMessage(content: string): void {
-    this.messages.push({ id: nextId(), role: 'user', content });
+    this.messages.push({ id: nextId(), role: 'user', content, createdAt: Date.now() });
     this.emit();
   }
 
   /** Start an assistant turn; returns the placeholder message id. */
   startAssistantTurn(): string {
-    const message: ChatMessage = { id: nextId(), role: 'assistant', content: '', streaming: true };
+    const message: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      content: '',
+      streaming: true,
+      createdAt: Date.now(),
+    };
     this.messages.push(message);
     this.streaming = true;
+    this.stoppable = true;
+    this.error = null;
+    this.emit();
+    return message.id;
+  }
+
+  /**
+   * Start a local conversational reply (greeting/thanks/farewell). Renders the
+   * typing indicator for a short delay, but is never stoppable and never calls
+   * the chat API.
+   */
+  startThinkingTurn(): string {
+    const message: ChatMessage = {
+      id: nextId(),
+      role: 'assistant',
+      content: '',
+      thinking: true,
+      createdAt: Date.now(),
+    };
+    this.messages.push(message);
+    this.streaming = true;
+    this.stoppable = false;
     this.error = null;
     this.emit();
     return message.id;
@@ -145,6 +188,15 @@ export class Conversation {
     }
   }
 
+  /** Overwrite an assistant turn's content in place (no-context rewrite). */
+  setAssistantContent(id: string, content: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.content = content;
+      this.emit();
+    }
+  }
+
   /** End an assistant turn cleanly. */
   endTurn(id: string): void {
     const message = this.messages.find((m) => m.id === id);
@@ -152,6 +204,21 @@ export class Conversation {
       message.streaming = false;
     }
     this.streaming = false;
+    this.stoppable = false;
+    this.emit();
+  }
+
+  /** Complete a local conversational reply (greeting/thanks/farewell). */
+  completeAssistantTurn(id: string, content: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.content = content;
+      message.thinking = false;
+      message.streaming = false;
+    }
+    this.streaming = false;
+    this.stoppable = false;
+    this.error = null;
     this.emit();
   }
 
@@ -166,6 +233,7 @@ export class Conversation {
       message.stopped = true;
     }
     this.streaming = false;
+    this.stoppable = false;
     this.emit();
   }
 
@@ -177,6 +245,7 @@ export class Conversation {
       message.error = true;
     }
     this.streaming = false;
+    this.stoppable = false;
     this.error = error;
     this.emit();
   }
@@ -190,6 +259,7 @@ export class Conversation {
     this.messages = [];
     this.sessionId = null;
     this.streaming = false;
+    this.stoppable = false;
     this.error = null;
     this.emit();
   }

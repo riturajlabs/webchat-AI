@@ -5,11 +5,23 @@ Inserts are idempotent via the unique (tenant_id, website_id, document_id,
 chunk_index) index; deletes carry tenant scope; `similarity_search` runs the
 Atlas `$vectorSearch` aggregation with a mandatory tenant/website pre-filter.
 
-Atlas Vector Search is required for `similarity_search` (not the local MongoDB
-community server); the query fails fast with an actionable message when no
-vector index exists on `knowledge_chunks.embedding`.
+Search-capability handling (three cases):
+
+* Atlas cluster with a vector index on `knowledge_chunks.embedding`: the
+  `$vectorSearch` aggregation returns real hits.
+* Local MongoDB community server / MongoDB 8.0+ without Atlas Search: the
+  aggregation *raises* and we degrade to an exact brute-force cosine scan over
+  the tenant/website's chunks (dev stack keeps working).
+* Atlas shared/serverless tiers where search is unavailable yet `$vectorSearch`
+  and `$search` *silently return zero rows without erroring*: the empty result
+  would otherwise masquerade as a genuine "no match". We probe for a usable
+  vector index once (cached) and, when none exists, degrade to the same exact
+  cosine scan so retrieval still returns the tenant's relevant chunks.
+  A genuine search-capable cluster keeps its `$vectorSearch` behavior; a
+  misconfigured index there still fails fast with the actionable message.
 """
 
+import logging
 from math import sqrt
 from typing import Any
 
@@ -18,12 +30,16 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.repositories.vector.base import VectorRepository, VectorSearchResult
 
+logger = logging.getLogger("webchat_ai")
+
 
 class MongoVectorRepository(VectorRepository):
     """MongoDB Atlas Vector Search repository (docs/05 §7, ADR-008 Phase 5)."""
 
     def __init__(self, db: AsyncIOMotorDatabase[Any]) -> None:
+        self._database = db
         self._collection = db["knowledge_chunks"]
+        self._search_supported: bool | None = None
 
     async def insert_chunks(self, chunks: list[KnowledgeChunk]) -> int:
         if not chunks:
@@ -90,7 +106,7 @@ class MongoVectorRepository(VectorRepository):
         ]
         try:
             cursor = self._collection.aggregate(pipeline)
-            return [
+            results = [
                 VectorSearchResult(
                     chunk=KnowledgeChunk.from_doc(item["doc"]),
                     score=float(item["score"]),
@@ -104,6 +120,13 @@ class MongoVectorRepository(VectorRepository):
                 # chunks so the dev stack stays fully functional; production
                 # Atlas still uses the vector index. Any other failure keeps
                 # the actionable fail-fast message below.
+                logger.warning(
+                    "vector search unavailable (%s); falling back to exact cosine scan "
+                    "(tenant=%s website=%s)",
+                    exc,
+                    tenant_id,
+                    website_id,
+                )
                 return await self._brute_force_search(
                     tenant_id, website_id, query_embedding, top_k=top_k
                 )
@@ -111,6 +134,62 @@ class MongoVectorRepository(VectorRepository):
                 "Vector search unavailable: create an Atlas Vector Search index "
                 f"on knowledge_chunks.embedding (path='embedding'). Underlying error: {exc}"
             ) from exc
+
+        if results:
+            return results
+
+        # Atlas returned zero rows *without* erroring. On some Atlas tiers
+        # (shared/serverless) search is unavailable and `$vectorSearch`/`$search`
+        # silently no-op to empty - the result is indistinguishable from a
+        # genuine no-match except by checking for a usable vector index. Do that
+        # once (cached), and fall back to the exact scan when none exists.
+        if await self._has_search_index():
+            logger.info(
+                "vector search returned zero hits (tenant=%s website=%s top_k=%s)",
+                tenant_id,
+                website_id,
+                top_k,
+            )
+            return []
+        logger.warning(
+            "Atlas Search is unavailable on this deployment (no vector index on "
+            "knowledge_chunks.embedding); falling back to exact cosine scan "
+            "(tenant=%s website=%s top_k=%s)",
+            tenant_id,
+            website_id,
+            top_k,
+        )
+        return await self._brute_force_search(
+            tenant_id, website_id, query_embedding, top_k=top_k
+        )
+
+    async def _has_search_index(self) -> bool:
+        """Whether a usable Atlas Search vector index exists (cached probe).
+
+        The probe only runs after an empty `$vectorSearch` result, so healthy
+        deployments never pay for it. The result is cached for the repository
+        lifetime: an index created later is picked up on the next process start.
+        """
+        if self._search_supported is None:
+            self._search_supported = await self._probe_search_support()
+        return self._search_supported
+
+    async def _probe_search_support(self) -> bool:
+        """`listSearchIndexes` works and reports a vector index on `embedding`."""
+        try:
+            info = await self._database.command(
+                {"listSearchIndexes": self._collection.name}
+            )
+        except Exception:  # noqa: BLE001 - any probe failure means "no search"
+            return False
+        indexes = info.get("indexes", []) if isinstance(info, dict) else []
+        for index in indexes:
+            definition = index.get("latestDefinition") or index.get("definition") or {}
+            fields = definition.get("fields", []) if isinstance(definition, dict) else []
+            for field in fields:
+                if field.get("path") == "embedding":
+                    return True
+        return False
 
     async def _brute_force_search(
         self,
@@ -120,18 +199,30 @@ class MongoVectorRepository(VectorRepository):
         *,
         top_k: int,
     ) -> list[VectorSearchResult]:
-        """Exact cosine similarity over the tenant/website's chunks (dev fallback)."""
+        """Exact cosine similarity over the tenant/website's chunks (fallback)."""
         cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
         scored: list[tuple[float, KnowledgeChunk]] = []
+        scanned = 0
         async for item in cursor:
             chunk = KnowledgeChunk.from_doc(item)
+            scanned += 1
             if not chunk.embedding:
                 continue
             score = _cosine_similarity(query_embedding, chunk.embedding)
             if score > 0:
                 scored.append((score, chunk))
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [VectorSearchResult(chunk=chunk, score=score) for score, chunk in scored[:top_k]]
+        results = [
+            VectorSearchResult(chunk=chunk, score=score) for score, chunk in scored[:top_k]
+        ]
+        logger.info(
+            "exact cosine scan finished (tenant=%s website=%s scanned=%s hits=%s)",
+            tenant_id,
+            website_id,
+            scanned,
+            len(results),
+        )
+        return results
 
 
 def _atlas_only_error(exc: Exception) -> bool:

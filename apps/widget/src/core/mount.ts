@@ -27,8 +27,8 @@ import { applyTheme, prefersReducedMotion } from '../theme/apply';
 import { createLauncher, syncLauncher } from '../ui/launcher';
 import { createChatWindow } from '../ui/window';
 import {
+  createEmptyState,
   createMessageList,
-  createWelcomeBubble,
   renderMessages,
   setBusy,
   toggleExpanded,
@@ -41,6 +41,12 @@ import { WIDGET_STYLES } from '../ui/styles';
 import { streamChat } from '../stream/client';
 import { Conversation, type ChatMessage } from '../stream/chat';
 import type { WidgetError } from './errors';
+import {
+  detectIntent,
+  isNoContextAnswer,
+  NO_CONTEXT_ANSWER,
+  NO_CONTEXT_REPLY,
+} from '../conversation/intent';
 
 /** Banner shown while the browser reports itself offline (plan §9). */
 export const OFFLINE_BANNER = "You're offline. Messages will be sent once your connection returns.";
@@ -56,7 +62,15 @@ export interface WidgetHostOptions extends WidgetOptions {
   /** Test seams. */
   fetchImpl?: typeof fetch;
   configStore?: ConfigStore;
+  /**
+   * Delay before a local conversational reply (greeting/thanks/farewell)
+   * appears, giving the "AI is typing" indicator a moment to show. Test seam.
+   */
+  intentReplyDelayMs?: number;
 }
+
+/** How long the "AI is typing" indicator shows before a conversational reply. */
+export const INTENT_REPLY_DELAY_MS = 700;
 
 export interface WidgetController {
   readonly widgetId: string;
@@ -222,6 +236,23 @@ export function mount(options: WidgetHostOptions): WidgetController {
 
   // --- Send path -----------------------------------------------------------
 
+  /**
+   * Local conversational replies (greeting/thanks/farewell) never touch the
+   * chat API: they are classified up front, shown through the same assistant
+   * bubble (with the typing indicator for a short, natural delay) and complete
+   * locally.
+   */
+  function respondWithIntent(reply: string): void {
+    const turnId = conversation.startThinkingTurn();
+    window.setTimeout(() => {
+      if (destroyed) {
+        return;
+      }
+      conversation.completeAssistantTurn(turnId, reply);
+      syncRenderer();
+    }, options.intentReplyDelayMs ?? INTENT_REPLY_DELAY_MS);
+  }
+
   async function send(question: string) {
     if (conversation.getState().streaming || isOffline() || widgetUnavailable) {
       return;
@@ -232,6 +263,14 @@ export function mount(options: WidgetHostOptions): WidgetController {
     lastError = null;
 
     conversation.addUserMessage(question);
+
+    // Intent classification runs BEFORE RAG retrieval.
+    const intent = detectIntent(question);
+    if (intent) {
+      respondWithIntent(intent.reply);
+      return;
+    }
+
     const turnId = conversation.startAssistantTurn();
 
     const client = {
@@ -245,13 +284,30 @@ export function mount(options: WidgetHostOptions): WidgetController {
           conversation.setSources(turnId, sources);
         }
       },
-      onDelta: (delta: string) => conversation.appendDelta(turnId, delta),
-      onDone: (done: { session_id?: string; message_id?: string }) => {
+      onDelta: (delta: string) => {
+        // The backend streams its zero-context fallback as one delta; rewrite
+        // it into the friendlier prompt before it ever renders. A model-side
+        // fallback in multiple deltas is caught by the `done.fallback` guard.
+        const current =
+          conversation.getState().messages.find((m) => m.id === turnId)?.content ?? '';
+        if (current === '' && delta === NO_CONTEXT_ANSWER) {
+          conversation.appendDelta(turnId, NO_CONTEXT_REPLY);
+        } else {
+          conversation.appendDelta(turnId, delta);
+        }
+      },
+      onDone: (done: { session_id?: string; message_id?: string; fallback?: unknown }) => {
         if (done.session_id) {
           conversation.setSessionId(done.session_id);
         }
         if (done.message_id) {
           conversation.setMessageId(turnId, done.message_id);
+        }
+        if (done.fallback) {
+          const message = conversation.getState().messages.find((m) => m.id === turnId);
+          if (message && isNoContextAnswer(message.content)) {
+            conversation.setAssistantContent(turnId, NO_CONTEXT_REPLY);
+          }
         }
         conversation.endTurn(turnId);
       },
@@ -373,10 +429,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
   function renderMessagesNow() {
     const messages = conversation.getState().messages;
     renderMessages(messageList, messages);
-    if (messages.length === 0 && currentConfig.welcome_message) {
-      messageList.appendChild(createWelcomeBubble(currentConfig.welcome_message));
+    if (messages.length === 0) {
+      messageList.replaceChildren(createEmptyState(currentConfig));
     }
   }
+
+  let prevStreaming = false;
 
   function syncRenderer() {
     const offline = isOffline();
@@ -398,9 +456,19 @@ export function mount(options: WidgetHostOptions): WidgetController {
     const state = conversation.getState();
     renderMessagesNow();
     setBusy(messageList, state.streaming);
-    windowElement.setStreaming(state.streaming);
+    // Stop appears only for backend turns; "thinking" turns (greetings etc.)
+    // keep the Send button and show the spinner instead.
+    windowElement.setStreaming(state.streaming && state.stoppable);
+    windowElement.composer.setBusy(state.streaming && !state.stoppable);
     windowElement.composer.setDisabled(state.streaming || offline || widgetUnavailable);
-    windowElement.element.hidden = !open;
+    windowElement.suggested.hidden = state.messages.some((m) => m.role === 'user');
+    if (state.streaming && !prevStreaming) {
+      windowElement.setStatus('AI is typing');
+    } else if (!state.streaming && prevStreaming) {
+      windowElement.setStatus('');
+    }
+    prevStreaming = state.streaming;
+    shell.setAttribute('data-open', String(open));
     syncLauncher(launcher, open);
   }
 
@@ -440,19 +508,44 @@ export function mount(options: WidgetHostOptions): WidgetController {
         return;
       }
       open = true;
+      const element = windowElement.element;
+      element.classList.remove('wc-closing');
+      element.hidden = false;
       windowElement.trapFocus();
       launcher.tabIndex = -1; // out of the tab order while the dialog is open
       syncRenderer();
+      messageList.scrollTop = messageList.scrollHeight;
     },
     close() {
       if (!open) {
         return;
       }
-      open = false;
-      windowElement.releaseFocus();
-      launcher.tabIndex = 0;
-      syncRenderer();
-      launcher.focus();
+      const element = windowElement.element;
+      if (prefersReducedMotion()) {
+        open = false;
+        windowElement.releaseFocus();
+        launcher.tabIndex = 0;
+        element.classList.remove('wc-closing');
+        element.hidden = true;
+        syncRenderer();
+        launcher.focus();
+        return;
+      }
+      // Play the close animation, then hide. The guard (`!open`) ignores the
+      // timeout if the visitor reopens mid-animation.
+      element.classList.add('wc-closing');
+      window.setTimeout(() => {
+        if (!open) {
+          return;
+        }
+        open = false;
+        windowElement.releaseFocus();
+        launcher.tabIndex = 0;
+        element.classList.remove('wc-closing');
+        element.hidden = true;
+        syncRenderer();
+        launcher.focus();
+      }, 180);
     },
     sendMessage(question: string) {
       void send(question);

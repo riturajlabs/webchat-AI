@@ -54,7 +54,7 @@ export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   font_size: 'md',
   logo_url: null,
   avatar_url: null,
-  welcome_message: 'Hi! How can I help you?',
+  welcome_message: "Hi 👋 I'm your AI assistant. Ask me anything about this site!",
   placeholder: 'Type your message…',
   suggested_questions: [],
   branding: true,

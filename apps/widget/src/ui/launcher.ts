@@ -22,7 +22,20 @@ export function createLauncher(options: LauncherOptions): HTMLButtonElement {
   const label = document.createElement('span');
   label.className = 'wc-launcher-icon';
   label.setAttribute('aria-hidden', 'true');
-  label.textContent = '💬';
+  // Inline SVG chat-bubble: no external asset, safe under a strict CSP.
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '26');
+  svg.setAttribute('height', '26');
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute(
+    'd',
+    'M20 2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14l4 4V4a2 2 0 0 0-2-2zm-8 11H6v-2h6v2zm4-4H6V7h10v2z',
+  );
+  svg.appendChild(path);
+  label.appendChild(svg);
   button.appendChild(label);
 
   button.addEventListener('click', () => {

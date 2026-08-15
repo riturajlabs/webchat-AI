@@ -5,6 +5,8 @@ with in-memory fakes, covering the hallucination guard (no context => no
 model call), tenant isolation, conversation memory, and failure paths.
 """
 
+import logging
+
 from backend.core.errors import EmbeddingUnavailableError, GenerationError
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER
 from backend.prompts.rag import RAG_PROMPT_VERSION, UNKNOWN_ANSWER_FALLBACK
@@ -294,3 +296,76 @@ async def test_top_k_limits_retrieved_chunks() -> None:
 
     sources = next(event for event in events if event["event"] == "sources")
     assert len(sources["data"]["sources"]) == 2
+
+
+async def test_known_question_gets_grounded_answer() -> None:
+    """A known question must produce an answer grounded in the knowledge base,
+    never the no-context fallback (RAG regression test for course questions)."""
+    env = build_chat_env(deltas=["Indira University offers BA, B.Com, and B.Sc courses."])
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Undergraduate programs at Indira University include BA, B.Com, and B.Sc.",
+        url="https://indirauniversity.edu.in/programs",
+        title="Programs at Indira University",
+    )
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What courses are offered by Indira University?",
+    )
+
+    answer = "".join(_message_event(events))
+    assert "courses" in answer.lower()
+    assert answer != UNKNOWN_ANSWER_FALLBACK
+    done = _done_event(events)
+    assert done["data"]["fallback"] is False
+    # The retrieved chunk really reached the model -> grounded generation.
+    call = env.generation.calls[0]
+    assert "BA, B.Com, and B.Sc" in call["messages"][0][1]
+    assert "Indira University" in call["messages"][0][1]
+
+
+async def test_prompt_includes_system_context_and_query() -> None:
+    """The LLM prompt must contain system rules + retrieved context + query."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Indira offers BA and B.Com programs.",
+        title="Programs",
+    )
+
+    await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What programs are available?",
+    )
+
+    call = env.generation.calls[0]
+    assert "reference material" in call["system"]
+    assert "Answer only using the reference material" in call["system"]
+    assert "Indira offers BA and B.Com programs." in call["messages"][0][1]
+    assert "Question: What programs are available?" in call["messages"][0][1]
+
+
+async def test_zero_context_retrieval_logs_warning(caplog) -> None:
+    """When retrieval returns no context, a warning must include the website_id
+    and query so the pipeline can be traced end-to-end (RAG observability)."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="About nothing?")
+
+    assert "rag_retrieval_zero_context" in caplog.text
+    assert "reason=retrieval_empty" in caplog.text
+    assert f"website={WEB_1}" in caplog.text
+    assert "About nothing?" in caplog.text

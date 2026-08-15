@@ -113,6 +113,14 @@ class RagService:
                 yield _error_event("WEBSITE_NOT_FOUND", "Website not found.")
                 return
             question = sanitize_question(question)
+            logger.info(
+                "chat_request tenant=%s website=%s session=%s knowledge_chunks=%s query=%r",
+                tenant_id,
+                website_id,
+                session_id,
+                website.knowledge_chunks,
+                question,
+            )
             async with chat_stage("session.resolve"):
                 session = await self._ensure_session(
                     tenant_id=tenant_id,
@@ -144,6 +152,8 @@ class RagService:
                 session=session,
                 started=started,
                 vector_queries=0,
+                reason="knowledge_empty",
+                query=question,
             ):
                 yield event
             return
@@ -156,6 +166,13 @@ class RagService:
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
             return
+        logger.info(
+            "chat_embedding tenant=%s website=%s provider=%s dims=%s",
+            tenant_id,
+            website_id,
+            self._provider_name(self._embedder),
+            len(query_vector),
+        )
 
         try:
             async with chat_stage("retrieval.vector_search"):
@@ -166,6 +183,27 @@ class RagService:
             logger.exception("vector search failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
             return
+        logger.info(
+            "chat_vector_search tenant=%s website=%s top_k=%s hits=%s scores=%s",
+            tenant_id,
+            website_id,
+            self._top_k,
+            len(results),
+            [round(result.score, 4) for result in results],
+        )
+        for result in results[:10]:
+            metadata = result.chunk.metadata
+            logger.info(
+                "chat_retrieval_hit tenant=%s website=%s chunk_id=%s document_id=%s "
+                "score=%s source_url=%s title=%s",
+                tenant_id,
+                website_id,
+                result.chunk.id,
+                result.chunk.document_id,
+                round(result.score, 4),
+                metadata.get("source_url"),
+                metadata.get("title"),
+            )
 
         if not results:
             async for event in self._emit_fallback(
@@ -174,6 +212,8 @@ class RagService:
                 session=session,
                 started=started,
                 vector_queries=1,
+                reason="retrieval_empty",
+                query=question,
             ):
                 yield event
             return
@@ -196,6 +236,25 @@ class RagService:
             context=context_items,
             history=history,
             max_chars_per_chunk=self._max_chars_per_chunk,
+        )
+        context_chars = sum(len(item.text) for item in context_items)
+        logger.info(
+            "chat_prompt tenant=%s website=%s prompt_version=%s context_items=%s "
+            "context_chars=%s system_chars=%s user_chars=%s",
+            tenant_id,
+            website_id,
+            self._prompt_version,
+            len(context_items),
+            context_chars,
+            len(system_prompt),
+            len(user_prompt),
+        )
+        logger.debug(
+            "chat_prompt_full tenant=%s website=%s system=%r user=%r",
+            tenant_id,
+            website_id,
+            system_prompt,
+            user_prompt,
         )
 
         deltas: list[str] = []
@@ -289,6 +348,15 @@ class RagService:
         recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
         return [(message.role, message.content) for message in recent]
 
+    @staticmethod
+    def _provider_name(embedder: Any) -> str:
+        """Best-effort provider label for observability (never fails)."""
+        return (
+            getattr(embedder, "active_provider", None)
+            or getattr(embedder, "name", None)
+            or type(embedder).__name__
+        )
+
     def _build_context(
         self, results: list[VectorSearchResult]
     ) -> tuple[list[ContextItem], list[dict[str, Any]]]:
@@ -324,8 +392,23 @@ class RagService:
         session: ChatSession,
         started: float,
         vector_queries: int,
+        reason: str,
+        query: str,
+        scores: list[float] | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Emit the no-context fallback without ever calling the model."""
+        logger.warning(
+            "rag_retrieval_zero_context tenant=%s website=%s session=%s reason=%s "
+            "vector_queries=%s top_k=%s scores=%s query=%r",
+            tenant_id,
+            website_id,
+            session.session_id,
+            reason,
+            vector_queries,
+            self._top_k,
+            scores or [],
+            query,
+        )
         response_time = time.monotonic() - started
         assistant = ChatMessage.new(
             tenant_id=tenant_id,

@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from './mount';
+
+beforeEach(() => {
+  // Force the reduced-motion path so close() hides synchronously instead of
+  // waiting out the 180ms close animation.
+  window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+});
 
 describe('mount', () => {
   it('returns a controller bound to the given widget id', () => {

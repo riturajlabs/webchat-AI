@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebChat AI — Widget demo</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #f6f7fb;
+        color: #1f2937;
+      }
+      body.dark {
+        background: #0f172a;
+        color: #e5e7eb;
+      }
+      .demo {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 24px 16px 96px;
+      }
+      header.demo-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font-size: 22px;
+        margin: 0;
+      }
+      .panel {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        margin: 20px 0;
+      }
+      fieldset {
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin: 0;
+        background: #ffffff;
+      }
+      body.dark fieldset {
+        border-color: #334155;
+        background: #1e293b;
+      }
+      legend {
+        font-size: 13px;
+        font-weight: 600;
+        padding: 0 6px;
+      }
+      label {
+        display: block;
+        font-size: 13px;
+        margin: 8px 0 4px;
+        color: #6b7280;
+      }
+      body.dark label {
+        color: #94a3b8;
+      }
+      input[type='text'],
+      input[type='url'] {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 14px;
+        background: #fafafa;
+        color: inherit;
+      }
+      body.dark input {
+        border-color: #334155;
+        background: #0f172a;
+      }
+      .swatches {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .swatch {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        cursor: pointer;
+      }
+      .swatch.active {
+        border-color: #111827;
+        outline: 2px solid #ffffff;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+      button.action {
+        padding: 8px 16px;
+        border: 1px solid #d1d5db;
+        background: #ffffff;
+        color: inherit;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      button.action.primary {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: #fff;
+      }
+      .stage {
+        border: 1px dashed #cbd5e1;
+        border-radius: 12px;
+        min-height: 320px;
+        position: relative;
+        overflow: hidden;
+        background: #ffffff;
+      }
+      body.dark .stage {
+        border-color: #334155;
+        background: #0f172a;
+      }
+      .stage-note {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #9ca3af;
+        font-size: 14px;
+        pointer-events: none;
+      }
+      .preview-frame {
+        width: 100%;
+        height: 420px;
+        border: 0;
+        border-radius: 12px;
+        margin-top: 20px;
+        background: #ffffff;
+      }
+      body.dark .preview-frame {
+        background: #0f172a;
+      }
+      details {
+        margin-top: 20px;
+        font-size: 13px;
+        color: #6b7280;
+      }
+      body.dark details {
+        color: #94a3b8;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="demo">
+      <header class="demo-header">
+        <h1>WebChat AI — Widget demo</h1>
+        <div class="row">
+          <button id="toggle-dark" class="action" type="button">Toggle dark mode</button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <fieldset>
+          <legend>Widget</legend>
+          <label for="widget-id">Widget ID</label>
+          <input id="widget-id" type="text" value="demo" autocomplete="off" />
+          <label for="api-base">API base URL</label>
+          <input id="api-base" type="url" placeholder="https://api.example.com" autocomplete="off" />
+          <div class="row">
+            <button id="mount" class="action primary" type="button">Mount widget</button>
+            <button id="destroy" class="action" type="button">Destroy</button>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Appearance (host CSS variables)</legend>
+          <label>Primary color</label>
+          <div class="swatches" id="swatches" role="group" aria-label="Primary color presets">
+            <button
+              class="swatch active"
+              type="button"
+              data-primary="#2563eb"
+              data-accent="#4f46e5"
+              style="background: #2563eb"
+              aria-label="Blue"
+            ></button>
+            <button
+              class="swatch"
+              type="button"
+              data-primary="#7c3aed"
+              data-accent="#a21caf"
+              style="background: #7c3aed"
+              aria-label="Violet"
+            ></button>
+            <button
+              class="swatch"
+              type="button"
+              data-primary="#059669"
+              data-accent="#0d9488"
+              style="background: #059669"
+              aria-label="Emerald"
+            ></button>
+            <button
+              class="swatch"
+              type="button"
+              data-primary="#e11d48"
+              data-accent="#f43f5e"
+              style="background: #e11d48"
+              aria-label="Rose"
+            ></button>
+            <button
+              class="swatch"
+              type="button"
+              data-primary="#d97706"
+              data-accent="#f59e0b"
+              style="background: #d97706"
+              aria-label="Amber"
+            ></button>
+            <button
+              class="swatch"
+              type="button"
+              data-primary="#0f172a"
+              data-accent="#334155"
+              style="background: #0f172a"
+              aria-label="Slate"
+            ></button>
+          </div>
+          <div class="row">
+            <button id="open" class="action" type="button">Open chat</button>
+            <button id="close" class="action" type="button">Close chat</button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="stage" id="stage">
+        <div class="stage-note">The widget mounts bottom-right of this viewport.</div>
+      </div>
+
+      <details>
+        <summary>Mobile preview</summary>
+        <iframe
+          class="preview-frame"
+          id="preview"
+          title="Mobile widget preview"
+          loading="lazy"
+        ></iframe>
+      </details>
+    </main>
+
+    <script type="module" src="/src/demo.ts"></script>
+  </body>
+</html>

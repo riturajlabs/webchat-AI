@@ -31,7 +31,7 @@ export interface WidgetErrorOptions {
 }
 
 const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
-  network: "Can't reach the assistant",
+  network: 'Unable to connect right now. Please try again.',
   timeout: 'The assistant took too long to respond',
   unauthorized: 'Session expired, please retry',
   limit: 'Message limit reached',

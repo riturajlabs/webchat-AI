@@ -19,6 +19,7 @@
 
 import { renderMarkdown } from '../markdown/render';
 import type { ChatMessage, ChatSource } from '../stream/chat';
+import type { WidgetPublicConfig } from '../config/types';
 import {
   createFeedbackControl,
   type FeedbackControl,
@@ -30,12 +31,25 @@ export const LONG_MESSAGE_CHARS = 1200;
 
 /** Last-rendered content per bubble, so unchanged messages skip DOM work. */
 const renderedContent = new WeakMap<HTMLElement, string>();
+/** Last-rendered timestamp label per bubble. */
+const renderedTime = new WeakMap<HTMLElement, string>();
 /** Signature of the sources currently rendered into a bubble. */
 const renderedSources = new WeakMap<HTMLElement, string>();
 /** Feedback control rendered under a bubble (keyed per bubble). */
 const renderedFeedback = new WeakMap<HTMLElement, FeedbackControl>();
 /** Message ids the user has expanded (sticky across re-renders). */
 const expanded = new Set<string>();
+
+/** Format a millisecond timestamp as the local `HH:MM` clock label. */
+export function formatTime(timestamp?: number): string {
+  if (!timestamp) {
+    return '';
+  }
+  const date = new Date(timestamp);
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
 
 /**
  * Host-provided feedback submit handler, injected by `wireMessageActions`
@@ -85,7 +99,9 @@ export function createBubble(message: ChatMessage): HTMLElement {
   bubble.dataset.messageId = message.id;
 
   if (message.role === 'user') {
-    bubble.textContent = message.content;
+    const text = document.createElement('span');
+    text.className = 'wc-bubble-text';
+    bubble.appendChild(text);
   } else {
     const content = document.createElement('div');
     content.className = 'wc-bubble-content';
@@ -106,9 +122,12 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
   bubble.classList.toggle('wc-streaming', Boolean(message.streaming));
   bubble.classList.toggle('wc-stopped', Boolean(message.stopped));
 
+  syncTime(bubble, message);
+
   if (message.role === 'user') {
-    if (renderedContent.get(bubble) !== message.content) {
-      bubble.textContent = message.content;
+    const text = bubble.querySelector<HTMLElement>('.wc-bubble-text');
+    if (text && renderedContent.get(bubble) !== message.content) {
+      text.textContent = message.content;
     }
     return;
   }
@@ -124,7 +143,7 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
     content.innerHTML = renderMarkdown(message.content);
   }
 
-  // Typing indicator while streaming with no content yet.
+  // Typing indicator while streaming/thinking with no content yet.
   syncTypingIndicator(bubble, message);
 
   // Long-message collapse (only when not streaming — content is still growing).
@@ -138,17 +157,52 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
   syncFeedback(bubble, message);
 }
 
+/** Small muted timestamp under completed messages (optional polish). */
+function syncTime(bubble: HTMLElement, message: ChatMessage): void {
+  let time = bubble.querySelector<HTMLElement>('.wc-time');
+  const visible = Boolean(message.content) && !message.streaming;
+  if (!visible) {
+    if (time) {
+      time.remove();
+    }
+    renderedTime.delete(bubble);
+    return;
+  }
+  const label = formatTime(message.createdAt);
+  if (!time) {
+    time = document.createElement('span');
+    time.className = 'wc-time';
+    time.setAttribute('aria-hidden', 'true');
+    bubble.appendChild(time);
+  }
+  if (renderedTime.get(bubble) !== label) {
+    time.textContent = label;
+    renderedTime.set(bubble, label);
+  }
+}
+
 function syncTypingIndicator(bubble: HTMLElement, message: ChatMessage): void {
   let typing = bubble.querySelector<HTMLElement>('.wc-typing');
-  if (message.streaming && message.content.length === 0) {
+  const showTyping = (message.streaming || message.thinking) && message.content.length === 0;
+  if (showTyping) {
     if (!typing) {
       typing = document.createElement('span');
       typing.className = 'wc-typing';
       typing.setAttribute('aria-hidden', 'true');
+
+      const label = document.createElement('span');
+      label.className = 'wc-typing-label';
+      label.textContent = 'AI is typing';
+
+      const dots = document.createElement('span');
+      dots.className = 'wc-typing-dots';
       for (let i = 0; i < 3; i += 1) {
-        typing.appendChild(document.createElement('i'));
+        dots.appendChild(document.createElement('i'));
       }
-      bubble.insertBefore(typing, bubble.querySelector('.wc-bubble-content'));
+
+      typing.appendChild(label);
+      typing.appendChild(dots);
+      bubble.appendChild(typing);
     }
   } else if (typing) {
     typing.remove();
@@ -274,6 +328,35 @@ export function createWelcomeBubble(message: string): HTMLElement {
   return bubble;
 }
 
+/**
+ * Rich empty state shown before the first exchange: a brand avatar next to the
+ * config-driven welcome message. The suggestion chips render separately.
+ */
+export function createEmptyState(config: WidgetPublicConfig): HTMLElement {
+  const root = document.createElement('div');
+  root.className = 'wc-empty-state';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'wc-empty-avatar';
+  avatar.setAttribute('aria-hidden', 'true');
+  if (config.logo_url) {
+    const img = document.createElement('img');
+    img.className = 'wc-empty-avatar-img';
+    img.src = config.logo_url;
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    avatar.appendChild(img);
+  } else {
+    avatar.textContent = '🤖';
+  }
+  root.appendChild(avatar);
+
+  const bubble = createWelcomeBubble(config.welcome_message);
+  root.appendChild(bubble);
+
+  return root;
+}
+
 /** Toggle `aria-busy` on the message list while a reply streams (4.1.3). */
 export function setBusy(list: HTMLElement, busy: boolean): void {
   if (busy) {
@@ -311,9 +394,11 @@ export function renderMessages(list: HTMLElement, messages: ChatMessage[]): void
     }
   }
 
-  // The welcome bubble is a placeholder shown only before the first exchange.
+  // The empty state / welcome bubble are placeholders shown only before the
+  // first exchange.
   if (messages.length > 0) {
     list.querySelector('.wc-welcome')?.remove();
+    list.querySelector('.wc-empty-state')?.remove();
   }
 
   if (stickToBottom) {

@@ -4,7 +4,7 @@ import { WidgetError, errorFromApiBody, errorFromSseCode, errorFromStatus } from
 describe('WidgetError', () => {
   it('exposes a stable user-facing message per code', () => {
     expect(new WidgetError({ code: 'network', message: 'x' }).userMessage).toBe(
-      "Can't reach the assistant",
+      'Unable to connect right now. Please try again.',
     );
     expect(new WidgetError({ code: 'widget_disabled', message: 'x' }).userMessage).toBe(
       'This assistant is currently unavailable',

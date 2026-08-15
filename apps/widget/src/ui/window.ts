@@ -64,6 +64,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   root.className = 'wc-window';
   root.setAttribute('role', 'dialog');
   root.setAttribute('aria-modal', 'true');
+  root.hidden = true; // open()/close() own visibility (animations, not just attr)
 
   const titleId = 'wc-window-title';
   root.setAttribute('aria-labelledby', titleId);
@@ -71,13 +72,46 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const header = document.createElement('header');
   header.className = 'wc-window-header';
 
-  const title = document.createElement('div');
-  title.id = titleId;
-  title.className = 'wc-window-title';
+  const headerLeft = document.createElement('div');
+  headerLeft.className = 'wc-window-header-left';
+
+  const brandIcon = document.createElement('span');
+  brandIcon.className = 'wc-brand-icon';
+  brandIcon.setAttribute('aria-hidden', 'true');
+  if (options.config.logo_url) {
+    const logo = document.createElement('img');
+    logo.className = 'wc-brand-logo';
+    logo.src = options.config.logo_url;
+    logo.alt = '';
+    logo.referrerPolicy = 'no-referrer';
+    brandIcon.appendChild(logo);
+  } else {
+    brandIcon.textContent = '🤖';
+  }
+
+  const titleBlock = document.createElement('div');
+  titleBlock.className = 'wc-window-header-text';
+
   const heading = document.createElement('span');
+  heading.id = titleId;
   heading.className = 'wc-window-brand';
   heading.textContent = options.config.branding ? 'WebChat AI' : 'Assistant';
-  title.appendChild(heading);
+
+  const statusLine = document.createElement('span');
+  statusLine.className = 'wc-window-status';
+  const statusDot = document.createElement('span');
+  statusDot.className = 'wc-status-dot';
+  statusDot.setAttribute('aria-hidden', 'true');
+  const statusText = document.createElement('span');
+  statusText.className = 'wc-status-text';
+  statusText.textContent = 'Online';
+  statusLine.appendChild(statusDot);
+  statusLine.appendChild(statusText);
+
+  titleBlock.appendChild(heading);
+  titleBlock.appendChild(statusLine);
+  headerLeft.appendChild(brandIcon);
+  headerLeft.appendChild(titleBlock);
 
   const closeButton = document.createElement('button');
   closeButton.type = 'button';
@@ -86,7 +120,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   closeButton.textContent = '×';
   closeButton.addEventListener('click', options.onClose);
 
-  header.appendChild(title);
+  header.appendChild(headerLeft);
   header.appendChild(closeButton);
 
   const status = document.createElement('div');
@@ -183,7 +217,10 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const windowApi: ChatWindow = {
     element: root,
     composer,
-    suggested,
+    // `syncSuggested` replaces the element, so expose it via a live getter.
+    get suggested() {
+      return suggested;
+    },
     syncSuggested(questions: string[]): void {
       const next = createSuggested(questions, options.onSuggested);
       suggested.replaceWith(next);
