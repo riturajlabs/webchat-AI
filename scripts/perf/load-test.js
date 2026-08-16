@@ -9,6 +9,7 @@
 //   k6 run scripts/perf/load-test.js
 // Overrides (defaults match scripts/perf/seed.py):
 //   PERF_API, PERF_EMAIL, PERF_PASSWORD, PERF_WEBSITE, PERF_QUESTION_POOL
+// Set PERF_SCENARIO=baseline|sustained10vu to run one scenario in isolation.
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
@@ -36,20 +37,30 @@ const chatError = new Counter('chat_error_events');
 const chatStreamDuration = new Trend('chat_stream_duration_ms', true);
 const chatTtfb = new Trend('chat_ttfb_ms', true);
 const chatErrorRate = new Rate('chat_error_rate');
-export const options = {
-  scenarios: {
-    baseline: {
-      executor: 'ramping-vus',
-      stages: [
-        { duration: '30s', target: 5 },
-        { duration: '30s', target: 20 },
-        { duration: '60s', target: 50 },
-        { duration: '60s', target: 50 },
-        { duration: '30s', target: 0 },
-      ],
-      gracefulRampDown: '10s',
-    },
+const scenarios = {
+  // Baseline ramp: warm-up -> peak -> soak -> ramp-down.
+  baseline: {
+    executor: 'ramping-vus',
+    stages: [
+      { duration: '30s', target: 5 },
+      { duration: '30s', target: 20 },
+      { duration: '60s', target: 50 },
+      { duration: '60s', target: 50 },
+      { duration: '30s', target: 0 },
+    ],
+    gracefulRampDown: '10s',
   },
+  // Phase 12.6 latency target: 10 concurrent users, steady state.
+  sustained10vu: {
+    executor: 'constant-vus',
+    vus: 10,
+    duration: '3m',
+  },
+};
+
+const selectedScenario = __ENV.PERF_SCENARIO;
+export const options = {
+  scenarios: selectedScenario ? { [selectedScenario]: scenarios[selectedScenario] } : scenarios,
   thresholds: {
     chat_error_rate: ['rate < 0.01'],
   },

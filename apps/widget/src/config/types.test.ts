@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { resolveApiBaseUrl, sanitizeApiBaseUrl } from './types';
+import { resolveApiBaseUrl, sanitizeApiBaseUrl, normalizeConfig, DEFAULT_CONFIG } from './types';
 
 const ENV_KEY = 'VITE_WIDGET_API_BASE_URL';
 
@@ -53,5 +53,42 @@ describe('resolveApiBaseUrl', () => {
 describe('sanitizeApiBaseUrl', () => {
   it('strips trailing slashes', () => {
     expect(sanitizeApiBaseUrl('https://api.example.com///')).toBe('https://api.example.com');
+  });
+});
+
+describe('normalizeConfig', () => {
+  it('fills every missing field from the safe defaults (older backend payloads)', () => {
+    const config = normalizeConfig({ widget_id: 'w1', welcome_message: 'Hi!' });
+    expect(config.welcome_message).toBe('Hi!');
+    expect(config.bot_name).toBe(DEFAULT_CONFIG.bot_name);
+    expect(config.width).toBe(DEFAULT_CONFIG.width);
+    expect(config.height).toBe(DEFAULT_CONFIG.height);
+    expect(config.border_radius).toBe(DEFAULT_CONFIG.border_radius);
+    expect(config.launcher_size).toBe(DEFAULT_CONFIG.launcher_size);
+    expect(config.bot_status_text).toBe(DEFAULT_CONFIG.bot_status_text);
+    expect(config.header_color).toBeNull();
+    expect(config.enabled).toBe(true);
+  });
+
+  it('keeps explicit overrides and a provided widget id', () => {
+    const config = normalizeConfig({
+      widget_id: 'w1',
+      bot_name: 'Acme Support',
+      width: '480px',
+      primary_color: '#ff0000',
+    });
+    expect(config.bot_name).toBe('Acme Support');
+    expect(config.width).toBe('480px');
+    expect(config.primary_color).toBe('#ff0000');
+    expect(config.widget_id).toBe('w1');
+  });
+
+  it('falls back to "unknown" when widget_id is missing', () => {
+    expect(normalizeConfig({}).widget_id).toBe('unknown');
+  });
+
+  it('is a no-op for already-complete configs', () => {
+    const full = normalizeConfig({ widget_id: 'w1', ...DEFAULT_CONFIG });
+    expect(full).toEqual({ widget_id: 'w1', ...DEFAULT_CONFIG });
   });
 });

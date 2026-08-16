@@ -38,6 +38,16 @@ class ChatMessage(BaseModel):
     response_time: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # Per-stage latency breakdown (milliseconds, Phase 12.6). Assistant
+    # messages record where the response time went so the performance dashboard
+    # can report average embedding/retrieval/generation latency per window.
+    latency_embedding_ms: float | None = None
+    latency_retrieval_ms: float | None = None
+    latency_context_ms: float | None = None
+    latency_history_ms: float | None = None
+    latency_generation_ms: float | None = None
+    latency_ttft_ms: float | None = None
+    latency_total_ms: float | None = None
     created_at: datetime
     schema_version: int = CHAT_SCHEMA_VERSION
 

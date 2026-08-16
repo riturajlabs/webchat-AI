@@ -12,8 +12,9 @@ import logging
 import backend.ai.registry as registry_module
 import pytest
 from backend.ai.gemini import GoogleGeminiClient
+from backend.ai.providers.cohere import CohereEmbeddingClient
 from backend.ai.providers.groq import GroqGenerationClient
-from backend.ai.providers.ollama import OllamaEmbeddingClient
+from backend.ai.providers.jina import JinaEmbeddingClient
 from backend.ai.providers.openrouter import OpenRouterGenerationClient
 from backend.ai.registry import (
     ProviderRegistry,
@@ -34,10 +35,11 @@ def _patch_settings(monkeypatch, **overrides) -> Settings:
 
 # ---- default registry ----
 
+
 def test_default_registry_registers_builtin_providers() -> None:
     registry = registry_module._registry
     assert {"gemini", "groq", "openrouter"} <= set(registry.generation_names())
-    assert {"gemini", "ollama"} <= set(registry.embedding_names())
+    assert {"gemini", "jina", "cohere"} <= set(registry.embedding_names())
 
 
 def test_build_generation_chain_resolves_configured_providers(monkeypatch) -> None:
@@ -73,11 +75,21 @@ def test_build_embedding_chain_resolves_configured_providers(monkeypatch) -> Non
     assert isinstance(chain[0], GoogleEmbeddingClient)
 
 
-def test_build_embedding_chain_includes_keyless_ollama(monkeypatch) -> None:
-    _patch_settings(monkeypatch, gemini_api_key=None)
-    chain = registry_module._registry.build_embedding_chain(["gemini", "ollama"])
+def test_build_embedding_chain_includes_keyed_jina_and_cohere(monkeypatch) -> None:
+    _patch_settings(monkeypatch, jina_api_key="jk", cohere_api_key="ck")
+    chain = registry_module._registry.build_embedding_chain(["jina", "cohere"])
+    assert len(chain) == 2
+    assert isinstance(chain[0], JinaEmbeddingClient)
+    assert isinstance(chain[1], CohereEmbeddingClient)
+
+
+def test_build_embedding_chain_skips_keyless_fallback(monkeypatch) -> None:
+    # gemini has a key; jina/cohere do not -> they are skipped gracefully and
+    # the chain still resolves to gemini (missing key must not crash the app).
+    _patch_settings(monkeypatch, gemini_api_key="gk", jina_api_key=None, cohere_api_key=None)
+    chain = registry_module._registry.build_embedding_chain(["gemini", "jina", "cohere"])
     assert len(chain) == 1
-    assert isinstance(chain[0], OllamaEmbeddingClient)
+    assert isinstance(chain[0], GoogleEmbeddingClient)
 
 
 def test_build_embedding_chain_unknown_provider_raises(monkeypatch) -> None:
@@ -87,6 +99,7 @@ def test_build_embedding_chain_unknown_provider_raises(monkeypatch) -> None:
 
 
 # ---- builder helpers ----
+
 
 def test_build_generation_fallback_respects_order(monkeypatch) -> None:
     _patch_settings(
@@ -107,12 +120,36 @@ def test_build_embedding_fallback_returns_fallback_client(monkeypatch) -> None:
     assert isinstance(fallback, FallbackEmbeddingClient)
 
 
+def test_build_embedding_chain_forwards_retry_override(monkeypatch) -> None:
+    """`max_retries` is forwarded to providers that accept it (the retry-capable
+    Gemini client) and ignored by providers that do not (jina/cohere), so the
+    chat path can stay fail-fast without changing provider defaults."""
+    _patch_settings(monkeypatch, gemini_api_key="gk", jina_api_key="jk", cohere_api_key="ck")
+    chain = registry_module._registry.build_embedding_chain(
+        ["gemini", "jina", "cohere"], max_retries=1
+    )
+    assert isinstance(chain[0], GoogleEmbeddingClient)
+    assert chain[0]._max_retries == 1
+    assert isinstance(chain[1], JinaEmbeddingClient)
+    assert isinstance(chain[2], CohereEmbeddingClient)
+
+
+def test_build_embedding_fallback_forwards_retry_override(monkeypatch) -> None:
+    _patch_settings(monkeypatch, gemini_api_key="k")
+    fallback = build_embedding_fallback(max_retries=1)
+    assert isinstance(fallback, FallbackEmbeddingClient)
+    primary = fallback._providers[0]
+    assert isinstance(primary, GoogleEmbeddingClient)
+    assert primary._max_retries == 1
+
+
 def test_build_generation_fallback_empty_when_no_keys(monkeypatch) -> None:
     _patch_settings(monkeypatch, gemini_api_key=None, groq_api_key=None, openrouter_api_key=None)
     assert build_generation_fallback()._providers == []
 
 
 # ---- dimension mismatch warning ----
+
 
 class _FakeEmbedding:
     def __init__(self, dimensions: int) -> None:
@@ -125,10 +162,10 @@ class _FakeEmbedding:
 def test_embedding_chain_warns_on_dimension_mismatch(caplog) -> None:
     registry = ProviderRegistry()
     registry.register_embedding("gemini", lambda: _FakeEmbedding(3072))
-    registry.register_embedding("ollama", lambda: _FakeEmbedding(768))
+    registry.register_embedding("jina", lambda: _FakeEmbedding(768))
 
     with caplog.at_level(logging.WARNING, logger="webchat_ai"):
-        chain = registry.build_embedding_chain(["gemini", "ollama"])
+        chain = registry.build_embedding_chain(["gemini", "jina"])
 
     assert len(chain) == 2
     assert "differing vector dimensions" in caplog.text
@@ -147,6 +184,7 @@ def test_embedding_chain_silent_on_matching_dimensions(caplog) -> None:
 
 
 # ---- custom registration ----
+
 
 def test_registry_supports_custom_providers() -> None:
     registry = ProviderRegistry()

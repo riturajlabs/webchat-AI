@@ -11,6 +11,17 @@ from backend.core.security import new_id, utcnow
 WIDGET_THEMES = {"light", "dark", "auto"}
 WIDGET_POSITIONS = {"bottom-left", "bottom-right"}
 WIDGET_FONT_SIZES = {"sm", "md", "lg"}
+# Curated theme presets (Phase 12). ids mirror `packages/themes` so the
+# dashboard and the widget SDK resolve the same palette.
+WIDGET_THEME_PRESETS = {
+    "ocean-blue",
+    "midnight-dark",
+    "emerald-support",
+    "purple-ai",
+    "minimal-white",
+    "corporate-gray",
+    "modern-gradient",
+}
 
 
 class Widget(BaseModel):
@@ -32,6 +43,7 @@ class Widget(BaseModel):
     primary_color: str = "#2563eb"
     accent_color: str = "#4f46e5"
     font_size: str = "md"
+    theme_preset: str = ""
     logo_url: str | None = None
     avatar_url: str | None = None
     welcome_message: str = "Hi! How can I help you?"
@@ -40,6 +52,22 @@ class Widget(BaseModel):
     branding: bool = True
     dark_mode: bool = False
     auto_open: bool = False
+    # Branding/branding presentation (production SaaS). Explicit nulls keep the
+    # widget theme defaults (gradient header, dark-mode tokens, system font).
+    bot_name: str = "WebChat AI"
+    bot_status_text: str = "Online"
+    header_color: str | None = None
+    secondary_color: str | None = None
+    background_color: str | None = None
+    text_color: str | None = None
+    font_family: str | None = None
+    # Window/launcher sizing (CSS lengths). Responsive rules clamp these on
+    # small viewports; stored as authored strings so the widget passes them
+    # straight through to CSS custom properties.
+    width: str = "380px"
+    height: str = "600px"
+    border_radius: str = "20px"
+    launcher_size: str = "58px"
     enabled: bool = True
     # Embed-origin allowlist (production hardening). Normalized bare hostnames
     # (optionally `*.`-wildcards); the literal `*` opts into open embedding.

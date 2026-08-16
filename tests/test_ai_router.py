@@ -3,13 +3,17 @@
 `FallbackGenerationClient`/`FallbackEmbeddingClient` wrap provider sequences;
 they must keep the existing `GenerationClient`/`EmbeddingClient` Protocol
 surfaces while adding: ordered fallback, pre-stream-only generation fallback
-(no mid-stream restart), usage of the serving provider, and `active_provider`
-observability.
+(no mid-stream restart), usage of the serving provider, `active_provider`
+observability, and - for embeddings - a dimension gate that refuses to commit
+vectors whose length differs from `EMBEDDING_DIMENSIONS`.
 """
+
+import logging
 
 import pytest
 from backend.ai.gemini import GenerationUsage
 from backend.ai.router import FallbackEmbeddingClient, FallbackGenerationClient
+from backend.core.config import Settings
 from backend.core.errors import (
     EmbeddingError,
     EmbeddingUnavailableError,
@@ -17,6 +21,21 @@ from backend.core.errors import (
     GenerationUnavailableError,
 )
 from backend.services.knowledge.embedding import EmbeddingUsage
+
+
+@pytest.fixture(autouse=True)
+def embedding_settings(monkeypatch) -> Settings:
+    """Fix the index dimension to match the stub vectors (2-dim).
+
+    The router's embedding gate reads `EMBEDDING_DIMENSIONS` at call time; the
+    stub vectors below are 2-dimensional, so a matching settings object keeps
+    the fallback tests focused on fallback behavior rather than dimensions.
+    """
+    import backend.ai.router as router_module
+
+    settings = Settings(_env_file=None, embedding_dimensions=2)
+    monkeypatch.setattr(router_module, "get_settings", lambda: settings)
+    return settings
 
 
 class StubGenerationClient:
@@ -38,9 +57,7 @@ class StubGenerationClient:
         self.raise_after = raise_after
         self.calls = 0
         self._usage = (
-            usage
-            if usage is not None
-            else GenerationUsage(input_tokens=3, output_tokens=4)
+            usage if usage is not None else GenerationUsage(input_tokens=3, output_tokens=4)
         )
 
     @property
@@ -92,6 +109,7 @@ async def _collect(stream) -> list[str]:
 
 
 # ---- FallbackGenerationClient ----
+
 
 async def test_generation_uses_first_provider_and_skips_rest() -> None:
     first = StubGenerationClient(name="first", deltas=("a", "b"))
@@ -177,6 +195,7 @@ async def test_generation_active_provider_starts_unset() -> None:
 
 # ---- FallbackEmbeddingClient ----
 
+
 async def test_embedding_uses_first_provider_and_skips_rest() -> None:
     first = StubEmbeddingClient(name="first", vector=(0.5, 0.5))
     second = StubEmbeddingClient(name="second")
@@ -223,3 +242,41 @@ async def test_embedding_non_normalized_error_propagates_without_fallback() -> N
     with pytest.raises(RuntimeError, match="internal bug"):
         await fallback.embed(["q"])
     assert second.calls == 0
+
+
+async def test_embedding_dimension_gate_rejects_mismatched_vectors() -> None:
+    first = StubEmbeddingClient(name="gemini", vector=(0.1, 0.2, 0.3))
+    second = StubEmbeddingClient(name="jina", vector=(0.4, 0.5))
+    fallback = FallbackEmbeddingClient([first, second])
+
+    # The primary succeeded but returned 3-dim vectors while the index expects
+    # 2: this must NOT fall through to jina or commit anything.
+    with pytest.raises(EmbeddingError, match="dimension mismatch.*gemini.*3.*2"):
+        await fallback.embed(["q"])
+    assert second.calls == 0
+    assert fallback.active_provider is None
+
+
+async def test_embedding_logs_selected_provider(caplog) -> None:
+    first = StubEmbeddingClient(name="gemini", vector=(0.5, 0.5))
+    fallback = FallbackEmbeddingClient([first])
+
+    with caplog.at_level(logging.INFO, logger="webchat_ai"):
+        await fallback.embed(["q"])
+
+    assert "Embedding provider selected: gemini" in caplog.text
+
+
+async def test_embedding_logs_switch_and_all_failed(caplog) -> None:
+    first = StubEmbeddingClient(name="gemini", raise_error=EmbeddingUnavailableError("down"))
+    second = StubEmbeddingClient(name="jina", raise_error=EmbeddingUnavailableError("down"))
+    fallback = FallbackEmbeddingClient([first, second])
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        with pytest.raises(EmbeddingUnavailableError):
+            await fallback.embed(["q"])
+
+    assert "gemini embedding failed" in caplog.text
+    assert "switching to jina" in caplog.text
+    assert "no providers left" in caplog.text
+    assert "All embedding providers failed" in caplog.text

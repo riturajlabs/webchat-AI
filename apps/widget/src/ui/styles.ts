@@ -14,8 +14,13 @@ export const WIDGET_STYLES = `
   :host {
     --wc-primary: #2563eb;
     --wc-accent: #4f46e5;
+    --wc-secondary: #4f46e5;
+    --wc-header-color: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
+    --wc-header-bg: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
+    --wc-header-text: #ffffff;
     --wc-font-size: 16px;
     --wc-font-size-px: 16px;
+    --wc-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     --wc-position: bottom-right;
     --wc-dark: 0;
     --wc-surface: #ffffff;
@@ -24,7 +29,15 @@ export const WIDGET_STYLES = `
     --wc-muted: #6b7280;
     --wc-border: #e5e7eb;
     --wc-bubble-bg: #f3f4f6;
-    --wc-radius: 14px;
+    --wc-user-bubble: var(--wc-primary);
+    --wc-user-text: #ffffff;
+    --wc-input-bg: var(--wc-surface-elevated);
+    --wc-scrollbar-thumb: rgba(100, 116, 139, 0.35);
+    --wc-scrollbar-track: #eef2f7;
+    --wc-radius: 20px;
+    --wc-width: 380px;
+    --wc-height: 600px;
+    --wc-launcher-size: 58px;
     --wc-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
     all: initial;
   }
@@ -37,6 +50,9 @@ export const WIDGET_STYLES = `
     --wc-muted: #9ca3af;
     --wc-border: #374151;
     --wc-bubble-bg: #1f2937;
+    --wc-input-bg: #1f2937;
+    --wc-scrollbar-thumb: rgba(148, 163, 184, 0.35);
+    --wc-scrollbar-track: #0f172a;
     --wc-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
   }
 
@@ -83,12 +99,12 @@ export const WIDGET_STYLES = `
   /* ---- Launcher --------------------------------------------------------- */
 
   .wc-launcher {
-    width: 58px;
-    height: 58px;
+    width: var(--wc-launcher-size);
+    height: var(--wc-launcher-size);
     border: none;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--wc-primary), var(--wc-accent));
-    color: #ffffff;
+    color: var(--wc-on-primary, #ffffff);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -153,8 +169,8 @@ export const WIDGET_STYLES = `
   /* ---- Chat window + open/close animations ------------------------------ */
 
   .wc-window {
-    width: min(380px, calc(100vw - 32px));
-    max-height: min(600px, calc(100vh - 32px));
+    width: min(var(--wc-width), calc(100vw - 24px));
+    height: min(var(--wc-height), calc(100vh - 24px));
     display: flex;
     flex-direction: column;
     background: var(--wc-surface);
@@ -205,8 +221,8 @@ export const WIDGET_STYLES = `
     justify-content: space-between;
     gap: 8px;
     padding: 12px 14px;
-    background: linear-gradient(135deg, var(--wc-primary), var(--wc-accent));
-    color: #ffffff;
+    background: var(--wc-header-bg, linear-gradient(135deg, var(--wc-primary), var(--wc-secondary)));
+    color: var(--wc-header-text, #ffffff);
   }
 
   .wc-window-header-left {
@@ -224,7 +240,7 @@ export const WIDGET_STYLES = `
     height: 34px;
     flex: none;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.18);
+    background: color-mix(in srgb, var(--wc-header-text, #ffffff) 18%, transparent);
     font-size: 18px;
     line-height: 1;
     overflow: hidden;
@@ -284,8 +300,7 @@ export const WIDGET_STYLES = `
     flex: none;
     border: none;
     background: transparent;
-    color: #ffffff;
-    font-size: 22px;
+    color: var(--wc-header-text, #ffffff);
     line-height: 1;
     cursor: pointer;
     width: 30px;
@@ -298,7 +313,7 @@ export const WIDGET_STYLES = `
   }
 
   .wc-close:hover {
-    background: rgba(255, 255, 255, 0.18);
+    background: color-mix(in srgb, var(--wc-header-text, #ffffff) 18%, transparent);
   }
 
   .wc-status-live,
@@ -339,6 +354,27 @@ export const WIDGET_STYLES = `
     overscroll-behavior: contain;
     touch-action: pan-y;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35))
+      var(--wc-scrollbar-track, transparent);
+  }
+
+  .wc-messages::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .wc-messages::-webkit-scrollbar-track {
+    background: var(--wc-scrollbar-track, transparent);
+  }
+
+  .wc-messages::-webkit-scrollbar-thumb {
+    background: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35));
+    border-radius: 999px;
+  }
+
+  .wc-messages::-webkit-scrollbar-thumb:hover {
+    background: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35));
+    filter: brightness(1.1);
   }
 
   .wc-empty-state {
@@ -394,8 +430,8 @@ export const WIDGET_STYLES = `
 
   .wc-role-user {
     align-self: flex-end;
-    background: var(--wc-primary);
-    color: #ffffff;
+    background: var(--wc-user-bubble, var(--wc-primary));
+    color: var(--wc-user-text, #ffffff);
     border-bottom-right-radius: 6px;
   }
 
@@ -541,26 +577,243 @@ export const WIDGET_STYLES = `
     min-height: 24px;
   }
 
-  /* Citation / source list (Phase 10). */
+  /* "Learn more" citation cards (Phase 12.7): favicon + title + derived
+     description + truncated URL + Read more, first 3 visible then expandable. */
   .wc-sources {
-    margin-top: 8px;
-    padding-top: 6px;
+    margin-top: 10px;
+    padding-top: 8px;
     border-top: 1px solid var(--wc-border);
     font-size: 0.8em;
     color: var(--wc-muted);
   }
 
   .wc-sources-label {
+    display: block;
     font-weight: 600;
+    margin-bottom: 6px;
+    color: var(--wc-text);
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   .wc-sources-list {
-    margin: 4px 0 0;
-    padding-left: 18px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35))
+      var(--wc-scrollbar-track, transparent);
   }
 
-  .wc-sources-list a {
+  .wc-sources-expanded .wc-sources-list {
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .wc-sources-list::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .wc-sources-list::-webkit-scrollbar-track {
+    background: var(--wc-scrollbar-track, transparent);
+  }
+
+  .wc-sources-list::-webkit-scrollbar-thumb {
+    background: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35));
+    border-radius: 999px;
+  }
+
+  .wc-source-item {
+    margin: 0;
+  }
+
+  /* Cards past the first three stay hidden until the toggle expands them. */
+  .wc-source-item.wc-source-hidden {
+    display: none;
+  }
+
+  .wc-sources-expanded .wc-source-item.wc-source-hidden {
+    display: block;
+  }
+
+  .wc-source-link {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    color: var(--wc-text);
+    text-decoration: none;
+    border: 1px solid var(--wc-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    background: var(--wc-surface-elevated);
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  a.wc-source-link {
+    cursor: pointer;
+  }
+
+  a.wc-source-link:hover {
+    border-color: var(--wc-primary);
+    background: color-mix(in srgb, var(--wc-primary) 6%, transparent);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  }
+
+  a.wc-source-link:hover .wc-source-title {
     color: var(--wc-primary);
+  }
+
+  a.wc-source-link:focus-visible {
+    outline: 2px solid var(--wc-primary);
+    outline-offset: 2px;
+  }
+
+  .wc-source-link-plain {
+    color: var(--wc-muted);
+  }
+
+  .wc-source-citation {
+    grid-column: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-top: 1px;
+    border-radius: 999px;
+    border: 1px solid var(--wc-border);
+    background: var(--wc-surface);
+    color: var(--wc-muted);
+    font-size: 0.7em;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .wc-source-favicon {
+    grid-column: 2;
+    width: 18px;
+    height: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+    color: var(--wc-muted);
+  }
+
+  .wc-source-favicon img {
+    width: 16px;
+    height: 16px;
+    display: block;
+    border-radius: 3px;
+  }
+
+  .wc-source-body {
+    grid-column: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .wc-source-title {
+    font-weight: 600;
+    color: var(--wc-text);
+    font-size: 0.9em;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+    transition: color 0.15s ease;
+  }
+
+  .wc-source-desc {
+    color: var(--wc-muted);
+    font-size: 0.85em;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  .wc-source-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    min-width: 0;
+  }
+
+  .wc-source-url {
+    flex: 1;
+    min-width: 0;
+    color: var(--wc-muted);
+    font-size: 0.75em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .wc-source-read {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--wc-primary);
+    font-weight: 600;
+    font-size: 0.8em;
+    white-space: nowrap;
+  }
+
+  a.wc-source-link:hover .wc-source-read {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .wc-sources-toggle {
+    display: block;
+    margin: 6px 0 0;
+    padding: 4px 2px;
+    border: none;
+    background: transparent;
+    color: var(--wc-primary);
+    font-size: 0.8em;
+    font-weight: 600;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .wc-sources-toggle:hover {
+    opacity: 0.85;
+  }
+
+  .wc-sources-toggle:focus-visible {
+    outline: 2px solid var(--wc-primary);
+    outline-offset: 2px;
+  }
+
+  /* Narrow viewports: let the "Read more" affordance wrap under the URL. */
+  @media (max-width: 420px) {
+    .wc-source-meta {
+      flex-wrap: wrap;
+    }
+
+    .wc-source-read {
+      width: 100%;
+    }
   }
 
   /* Compact thumbs-only visitor feedback under completed answers. */
@@ -582,26 +835,44 @@ export const WIDGET_STYLES = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: 32px;
+    height: 32px;
     border: 1px solid var(--wc-border);
-    border-radius: 8px;
+    border-radius: 50%;
     background: var(--wc-surface-elevated);
     color: var(--wc-muted);
     cursor: pointer;
     min-height: 24px;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease,
+      transform 0.15s ease;
   }
 
-  .wc-thumb:hover {
+  .wc-thumb svg {
+    transition: transform 0.15s ease;
+  }
+
+  .wc-thumb:hover:not(:disabled) {
     color: var(--wc-primary);
     border-color: var(--wc-primary);
+    transform: translateY(-1px);
+  }
+
+  .wc-thumb:hover:not(:disabled) svg {
+    transform: scale(1.1);
+  }
+
+  .wc-thumb:active:not(:disabled) {
+    transform: scale(0.92);
   }
 
   .wc-thumb[aria-pressed='true'] {
     color: var(--wc-primary);
     border-color: var(--wc-primary);
     background: color-mix(in srgb, var(--wc-primary) 12%, transparent);
+  }
+
+  .wc-thumb[aria-pressed='true'] svg {
+    fill: currentColor;
   }
 
   .wc-thumb:disabled {
@@ -619,12 +890,49 @@ export const WIDGET_STYLES = `
   .wc-bubble-content h4,
   .wc-bubble-content h5,
   .wc-bubble-content h6 {
-    margin: 0.5em 0 0.25em;
+    margin: 0.6em 0 0.25em;
     font-size: 1.05em;
+    line-height: 1.35;
   }
 
   .wc-bubble-content p {
-    margin: 0.3em 0;
+    margin: 0.35em 0;
+  }
+
+  .wc-bubble-content ul,
+  .wc-bubble-content ol {
+    margin: 0.4em 0 0.4em;
+    padding-left: 1.35em;
+  }
+
+  .wc-bubble-content li {
+    margin: 0.18em 0;
+  }
+
+  .wc-bubble-content blockquote {
+    margin: 0.5em 0;
+    padding: 2px 12px;
+    border-left: 3px solid var(--wc-border);
+    color: var(--wc-muted);
+  }
+
+  .wc-bubble-content table {
+    width: 100%;
+    margin: 0.5em 0;
+    border-collapse: collapse;
+    font-size: 0.92em;
+  }
+
+  .wc-bubble-content th,
+  .wc-bubble-content td {
+    border: 1px solid var(--wc-border);
+    padding: 6px 9px;
+    text-align: left;
+  }
+
+  .wc-bubble-content th {
+    background: var(--wc-surface-elevated);
+    font-weight: 600;
   }
 
   .wc-bubble-content pre {
@@ -634,6 +942,7 @@ export const WIDGET_STYLES = `
     border-radius: 8px;
     overflow-x: auto;
     font-size: 0.85em;
+    margin: 0.5em 0;
   }
 
   .wc-bubble-content .wc-code {
@@ -720,34 +1029,48 @@ export const WIDGET_STYLES = `
   /* ---- Composer ------------------------------------------------------------ */
 
   .wc-composer {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    padding: 10px 14px 14px;
+    padding: 8px 14px 10px;
     border-top: 1px solid var(--wc-border);
     background: var(--wc-surface);
+  }
+
+  /* Compact pill: the input and the send/stop actions live inside one rounded
+     container (Phase 12). Focus is reflected on the pill via :focus-within. */
+  .wc-composer-pill {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    padding: 3px 4px 3px 16px;
+    border: 1px solid var(--wc-border);
+    border-radius: 999px;
+    background: var(--wc-input-bg, var(--wc-surface-elevated));
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .wc-composer-pill:focus-within {
+    border-color: var(--wc-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-primary) 18%, transparent);
   }
 
   .wc-composer-input {
     flex: 1;
     resize: none;
-    border: 1px solid var(--wc-border);
-    border-radius: 999px;
-    padding: 10px 16px;
+    border: none;
+    background: transparent;
+    padding: 9px 0;
     font-size: 0.95em;
     font-family: inherit;
     color: var(--wc-text);
-    background: var(--wc-surface-elevated);
-    min-height: 40px;
-    max-height: 120px;
-    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    min-height: 26px;
+    max-height: 88px;
+    box-shadow: none;
+    outline: none;
   }
 
-  .wc-composer-input:focus {
-    outline: none;
-    border-color: var(--wc-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-primary) 18%, transparent);
+  .wc-composer-input::placeholder {
+    color: var(--wc-muted);
+    opacity: 0.85;
   }
 
   .wc-send {
@@ -756,19 +1079,18 @@ export const WIDGET_STYLES = `
     height: 42px;
     border: none;
     border-radius: 50%;
-    background: var(--wc-primary);
-    color: #ffffff;
+    background: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
+    color: var(--wc-on-primary, #ffffff);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     min-height: 24px;
-    transition: background 0.15s ease, transform 0.15s ease;
+    transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
   }
 
   .wc-send:hover:not(:disabled) {
-    transform: translateY(-1px);
-    background: color-mix(in srgb, var(--wc-primary) 88%, #000000);
+    transform: translateY(-1px) scale(1.04);
   }
 
   .wc-send:disabled {
@@ -783,8 +1105,8 @@ export const WIDGET_STYLES = `
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #ffffff;
+    border: 2px solid color-mix(in srgb, var(--wc-on-primary, #ffffff) 35%, transparent);
+    border-top-color: var(--wc-on-primary, #ffffff);
     animation: wc-spin 0.7s linear infinite;
   }
 
@@ -823,6 +1145,36 @@ export const WIDGET_STYLES = `
     color: #fecaca;
   }
 
+  /* ---- Footer --------------------------------------------------------------- */
+
+  .wc-window-footer {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 12px;
+    border-top: 1px solid var(--wc-border);
+    background: var(--wc-surface);
+    font-size: 0.72em;
+    color: var(--wc-muted);
+  }
+
+  .wc-footer-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--wc-primary);
+  }
+
+  .wc-footer-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .wc-footer-link:hover {
+    color: var(--wc-primary);
+  }
+
   /* ---- Reduced motion ------------------------------------------------------- */
 
   @media (prefers-reduced-motion: reduce) {
@@ -848,20 +1200,20 @@ export const WIDGET_STYLES = `
   @media (max-width: 480px) {
     .wc-shell[data-position='bottom-left'],
     .wc-shell[data-position='bottom-right'] {
-      left: 0;
-      right: 0;
-      bottom: 0;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
     }
 
     .wc-window {
-      width: 100%;
-      max-height: calc(100vh - 84px);
-      border-radius: 16px 16px 0 0;
+      width: min(var(--wc-width), calc(100vw - 24px));
+      height: min(var(--wc-height), calc(100vh - 120px));
+      border-radius: var(--wc-radius);
     }
 
     @supports (height: 100dvh) {
       .wc-window {
-        max-height: calc(100dvh - 84px);
+        height: min(var(--wc-height), calc(100dvh - 120px));
       }
     }
 

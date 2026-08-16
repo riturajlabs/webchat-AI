@@ -25,6 +25,7 @@ import {
   type FeedbackControl,
   type FeedbackSubmitPayload,
 } from './feedback';
+import { botGlyph, documentGlyph, externalLinkGlyph } from './icons';
 
 /** Assistant messages longer than this are collapsed behind "Show more". */
 export const LONG_MESSAGE_CHARS = 1200;
@@ -61,35 +62,205 @@ function isSafeSourceUrl(href: string): boolean {
   return /^(https?:\/\/|#|\/|mailto:)/i.test(href);
 }
 
-/** Render the citation/source list using DOM APIs (untrusted input → text). */
+/** Heading shown above the citation cards (friendly, not "Sources"). */
+const SOURCES_LABEL = 'Learn more';
+/** Cards visible before the "View all sources" toggle kicks in. */
+const VISIBLE_SOURCES = 3;
+/** Unique `aria-controls` ids for the expandable source lists. */
+let sourceListIdCounter = 0;
+
+/** Hostname of an http(s) URL, or null when the URL is unparsable/unsafe. */
+function hostOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.hostname;
+    }
+  } catch {
+    /* unparsable URL */
+  }
+  return null;
+}
+
+/** Favicon URL for a host (DuckDuckGo's icon service; fails quietly off-grid). */
+function faviconUrl(host: string): string {
+  return `https://icons.duckduckgo.com/ip3/${host}.ico`;
+}
+
+/** Truncate long text with an ellipsis. */
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
+}
+
+/**
+ * Short human-readable description derived from the URL path
+ * (e.g. `/courses/admission` -> "courses admission"). Falls back to the host
+ * when the path carries no meaningful words.
+ */
+function describeUrl(url: string, host: string | null): string {
+  try {
+    const path = new URL(url).pathname.replace(/[_-]+/g, ' ').replace(/\/+/g, ' ').trim();
+    const text = path.split(/\s+/).filter(Boolean).join(' ');
+    if (text) {
+      return truncate(text, 90);
+    }
+  } catch {
+    /* unparsable URL */
+  }
+  return host ? truncate(host, 90) : '';
+}
+
+/** Compact display URL: no protocol, no www, trailing slash stripped. */
+function displayUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    let out = parsed.hostname.replace(/^www\./, '');
+    const path = parsed.pathname.replace(/\/+$/, '');
+    if (path) {
+      out += path;
+    }
+    return out;
+  } catch {
+    return url;
+  }
+}
+
+/** Favicon cell: provider icon when a host exists, else a document glyph. */
+function createFavicon(host: string | null): HTMLElement {
+  const cell = document.createElement('span');
+  cell.className = 'wc-source-favicon';
+  cell.setAttribute('aria-hidden', 'true');
+  if (host) {
+    const img = document.createElement('img');
+    img.src = faviconUrl(host);
+    img.alt = '';
+    img.referrerPolicy = 'no-referrer';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    img.addEventListener('error', () => img.remove());
+    cell.appendChild(img);
+  } else {
+    cell.appendChild(documentGlyph());
+  }
+  return cell;
+}
+
+/**
+ * One "Learn more" card: citation badge + favicon + title + derived
+ * description + truncated URL + "Read more" affordance. The whole card is the
+ * link when the URL is safe; unsafe schemes render a non-interactive card
+ * (title only) so nothing dangerous ever becomes clickable.
+ */
+function createSourceCard(source: ChatSource, index: number): HTMLElement {
+  const item = document.createElement('li');
+  item.className = 'wc-source-item';
+  if (index >= VISIBLE_SOURCES) {
+    item.classList.add('wc-source-hidden');
+  }
+
+  const url = source.url ?? '';
+  const safeUrl = Boolean(url) && isSafeSourceUrl(url);
+  const host = safeUrl ? hostOf(url) : null;
+  const citation = String(source.citation ?? index + 1);
+  const title = source.title || host || url || 'Source';
+  const description = safeUrl ? describeUrl(url, host) : '';
+
+  const badge = document.createElement('span');
+  badge.className = 'wc-source-citation';
+  badge.textContent = citation;
+
+  const favicon = createFavicon(host);
+
+  const body = document.createElement('span');
+  body.className = 'wc-source-body';
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'wc-source-title';
+  titleEl.textContent = title;
+  body.appendChild(titleEl);
+
+  if (description && description !== title) {
+    const descEl = document.createElement('span');
+    descEl.className = 'wc-source-desc';
+    descEl.textContent = description;
+    body.appendChild(descEl);
+  }
+
+  if (safeUrl) {
+    const meta = document.createElement('span');
+    meta.className = 'wc-source-meta';
+
+    const urlEl = document.createElement('span');
+    urlEl.className = 'wc-source-url';
+    urlEl.textContent = displayUrl(url);
+
+    const read = document.createElement('span');
+    read.className = 'wc-source-read';
+    read.textContent = 'Read more';
+    read.appendChild(externalLinkGlyph());
+
+    meta.appendChild(urlEl);
+    meta.appendChild(read);
+    body.appendChild(meta);
+  }
+
+  if (safeUrl) {
+    const link = document.createElement('a');
+    link.className = 'wc-source-link';
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.appendChild(badge);
+    link.appendChild(favicon);
+    link.appendChild(body);
+    item.appendChild(link);
+  } else {
+    const card = document.createElement('div');
+    card.className = 'wc-source-link wc-source-link-plain';
+    card.appendChild(badge);
+    card.appendChild(favicon);
+    card.appendChild(body);
+    item.appendChild(card);
+  }
+  return item;
+}
+
+/** "View all sources (N)" / "Show fewer" toggle for lists longer than 3. */
+function createSourcesToggle(block: HTMLElement, list: HTMLElement, total: number): void {
+  const hidden = total - VISIBLE_SOURCES;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'wc-sources-toggle';
+  button.textContent = `View all sources (${hidden})`;
+  button.setAttribute('aria-expanded', 'false');
+  button.setAttribute('aria-controls', list.id);
+  button.addEventListener('click', () => {
+    const open = block.classList.toggle('wc-sources-expanded');
+    button.textContent = open ? 'Show fewer' : `View all sources (${hidden})`;
+    button.setAttribute('aria-expanded', String(open));
+  });
+  block.appendChild(button);
+}
+
+/** Render the "Learn more" citation cards (untrusted input -> text). */
 export function renderSources(sources: ChatSource[]): HTMLElement {
   const block = document.createElement('div');
   block.className = 'wc-sources';
 
   const label = document.createElement('span');
   label.className = 'wc-sources-label';
-  label.textContent = 'Sources';
+  label.textContent = SOURCES_LABEL;
   block.appendChild(label);
 
   const list = document.createElement('ol');
   list.className = 'wc-sources-list';
-  for (const source of sources) {
-    const item = document.createElement('li');
-    const citation = source.citation ? `${source.citation}. ` : '';
-    const title = source.title || source.url || 'Source';
-    if (source.url && isSafeSourceUrl(source.url)) {
-      const link = document.createElement('a');
-      link.href = source.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = `${citation}${title}`;
-      item.appendChild(link);
-    } else {
-      item.textContent = `${citation}${title}`;
-    }
-    list.appendChild(item);
-  }
+  list.id = `wc-sources-list-${++sourceListIdCounter}`;
+  sources.forEach((source, index) => list.appendChild(createSourceCard(source, index)));
   block.appendChild(list);
+
+  if (sources.length > VISIBLE_SOURCES) {
+    createSourcesToggle(block, list, sources.length);
+  }
   return block;
 }
 
@@ -192,7 +363,7 @@ function syncTypingIndicator(bubble: HTMLElement, message: ChatMessage): void {
 
       const label = document.createElement('span');
       label.className = 'wc-typing-label';
-      label.textContent = 'AI is typing';
+      label.textContent = 'AI is thinking';
 
       const dots = document.createElement('span');
       dots.className = 'wc-typing-dots';
@@ -339,15 +510,16 @@ export function createEmptyState(config: WidgetPublicConfig): HTMLElement {
   const avatar = document.createElement('div');
   avatar.className = 'wc-empty-avatar';
   avatar.setAttribute('aria-hidden', 'true');
-  if (config.logo_url) {
+  const avatarUrl = config.avatar_url || config.logo_url;
+  if (avatarUrl) {
     const img = document.createElement('img');
     img.className = 'wc-empty-avatar-img';
-    img.src = config.logo_url;
+    img.src = avatarUrl;
     img.alt = '';
     img.referrerPolicy = 'no-referrer';
     avatar.appendChild(img);
   } else {
-    avatar.textContent = '🤖';
+    avatar.appendChild(botGlyph());
   }
   root.appendChild(avatar);
 

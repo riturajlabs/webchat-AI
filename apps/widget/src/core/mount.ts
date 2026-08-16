@@ -72,6 +72,49 @@ export interface WidgetHostOptions extends WidgetOptions {
 /** How long the "AI is typing" indicator shows before a conversational reply. */
 export const INTENT_REPLY_DELAY_MS = 700;
 
+/**
+ * Per-turn latency profiling (Phase 12). Logs time-to-first-token and total
+ * turn duration via `console.debug` (silent unless the embed/page enables
+ * debug logging), including the backend's own timing breakdown when the SSE
+ * `done` event carries it (`perf_timing_log_enabled`).
+ */
+export function profileTurn(widgetId: string) {
+  const start = performance.now();
+  let firstTokenLogged = false;
+  return {
+    markFirstToken(): void {
+      if (firstTokenLogged) {
+        return;
+      }
+      firstTokenLogged = true;
+      console.debug(
+        `[webchat:${widgetId}] first token in ${Math.round(performance.now() - start)}ms`,
+      );
+    },
+    complete(timing?: {
+      embedding_ms?: number;
+      retrieval_ms?: number;
+      generation_ms?: number;
+      total_ms?: number;
+    }): void {
+      const elapsed = Math.round(performance.now() - start);
+      const backend = timing?.total_ms != null ? `, backend total ${timing.total_ms}ms` : '';
+      const parts = ['embedding', 'retrieval', 'generation']
+        .filter(
+          (phase) =>
+            timing && (timing as Record<string, number | undefined>)[`${phase}_ms`] != null,
+        )
+        .map(
+          (phase) => `${phase} ${(timing as Record<string, number | undefined>)[`${phase}_ms`]}ms`,
+        )
+        .join(', ');
+      console.debug(
+        `[webchat:${widgetId}] turn complete in ${elapsed}ms${backend}${parts ? ` (${parts})` : ''}`,
+      );
+    },
+  };
+}
+
 export interface WidgetController {
   readonly widgetId: string;
   readonly apiBaseUrl: string;
@@ -272,6 +315,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
 
     const turnId = conversation.startAssistantTurn();
+    const profiler = profileTurn(widgetId);
 
     const client = {
       getToken: () => session.ensureFresh(),
@@ -285,6 +329,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
         }
       },
       onDelta: (delta: string) => {
+        profiler.markFirstToken();
         // The backend streams its zero-context fallback as one delta; rewrite
         // it into the friendlier prompt before it ever renders. A model-side
         // fallback in multiple deltas is caught by the `done.fallback` guard.
@@ -296,7 +341,18 @@ export function mount(options: WidgetHostOptions): WidgetController {
           conversation.appendDelta(turnId, delta);
         }
       },
-      onDone: (done: { session_id?: string; message_id?: string; fallback?: unknown }) => {
+      onDone: (done: {
+        session_id?: string;
+        message_id?: string;
+        fallback?: unknown;
+        timing?: {
+          embedding_ms?: number;
+          retrieval_ms?: number;
+          generation_ms?: number;
+          total_ms?: number;
+        };
+      }) => {
+        profiler.complete(done.timing);
         if (done.session_id) {
           conversation.setSessionId(done.session_id);
         }
@@ -435,6 +491,13 @@ export function mount(options: WidgetHostOptions): WidgetController {
   }
 
   let prevStreaming = false;
+  /**
+   * Last conversation revision already rendered into the message list. The
+   * bubble reconciliation (`renderMessages`) is cheap per-change, but every
+   * `syncRenderer` pass would otherwise re-scan the whole list; gating on the
+   * revision skips that work for purely visual syncs (open/close, offline).
+   */
+  let lastRenderedRevision = -1;
 
   function syncRenderer() {
     const offline = isOffline();
@@ -454,7 +517,10 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
 
     const state = conversation.getState();
-    renderMessagesNow();
+    if (state.revision !== lastRenderedRevision) {
+      renderMessagesNow();
+      lastRenderedRevision = state.revision;
+    }
     setBusy(messageList, state.streaming);
     // Stop appears only for backend turns; "thinking" turns (greetings etc.)
     // keep the Send button and show the spinner instead.
@@ -477,8 +543,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
     applyTheme(host, config);
     shell.setAttribute('data-position', config.position);
     windowElement.element.setAttribute('data-position', config.position);
-    windowElement.composer.input.placeholder = config.placeholder;
+    windowElement.syncConfig(config);
     windowElement.syncSuggested(config.suggested_questions);
+    // Force the message list to re-render: the empty state / welcome bubble
+    // are built from the config.
+    lastRenderedRevision = -1;
     if (config.auto_open && !prefersReducedMotion()) {
       controller.open();
     }

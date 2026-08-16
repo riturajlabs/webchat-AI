@@ -4,7 +4,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,10 +34,30 @@ from backend.api.routes.widget import router as widget_router
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import AppError
-from backend.core.logging import configure_logging, get_request_id
+from backend.core.logging import configure_logging
 from backend.core.redis import close_redis
 
 logger = logging.getLogger("webchat_ai")
+
+
+def _cors_headers_for(request: Request) -> dict[str, str]:
+    """Mirror the dashboard CORS policy for a response built outside CORSMiddleware.
+
+    Starlette routes a generic `@app.exception_handler(Exception)` to the
+    outermost `ServerErrorMiddleware`, which sends its response with the raw
+    server `send` - it never passes back through `CORSMiddleware`. Without
+    explicit headers here, an unhandled 500 is invisible to browsers, which
+    report a confusing "blocked by CORS policy" instead of the real error.
+    """
+    settings = get_settings()
+    origin = request.headers.get("origin")
+    if not origin or origin not in settings.cors_origins:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
 
 
 @asynccontextmanager
@@ -124,15 +144,21 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(Exception)
-    async def unhandled_exception_handler(_: FastAPI, exc: Exception) -> JSONResponse:
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception(
             "Unhandled error",
             exc_info=exc,
-            extra={"request_id": get_request_id()},
+            extra={
+                # The request-ID context is already reset by the time this
+                # handler runs (it is invoked outside RequestIDMiddleware), so
+                # recover the value from the propagated header for correlation.
+                "request_id": request.headers.get("x-request-id", "-"),
+            },
         )
         return JSONResponse(
             status_code=500,
             content={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error."}},
+            headers=_cors_headers_for(request),
         )
 
     app.include_router(health_router, prefix="/api")

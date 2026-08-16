@@ -205,7 +205,7 @@ def get_rag_service(
     return RagService(
         websites=MongoWebsiteRepository(db),
         vector=get_vector_repository(db),
-        embedder=build_embedding_fallback(),
+        embedder=build_embedding_fallback(max_retries=get_settings().chat_embedding_max_retries),
         generation=build_generation_fallback(),
         sessions=MongoChatSessionRepository(db),
         messages=MongoChatMessageRepository(db),

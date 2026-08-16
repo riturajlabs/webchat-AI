@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.models.widget import (
     WIDGET_FONT_SIZES,
     WIDGET_POSITIONS,
+    WIDGET_THEME_PRESETS,
     WIDGET_THEMES,
 )
 from backend.utils.origin import normalize_allowed_domains
@@ -32,11 +33,19 @@ MAX_PLACEHOLDER_LENGTH = 120
 MAX_SUGGESTED_QUESTIONS = 5
 MAX_SUGGESTED_QUESTION_LENGTH = 200
 MAX_WIDGET_URL_LENGTH = 2048
+# Phase 11.6 branding presentation limits.
+MAX_BOT_NAME_LENGTH = 60
+MAX_BOT_STATUS_LENGTH = 40
+MAX_FONT_FAMILY_LENGTH = 100
+MAX_SIZE_LENGTH = 20
 # Embed-origin allowlist bounds (production hardening).
 MAX_ALLOWED_DOMAINS = 50
 MAX_ALLOWED_DOMAIN_LENGTH = 253
 
 _HTML_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+# CSS length for window/launcher sizing (safe subset: the widget passes the
+# string straight through to CSS custom properties).
+_CSS_LENGTH = re.compile(r"^\d+(?:\.\d+)?(?:px|em|rem|vh|vw|%)$")
 
 WIDGET_THEMES_ALLOWED = WIDGET_THEMES
 WIDGET_POSITIONS_ALLOWED = WIDGET_POSITIONS
@@ -61,6 +70,8 @@ class WidgetConfigUpdate(BaseModel):
     primary_color: str | None = None
     accent_color: str | None = None
     font_size: WidgetFontSize | None = None
+    # Curated theme preset ("" = classic fully-custom setup).
+    theme_preset: str | None = Field(default=None, max_length=32)
     logo_url: str | None = Field(default=None, max_length=MAX_WIDGET_URL_LENGTH)
     avatar_url: str | None = Field(default=None, max_length=MAX_WIDGET_URL_LENGTH)
     welcome_message: str | None = Field(default=None, max_length=MAX_WELCOME_MESSAGE_LENGTH)
@@ -69,6 +80,18 @@ class WidgetConfigUpdate(BaseModel):
     branding: bool | None = None
     dark_mode: bool | None = None
     auto_open: bool | None = None
+    # Branding presentation (Phase 11.6). Nulls leave the widget defaults.
+    bot_name: str | None = Field(default=None, max_length=MAX_BOT_NAME_LENGTH)
+    bot_status_text: str | None = Field(default=None, max_length=MAX_BOT_STATUS_LENGTH)
+    header_color: str | None = None
+    secondary_color: str | None = None
+    background_color: str | None = None
+    text_color: str | None = None
+    font_family: str | None = Field(default=None, max_length=MAX_FONT_FAMILY_LENGTH)
+    width: str | None = Field(default=None, max_length=MAX_SIZE_LENGTH)
+    height: str | None = Field(default=None, max_length=MAX_SIZE_LENGTH)
+    border_radius: str | None = Field(default=None, max_length=MAX_SIZE_LENGTH)
+    launcher_size: str | None = Field(default=None, max_length=MAX_SIZE_LENGTH)
     enabled: bool | None = None
     # Embed-origin allowlist. Entries are normalized bare hostnames (optionally
     # `*.`-wildcards); the literal `*` opts into open embedding. An empty list
@@ -76,20 +99,75 @@ class WidgetConfigUpdate(BaseModel):
     # configured - it never means "any origin".
     allowed_domains: list[str] | None = None
 
-    @field_validator("primary_color", "accent_color")
+    @field_validator(
+        "primary_color",
+        "accent_color",
+        "header_color",
+        "secondary_color",
+        "background_color",
+        "text_color",
+    )
     @classmethod
-    def _validate_hex_color(cls, value: str | None) -> str | None:
+    def _validate_color(cls, value: str | None) -> str | None:
         if value is None:
             return value
         cleaned = value.strip()
+        if not cleaned:
+            # An empty string means "clear the override" (revert to default).
+            return None
         if not _HTML_HEX_COLOR.match(cleaned):
             raise ValueError("colors must be a hex value like #2563eb")
         return cleaned
 
-    @field_validator("welcome_message", "placeholder")
+    @field_validator("welcome_message", "placeholder", "bot_status_text")
     @classmethod
     def _strip_text(cls, value: str | None) -> str | None:
         return value.strip() if value is not None else None
+
+    @field_validator("bot_name")
+    @classmethod
+    def _validate_bot_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("bot name must not be blank")
+        return cleaned
+
+    @field_validator("font_family")
+    @classmethod
+    def _strip_font_family(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @field_validator("theme_preset")
+    @classmethod
+    def _validate_theme_preset(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            # An empty string means "clear the preset" (back to classic).
+            return ""
+        if cleaned not in WIDGET_THEME_PRESETS:
+            raise ValueError("unknown theme preset")
+        return cleaned
+
+    @field_validator("width", "height", "border_radius", "launcher_size")
+    @classmethod
+    def _validate_css_length(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not _CSS_LENGTH.match(cleaned):
+            raise ValueError("size must be a CSS length like 420px, 90%, 0.5rem or 24px")
+        return cleaned
 
     @field_validator("logo_url", "avatar_url")
     @classmethod
@@ -169,6 +247,7 @@ class WidgetPublicConfig(BaseModel):
     primary_color: str
     accent_color: str
     font_size: str
+    theme_preset: str = ""
     logo_url: str | None = None
     avatar_url: str | None = None
     welcome_message: str
@@ -177,6 +256,18 @@ class WidgetPublicConfig(BaseModel):
     branding: bool
     dark_mode: bool
     auto_open: bool
+    # Phase 11.6 branding presentation (nullable fields revert to defaults).
+    bot_name: str = "WebChat AI"
+    bot_status_text: str = "Online"
+    header_color: str | None = None
+    secondary_color: str | None = None
+    background_color: str | None = None
+    text_color: str | None = None
+    font_family: str | None = None
+    width: str = "380px"
+    height: str = "600px"
+    border_radius: str = "20px"
+    launcher_size: str = "58px"
 
     @classmethod
     def from_widget(cls, widget: Any) -> "WidgetPublicConfig":
@@ -188,6 +279,7 @@ class WidgetPublicConfig(BaseModel):
             primary_color=widget.primary_color,
             accent_color=widget.accent_color,
             font_size=widget.font_size,
+            theme_preset=widget.theme_preset,
             logo_url=widget.logo_url,
             avatar_url=widget.avatar_url,
             welcome_message=widget.welcome_message,
@@ -196,6 +288,17 @@ class WidgetPublicConfig(BaseModel):
             branding=widget.branding,
             dark_mode=widget.dark_mode,
             auto_open=widget.auto_open,
+            bot_name=widget.bot_name,
+            bot_status_text=widget.bot_status_text,
+            header_color=widget.header_color,
+            secondary_color=widget.secondary_color,
+            background_color=widget.background_color,
+            text_color=widget.text_color,
+            font_family=widget.font_family,
+            width=widget.width,
+            height=widget.height,
+            border_radius=widget.border_radius,
+            launcher_size=widget.launcher_size,
         )
 
 

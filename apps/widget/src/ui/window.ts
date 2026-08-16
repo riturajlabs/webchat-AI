@@ -18,8 +18,8 @@
 import type { WidgetPublicConfig } from '../config/types';
 import { createComposer } from './composer';
 import type { ChatComposer } from './composer';
+import { botGlyph, closeIcon, footerLogo } from './icons';
 import { createSuggested } from './suggested';
-
 export interface ChatWindowOptions {
   config: WidgetPublicConfig;
   messagesElement: HTMLElement;
@@ -48,6 +48,8 @@ export interface ChatWindow {
   setStreaming(streaming: boolean): void;
   /** Announce status text via the visually-hidden live region (Phase 10). */
   setStatus(text: string): void;
+  /** Re-apply branding/config to the header, composer placeholder and footer. */
+  syncConfig(config: WidgetPublicConfig): void;
   /** Move focus to the composer (called when the window opens). */
   focusComposer(): void;
   /** Trap focus inside the window + focus the composer. */
@@ -78,16 +80,20 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const brandIcon = document.createElement('span');
   brandIcon.className = 'wc-brand-icon';
   brandIcon.setAttribute('aria-hidden', 'true');
-  if (options.config.logo_url) {
-    const logo = document.createElement('img');
-    logo.className = 'wc-brand-logo';
-    logo.src = options.config.logo_url;
-    logo.alt = '';
-    logo.referrerPolicy = 'no-referrer';
-    brandIcon.appendChild(logo);
-  } else {
-    brandIcon.textContent = '🤖';
-  }
+  const renderBrandIcon = (config: WidgetPublicConfig): void => {
+    brandIcon.replaceChildren();
+    if (config.avatar_url || config.logo_url) {
+      const logo = document.createElement('img');
+      logo.className = 'wc-brand-logo';
+      logo.src = config.avatar_url || (config.logo_url as string);
+      logo.alt = '';
+      logo.referrerPolicy = 'no-referrer';
+      brandIcon.appendChild(logo);
+    } else {
+      brandIcon.appendChild(botGlyph());
+    }
+  };
+  renderBrandIcon(options.config);
 
   const titleBlock = document.createElement('div');
   titleBlock.className = 'wc-window-header-text';
@@ -95,7 +101,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const heading = document.createElement('span');
   heading.id = titleId;
   heading.className = 'wc-window-brand';
-  heading.textContent = options.config.branding ? 'WebChat AI' : 'Assistant';
+  heading.textContent = options.config.bot_name;
 
   const statusLine = document.createElement('span');
   statusLine.className = 'wc-window-status';
@@ -104,7 +110,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   statusDot.setAttribute('aria-hidden', 'true');
   const statusText = document.createElement('span');
   statusText.className = 'wc-status-text';
-  statusText.textContent = 'Online';
+  statusText.textContent = options.config.bot_status_text;
   statusLine.appendChild(statusDot);
   statusLine.appendChild(statusText);
 
@@ -117,11 +123,20 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   closeButton.type = 'button';
   closeButton.className = 'wc-close';
   closeButton.setAttribute('aria-label', 'Close chat window');
-  closeButton.textContent = '×';
+  closeButton.appendChild(closeIcon());
   closeButton.addEventListener('click', options.onClose);
 
   header.appendChild(headerLeft);
   header.appendChild(closeButton);
+
+  const footer = document.createElement('footer');
+  footer.className = 'wc-window-footer';
+  footer.setAttribute('role', 'contentinfo');
+  footer.hidden = !options.config.branding;
+  const footerText = document.createElement('span');
+  footerText.textContent = 'Powered by WebChat AI';
+  footer.appendChild(footerLogo());
+  footer.appendChild(footerText);
 
   const status = document.createElement('div');
   status.className = 'wc-status-live';
@@ -169,6 +184,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   root.appendChild(messages);
   root.appendChild(suggested);
   root.appendChild(composer.element);
+  root.appendChild(footer);
 
   // --- Focus management (WCAG 2.1.2, 2.4.3) --------------------------------
 
@@ -240,6 +256,13 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
     },
     setStatus(text: string): void {
       status.textContent = text;
+    },
+    syncConfig(config: WidgetPublicConfig): void {
+      heading.textContent = config.bot_name;
+      statusText.textContent = config.bot_status_text;
+      renderBrandIcon(config);
+      composer.input.placeholder = config.placeholder;
+      footer.hidden = !config.branding;
     },
     focusComposer(): void {
       composer.focus();

@@ -72,6 +72,10 @@ export function createComposer(options: ComposerOptions): ChatComposer {
   const wrapper = document.createElement('div');
   wrapper.className = 'wc-composer';
 
+  // Compact pill: input + send/stop share one rounded container (Phase 12).
+  const pill = document.createElement('div');
+  pill.className = 'wc-composer-pill';
+
   const input = document.createElement('textarea');
   input.className = 'wc-composer-input';
   input.placeholder = options.placeholder;
@@ -128,9 +132,11 @@ export function createComposer(options: ComposerOptions): ChatComposer {
   sendButton.addEventListener('click', submit);
   stopButton.addEventListener('click', () => options.onStop?.());
 
-  wrapper.appendChild(input);
-  wrapper.appendChild(sendButton);
-  wrapper.appendChild(stopButton);
+  pill.appendChild(input);
+  pill.appendChild(sendButton);
+  pill.appendChild(spinner);
+  pill.appendChild(stopButton);
+  wrapper.appendChild(pill);
 
   const setDisabled = (disabled: boolean): void => {
     locked = disabled;

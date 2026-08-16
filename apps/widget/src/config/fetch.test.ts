@@ -14,6 +14,7 @@ const CONFIG: WidgetPublicConfig = {
   primary_color: '#2563eb',
   accent_color: '#f59e0b',
   font_size: 'md',
+  theme_preset: '',
   logo_url: null,
   avatar_url: null,
   welcome_message: 'Hi!',
@@ -22,6 +23,17 @@ const CONFIG: WidgetPublicConfig = {
   branding: true,
   dark_mode: false,
   auto_open: false,
+  bot_name: 'WebChat AI',
+  bot_status_text: 'Online',
+  header_color: null,
+  secondary_color: null,
+  background_color: null,
+  text_color: null,
+  font_family: null,
+  width: '380px',
+  height: '600px',
+  border_radius: '20px',
+  launcher_size: '58px',
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

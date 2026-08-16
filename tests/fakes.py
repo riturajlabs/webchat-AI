@@ -59,6 +59,14 @@ from backend.services.billing.payments.base import (
 from backend.services.mail.base import EmailMessage
 
 
+def _avg_ms(values) -> float | None:
+    """Mean of non-None millisecond durations (None when there are none)."""
+    present = [v for v in values if v is not None]
+    if not present:
+        return None
+    return round(sum(present) / len(present), 3)
+
+
 class FakeUserRepository:
     def __init__(self) -> None:
         self._users: dict[str, User] = {}
@@ -751,6 +759,7 @@ class FakeVectorRepository:
 
     def __init__(self) -> None:
         self._chunks: dict[tuple[str, str, str, int], KnowledgeChunk] = {}
+        self.search_calls = 0
 
     @property
     def chunks(self) -> list[KnowledgeChunk]:
@@ -795,6 +804,7 @@ class FakeVectorRepository:
         *,
         top_k: int = 5,
     ) -> list[VectorSearchResult]:
+        self.search_calls += 1
         candidates = [
             chunk
             for chunk in self._chunks.values()
@@ -1621,8 +1631,8 @@ class FakeAnalyticsRepository:
         website_id: str | None = None,
         since: datetime,
     ) -> ResponseMetricsRow:
-        response_times = [
-            m.response_time
+        messages = [
+            m
             for m in self._messages.messages
             if m.tenant_id == tenant_id
             and m.role == CHAT_ROLE_ASSISTANT
@@ -1630,12 +1640,16 @@ class FakeAnalyticsRepository:
             and m.created_at >= since
             and (website_id is None or m.website_id == website_id)
         ]
-        if not response_times:
+        if not messages:
             return ResponseMetricsRow(None, None, None)
+        response_times = [m.response_time for m in messages if m.response_time is not None]
         return ResponseMetricsRow(
             avg_response_time=round(sum(response_times) / len(response_times), 3),
             fastest_response_time=round(min(response_times), 3),
             slowest_response_time=round(max(response_times), 3),
+            avg_embedding_ms=_avg_ms(m.latency_embedding_ms for m in messages),
+            avg_retrieval_ms=_avg_ms(m.latency_retrieval_ms for m in messages),
+            avg_generation_ms=_avg_ms(m.latency_generation_ms for m in messages),
         )
 
     async def overview(

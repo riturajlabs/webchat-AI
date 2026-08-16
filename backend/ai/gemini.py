@@ -63,6 +63,7 @@ class GoogleGeminiClient:
         max_output_tokens: int | None = None,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
+        first_token_timeout_seconds: float | None = None,
         genai_client: Any | None = None,
     ) -> None:
         settings = get_settings()
@@ -71,6 +72,11 @@ class GoogleGeminiClient:
         self._temperature = temperature if temperature is not None else settings.chat_temperature
         self._timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else settings.generation_timeout_seconds
+        )
+        self._first_token_timeout_seconds = (
+            first_token_timeout_seconds
+            if first_token_timeout_seconds is not None
+            else settings.generation_first_token_timeout_seconds
         )
         self._genai_client = genai_client
         self._usage = GenerationUsage()
@@ -117,13 +123,33 @@ class GoogleGeminiClient:
             # that *returns* the stream, so it must be awaited before
             # iteration.
             stream = await self._client().aio.models.generate_content_stream(**request)
+            first_chunk = True
             while True:
                 try:
+                    # The FIRST token has a tighter bound: a provider that
+                    # stalls before the first delta should not burn the whole
+                    # per-chunk timeout - it is treated as unavailable so the
+                    # Phase 9 router falls through to the next provider.
                     chunk = await asyncio.wait_for(
-                        stream.__anext__(), timeout=self._timeout_seconds
+                        stream.__anext__(),
+                        timeout=(
+                            self._first_token_timeout_seconds
+                            if first_chunk
+                            else self._timeout_seconds
+                        ),
                     )
+                except TimeoutError as exc:
+                    if first_chunk:
+                        raise GenerationUnavailableError(
+                            "Gemini did not produce a first token within "
+                            f"{self._first_token_timeout_seconds}s."
+                        ) from exc
+                    raise GenerationError(
+                        f"Gemini answer stream stalled for {self._timeout_seconds}s."
+                    ) from exc
                 except StopAsyncIteration:
                     break
+                first_chunk = False
                 text = getattr(chunk, "text", None)
                 if text:
                     yield text

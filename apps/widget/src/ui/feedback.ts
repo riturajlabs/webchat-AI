@@ -35,18 +35,17 @@ function thumbIcon(direction: 'up' | 'down'): SVGElement {
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('width', '16');
   svg.setAttribute('height', '16');
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('stroke', 'none');
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('focusable', 'false');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute(
     'd',
     direction === 'up'
-      ? 'M2 21h15v-2l.5-4.5H21a2 2 0 0 0 2-2v-1.5a2 2 0 0 0-.2-.9L19.5 5.7A3 3 0 0 0 16.8 4H8.8a3 3 0 0 0-2.6 1.5L3 11v1.5L1.2 15V19a2 2 0 0 0 .8 2z' +
-          ' M1 19a2 2 0 0 0 2 2h2v-8H3a2 2 0 0 0-2 2v4z'
-      : 'M22 3H7v2l.5 4.5H3a2 2 0 0 0-2 2v1.5a2 2 0 0 0 .2.9L4.5 18.3a3 3 0 0 0 2.7 1.7h8a3 3 0 0 0 2.6-1.5L21 13v-1.5L22.8 9V5a2 2 0 0 0-.8-2z' +
-          ' M23 5a2 2 0 0 0-2-2h-2v8h2a2 2 0 0 0 2-2V5z',
+      ? 'M1 21h4V9H1v12zM23 10c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'
+      : 'M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z',
   );
-  path.setAttribute('fill', 'currentColor');
   svg.appendChild(path);
   return svg;
 }
@@ -70,10 +69,12 @@ export function createFeedbackControl(options: FeedbackControlOptions): Feedback
 
   const upButton = button('This answer was helpful', 'wc-thumb wc-thumb-up');
   upButton.setAttribute('aria-pressed', 'false');
+  upButton.title = 'This answer was helpful';
   upButton.appendChild(thumbIcon('up'));
 
   const downButton = button('This answer was not helpful', 'wc-thumb wc-thumb-down');
   downButton.setAttribute('aria-pressed', 'false');
+  downButton.title = 'This answer was not helpful';
   downButton.appendChild(thumbIcon('down'));
 
   thumbs.appendChild(upButton);

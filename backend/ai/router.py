@@ -34,7 +34,11 @@ from backend.core.errors import (
     GenerationError,
     GenerationUnavailableError,
 )
-from backend.services.knowledge.embedding import EmbeddingClient, EmbeddingUsage
+from backend.services.knowledge.embedding import (
+    EmbeddingClient,
+    EmbeddingUsage,
+    ensure_vector_dimensions,
+)
 
 logger = logging.getLogger("webchat_ai")
 
@@ -161,26 +165,13 @@ class FallbackEmbeddingClient:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not self._providers:
             raise EmbeddingUnavailableError("No embedding providers are configured.")
+        expected_dimensions = get_settings().embedding_dimensions
         last_error: Exception | None = None
         started = time.perf_counter()
-        for provider in self._providers:
+        for index, provider in enumerate(self._providers):
             name = getattr(provider, "name", type(provider).__name__)
             try:
                 vectors = await provider.embed(texts)
-                self._usage = provider.usage
-                self._active_provider = name
-                if _timing_enabled():
-                    logger.info(
-                        "ai_embedding_request",
-                        extra={
-                            "provider": name,
-                            "total_ms": round((time.perf_counter() - started) * 1000.0, 2),
-                            "fallback_count": self._fallback_count,
-                            "texts": len(texts),
-                            "ok": True,
-                        },
-                    )
-                return vectors
             except EmbeddingError as exc:
                 last_error = exc
                 if _timing_enabled():
@@ -196,13 +187,48 @@ class FallbackEmbeddingClient:
                         },
                     )
                 self._fallback_count += 1
-                logger.warning(
-                    "embedding provider %r failed (%s); trying next",
-                    name,
-                    exc,
+                next_name = (
+                    getattr(self._providers[index + 1], "name", "?")
+                    if index + 1 < len(self._providers)
+                    else None
                 )
+                if next_name is not None:
+                    logger.warning(
+                        "%s embedding failed (%s); switching to %s",
+                        name,
+                        exc,
+                        next_name,
+                    )
+                else:
+                    logger.warning("%s embedding failed (%s); no providers left", name, exc)
+                continue
+            # Gate before any vector is committed: the MongoDB index is built
+            # for EMBEDDING_DIMENSIONS, so a provider that returns a different
+            # length would silently corrupt $vectorSearch. A mismatch is a
+            # configuration error, not a transient failure: it is raised
+            # (clear error, no fallback) instead of trying more providers.
+            ensure_vector_dimensions(name, vectors, expected_dimensions)
+            self._usage = provider.usage
+            self._active_provider = name
+            if _timing_enabled():
+                logger.info(
+                    "ai_embedding_request",
+                    extra={
+                        "provider": name,
+                        "total_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                        "fallback_count": self._fallback_count,
+                        "texts": len(texts),
+                        "ok": True,
+                    },
+                )
+            logger.info("Embedding provider selected: %s", name)
+            return vectors
         if last_error is not None:
-            raise last_error
+            logger.error("All embedding providers failed (%s)", last_error)
+            raise EmbeddingUnavailableError(
+                f"All embedding providers failed: {last_error}"
+            ) from last_error
+        logger.error("All embedding providers failed.")
         raise EmbeddingUnavailableError("All embedding providers failed.")
 
 

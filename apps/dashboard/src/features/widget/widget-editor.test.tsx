@@ -22,6 +22,7 @@ const CONFIG: WidgetConfig = {
   widget_id: 'widget-1',
   website_id: 'site-1',
   theme: 'light',
+  theme_preset: '',
   position: 'bottom-right',
   primary_color: '#2563eb',
   accent_color: '#4f46e5',
@@ -35,6 +36,17 @@ const CONFIG: WidgetConfig = {
   dark_mode: false,
   auto_open: false,
   enabled: true,
+  bot_name: 'WebChat AI',
+  bot_status_text: 'Online',
+  header_color: null,
+  secondary_color: null,
+  background_color: null,
+  text_color: null,
+  font_family: null,
+  width: '420px',
+  height: '650px',
+  border_radius: '20px',
+  launcher_size: '58px',
   allowed_domains: [],
   created_at: '2026-08-01T00:00:00Z',
   updated_at: '2026-08-01T00:00:00Z',
@@ -56,6 +68,11 @@ function setup({
   return { mutation };
 }
 
+/** Opens the collapsed "Advanced customization" panel (Appearance section). */
+function expandAdvanced() {
+  fireEvent.click(screen.getByRole('button', { name: 'Advanced customization' }));
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -63,8 +80,10 @@ afterEach(() => {
 describe('WidgetEditor', () => {
   it('renders the configuration fields', () => {
     setup();
+    expandAdvanced();
 
     expect(screen.getByLabelText('Theme')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Theme preset' })).toBeInTheDocument();
     expect(screen.getByLabelText('Position')).toBeInTheDocument();
     expect(screen.getByLabelText('Primary color hex value')).toBeInTheDocument();
     expect(screen.getByLabelText('Accent color hex value')).toBeInTheDocument();
@@ -96,15 +115,110 @@ describe('WidgetEditor', () => {
 
   it('updates the preview instantly when the primary color changes', () => {
     setup();
+    expandAdvanced();
 
     const send = screen.getByLabelText('Send');
-    expect(send.getAttribute('style')).toContain('rgb(37, 99, 235)');
+    expect(send.getAttribute('style')).toContain('#2563eb');
 
     fireEvent.change(screen.getByLabelText('Primary color color swatch'), {
       target: { value: '#ff0000' },
     });
 
-    expect(send.getAttribute('style')).toContain('rgb(255, 0, 0)');
+    expect(send.getAttribute('style')).toContain('#ff0000');
+  });
+
+  it('renders the branding fields and reflects bot name changes in the preview', () => {
+    setup();
+
+    expect(screen.getByLabelText('Bot name')).toHaveValue(CONFIG.bot_name);
+    expect(screen.getByLabelText('Status text')).toHaveValue(CONFIG.bot_status_text);
+    expect(screen.getByLabelText('Width')).toHaveValue(CONFIG.width);
+    expect(screen.getByLabelText('Height')).toHaveValue(CONFIG.height);
+    expect(screen.getByLabelText('Corner radius')).toHaveValue(CONFIG.border_radius);
+    expect(screen.getByLabelText('Launcher size')).toHaveValue(CONFIG.launcher_size);
+
+    fireEvent.change(screen.getByLabelText('Bot name'), { target: { value: 'Acme Support' } });
+    expect(screen.getByText('Acme Support')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Status text'), { target: { value: 'Away' } });
+    expect(screen.getByText('Away')).toBeInTheDocument();
+  });
+
+  it('resets an optional branding color back to the theme default', () => {
+    setup();
+
+    const reset = screen.getAllByRole('button', { name: 'Reset to default' })[0];
+    expect(reset).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText('Header color color swatch'), {
+      target: { value: '#123456' },
+    });
+    expect(reset).not.toBeDisabled();
+
+    fireEvent.click(reset);
+    expect(reset).toBeDisabled();
+  });
+
+  it('hides the advanced customization panel until expanded', () => {
+    setup();
+
+    const advanced = screen.getByRole('button', { name: 'Advanced customization' });
+    expect(advanced).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Position')).not.toBeInTheDocument();
+
+    fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText('Position')).toBeInTheDocument();
+  });
+
+  it('applies a selected theme preset to the preview and saves it', async () => {
+    const { mutation } = setup();
+
+    const ocean = screen.getByRole('radio', { name: 'Select Ocean Blue preset' });
+    expect(ocean).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: 'Select Classic preset' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    fireEvent.click(ocean);
+    expect(ocean).toHaveAttribute('aria-checked', 'true');
+
+    const header = screen.getByLabelText('Close preview').closest('div');
+    expect(header?.getAttribute('style')).toContain('rgb(30, 58, 138)');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(mutation).toHaveBeenCalledWith({
+      websiteId: 'site-1',
+      changes: { theme_preset: 'ocean-blue' },
+    });
+  });
+
+  it('switches back to the Classic preset when selected', () => {
+    const withPreset: WidgetConfig = { ...CONFIG, theme_preset: 'emerald-support' };
+    mockedUseUpdateWidgetConfig.mockReturnValue({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    } as never);
+    render(<WidgetEditor config={withPreset} embedScript={RESPONSE.embed_script} />);
+
+    const emerald = screen.getByRole('radio', { name: 'Select Emerald Support preset' });
+    expect(emerald).toHaveAttribute('aria-checked', 'true');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Select Classic preset' }));
+    expect(emerald).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: 'Select Classic preset' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+
+  it('shows a custom-color override hint when a preset is active', () => {
+    setup();
+
+    expect(screen.queryByText(/override this preset/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Select Purple AI preset' }));
+    expect(screen.getByText(/override this preset/)).toBeInTheDocument();
   });
 
   it('saves only the changed fields when clicking save', async () => {

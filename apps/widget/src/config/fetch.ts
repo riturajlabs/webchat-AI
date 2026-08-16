@@ -9,6 +9,7 @@
 
 import {
   defaultConfig,
+  normalizeConfig,
   resolveApiBaseUrl,
   type WidgetPublicConfig,
   type WidgetOptions,
@@ -78,7 +79,7 @@ export async function fetchPublicConfig(
     const body = await readErrorEnvelope(response);
     throw errorFromApiBody(response.status, body);
   }
-  const config = (await response.json()) as WidgetPublicConfig;
+  const config = normalizeConfig((await response.json()) as Partial<WidgetPublicConfig>);
   store.set(options.widgetId, config);
   return config;
 }

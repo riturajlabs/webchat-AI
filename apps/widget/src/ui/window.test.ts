@@ -181,4 +181,73 @@ describe('createChatWindow', () => {
     windowApi.setStatus('');
     expect(status?.textContent).toBe('');
   });
+
+  it('renders the dynamic header branding and a brand footer by default', () => {
+    const { windowApi, config } = setup();
+    const heading = windowApi.element.querySelector<HTMLElement>('.wc-window-brand');
+    expect(heading?.textContent).toBe(config.bot_name);
+    const statusText = windowApi.element.querySelector<HTMLElement>('.wc-status-text');
+    expect(statusText?.textContent).toBe(config.bot_status_text);
+    const footer = windowApi.element.querySelector<HTMLElement>('.wc-window-footer');
+    expect(footer).toBeTruthy();
+    expect(footer?.hidden).toBe(false);
+    expect(footer?.textContent).toContain('Powered by WebChat AI');
+  });
+
+  it('hides the brand footer when branding is disabled', () => {
+    const windowApi = createChatWindow({
+      config: { ...defaultConfig('widget_1'), branding: false },
+      messagesElement: document.createElement('div'),
+      onSend: () => {},
+      onClose: () => {},
+      onSuggested: () => {},
+      onRetry: () => {},
+      onDismiss: () => {},
+      isDisabled: () => false,
+    });
+    document.body.appendChild(windowApi.element);
+    const footer = windowApi.element.querySelector<HTMLElement>('.wc-window-footer');
+    expect(footer?.hidden).toBe(true);
+  });
+
+  it('uses the avatar (falling back to logo) for the header brand icon', () => {
+    const windowApi = createChatWindow({
+      config: {
+        ...defaultConfig('widget_1'),
+        avatar_url: 'https://example.com/avatar.png',
+        logo_url: 'https://example.com/logo.png',
+      },
+      messagesElement: document.createElement('div'),
+      onSend: () => {},
+      onClose: () => {},
+      onSuggested: () => {},
+      onRetry: () => {},
+      onDismiss: () => {},
+      isDisabled: () => false,
+    });
+    document.body.appendChild(windowApi.element);
+    const img = windowApi.element.querySelector<HTMLImageElement>('.wc-brand-logo');
+    expect(img?.src).toContain('avatar.png');
+  });
+
+  it('syncConfig re-brands the header, composer placeholder and footer', () => {
+    const { windowApi } = setup();
+    windowApi.syncConfig({
+      ...defaultConfig('widget_1'),
+      bot_name: 'Acme Support',
+      bot_status_text: 'Away',
+      placeholder: 'Ask Acme…',
+      branding: false,
+      avatar_url: 'https://example.com/acme.png',
+    });
+    const heading = windowApi.element.querySelector<HTMLElement>('.wc-window-brand');
+    expect(heading?.textContent).toBe('Acme Support');
+    const statusText = windowApi.element.querySelector<HTMLElement>('.wc-status-text');
+    expect(statusText?.textContent).toBe('Away');
+    expect(windowApi.composer.input.placeholder).toBe('Ask Acme…');
+    const footer = windowApi.element.querySelector<HTMLElement>('.wc-window-footer');
+    expect(footer?.hidden).toBe(true);
+    const img = windowApi.element.querySelector<HTMLImageElement>('.wc-brand-logo');
+    expect(img?.src).toContain('acme.png');
+  });
 });

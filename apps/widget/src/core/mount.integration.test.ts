@@ -19,6 +19,17 @@ const CONFIG = {
   branding: true,
   dark_mode: false,
   auto_open: false,
+  bot_name: 'WebChat AI',
+  bot_status_text: 'Online',
+  header_color: null,
+  secondary_color: null,
+  background_color: null,
+  text_color: null,
+  font_family: null,
+  width: '380px',
+  height: '600px',
+  border_radius: '20px',
+  launcher_size: '58px',
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

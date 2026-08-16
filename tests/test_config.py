@@ -42,6 +42,37 @@ def test_trust_proxy_defaults_to_false() -> None:
     assert Settings(_env_file=None).trust_proxy is False
 
 
+# --- Redis URL validation ---
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "redis://redis:6379",
+        "rediss://default:secret@renewed-cricket.example.com:6379",
+        "unix:///tmp/redis.sock",
+    ],
+)
+def test_valid_redis_url_schemes_accepted(url: str) -> None:
+    assert Settings(_env_file=None, redis_url=url).redis_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "REDIS_URL=rediss://default:secret@host:6379",
+        "http://redis:6379",
+        "mongodb://localhost:27017",
+        "foo://bar",
+        "",
+        "   ",
+    ],
+)
+def test_invalid_redis_url_schemes_rejected(url: str) -> None:
+    with pytest.raises(ValueError, match="REDIS_URL"):
+        Settings(_env_file=None, redis_url=url)
+
+
 # --- Phase 9 (ADR-009): provider order & fallback configuration ---
 
 
@@ -172,11 +203,119 @@ def test_provider_order_parses_from_json_list() -> None:
     settings = Settings(
         _env_file=None,
         generation_provider_order=["gemini", "openrouter"],
-        embedding_provider_order=["ollama"],
+        embedding_provider_order=["jina", "cohere"],
     )
     assert settings.generation_provider_order == ["gemini", "openrouter"]
-    assert settings.embedding_provider_order == ["ollama"]
-    assert settings.ai_provider_timeout_seconds == 60.0
+    assert settings.embedding_provider_order == ["jina", "cohere"]
+    assert settings.ai_provider_timeout_seconds == 10.0
+
+
+def test_latency_settings_are_fail_fast_by_default() -> None:
+    """Phase 12.6: provider/LLM timeouts are bounded so a hung upstream fails
+    fast into the fallback chain instead of stalling the chat."""
+    settings = Settings(_env_file=None)
+    assert settings.ai_provider_timeout_seconds == 10.0
+    assert settings.generation_timeout_seconds == 30.0
+    assert settings.generation_first_token_timeout_seconds == 10.0
+    assert settings.embedding_request_timeout_seconds == 10.0
+    assert settings.embedding_max_retries == 3
+    assert settings.chat_embedding_max_retries == 1
+    assert settings.chat_retrieval_cache_ttl_seconds == 900
+    assert settings.chat_retrieval_cache_size == 512
+    assert settings.chat_context_max_chars == 12000
+    assert settings.chat_context_min_score == 0.0
+
+
+# --- embedding fallback configuration (ADR-009, cloud providers) ---
+
+
+def test_embedding_default_dimension_matches_cloud_fallback() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.embedding_dimensions == 1024
+    assert settings.jina_embedding_dimensions == 1024
+    assert settings.cohere_embedding_dimensions == 1024
+    assert settings.jina_embedding_model == "jina-embeddings-v3"
+    assert settings.cohere_embedding_model == "embed-multilingual-v3.0"
+
+
+def test_jina_dimension_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="JINA_EMBEDDING_DIMENSIONS"):
+        Settings(
+            _env_file=None,
+            embedding_provider_order=["gemini", "jina"],
+            embedding_dimensions=1024,
+            jina_embedding_dimensions=512,
+        )
+
+
+def test_cohere_dimension_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="COHERE_EMBEDDING_DIMENSIONS"):
+        Settings(
+            _env_file=None,
+            embedding_provider_order=["gemini", "cohere"],
+            embedding_dimensions=1024,
+            cohere_embedding_dimensions=512,
+        )
+
+
+def test_unlisted_provider_dimension_mismatch_is_allowed() -> None:
+    # A provider NOT in EMBEDDING_PROVIDER_ORDER is dormant; mismatched dims
+    # only matter once it is actually added to the chain.
+    settings = Settings(
+        _env_file=None,
+        embedding_provider_order=["gemini"],
+        embedding_dimensions=1024,
+        jina_embedding_dimensions=512,
+        cohere_embedding_dimensions=768,
+    )
+    assert settings.jina_embedding_dimensions == 512
+
+
+def test_embedding_dimensions_positive() -> None:
+    with pytest.raises(ValueError, match="EMBEDDING_DIMENSIONS"):
+        Settings(_env_file=None, embedding_dimensions=0)
+
+
+def test_production_allows_keyless_embedding_provider() -> None:
+    # jina is the ONLY provider in the order and it has no key. Production
+    # must still boot: the registry skips the keyless provider gracefully and
+    # the next one (none) is only reached if a call happens (ADR-009). A
+    # missing key is a warning, never a startup crash.
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        groq_api_key="test-key",
+        widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
+        embedding_provider_order=["jina"],
+        jina_api_key=None,
+    )
+    assert settings.embedding_provider_order == ["jina"]
+
+
+def test_production_allows_partial_missing_fallback_key() -> None:
+    # gemini is present, jina is keyless: the registry skips jina gracefully
+    # and the chain still serves. Production must NOT crash here.
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret="a" * 32,
+        gemini_api_key="test-key",
+        widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
+        payment_provider="stripe",
+        stripe_secret_key="sk_test",
+        stripe_webhook_secret="whsec_test",
+        cors_origins=["https://app.example.com"],
+        allowed_hosts=["app.example.com"],
+        embedding_provider_order=["gemini", "jina"],
+        jina_api_key=None,
+    )
+    assert settings.embedding_provider_order == ["gemini", "jina"]
 
 
 # --- Phase 16: production CORS / trusted hosts / rate-limit validation ---

@@ -7,16 +7,19 @@ skipped (with a warning) so one unconfigured provider cannot break the whole
 chain; an unknown name in `*_PROVIDER_ORDER` is a configuration error and
 fails fast. Embedding chains additionally warn when their providers report
 differing vector dimensions, because switching embedding providers on a mixed
-corpus corrupts `$vectorSearch`.
+corpus corrupts `$vectorSearch`; the configured `EMBEDDING_DIMENSIONS` must
+match every provider in the order (validated in `backend/core/config.py`).
 """
 
+import inspect
 import logging
 from collections.abc import Callable, Sequence
 
 from backend.ai.gemini import GenerationClient, GoogleGeminiClient
 from backend.ai.mock import MockEmbeddingClient, MockGenerationClient
+from backend.ai.providers.cohere import CohereEmbeddingClient
 from backend.ai.providers.groq import GroqGenerationClient
-from backend.ai.providers.ollama import OllamaEmbeddingClient
+from backend.ai.providers.jina import JinaEmbeddingClient
 from backend.ai.providers.openrouter import OpenRouterGenerationClient
 from backend.ai.router import FallbackEmbeddingClient, FallbackGenerationClient
 from backend.core.config import get_settings
@@ -26,7 +29,10 @@ from backend.services.knowledge.embedding import EmbeddingClient, GoogleEmbeddin
 logger = logging.getLogger("webchat_ai")
 
 GenerationFactory = Callable[[], GenerationClient]
-EmbeddingFactory = Callable[[], EmbeddingClient]
+# Embedding factories accept the retry-capable client's optional kwargs
+# (e.g. `max_retries`) - `_instantiate` forwards them only when the factory
+# signature accepts them.
+EmbeddingFactory = Callable[..., EmbeddingClient]
 
 
 class ProviderRegistry:
@@ -85,8 +91,19 @@ class ProviderRegistry:
             chain.append(factory())
         return chain
 
-    def build_embedding_chain(self, order: Sequence[str]) -> list[EmbeddingClient]:
-        """Resolve `order` into concrete embedding clients (skipping unkeyed)."""
+    def build_embedding_chain(
+        self,
+        order: Sequence[str],
+        *,
+        max_retries: int | None = None,
+    ) -> list[EmbeddingClient]:
+        """Resolve `order` into concrete embedding clients (skipping unkeyed).
+
+        `max_retries` is passed to providers that accept it (e.g.
+        `GoogleEmbeddingClient`): the chat path uses a tight per-provider retry
+        budget so a hung provider fails fast into the next one, while ingestion
+        leaves it `None` and keeps the client's configured default.
+        """
         chain: list[EmbeddingClient] = []
         dimensions: set[int] = set()
         for name in order:
@@ -105,7 +122,7 @@ class ProviderRegistry:
                     required_key.upper(),
                 )
                 continue
-            provider = factory()
+            provider = _instantiate(factory, max_retries)
             chain.append(provider)
             dims = getattr(provider, "dimensions", None)
             if isinstance(dims, int):
@@ -129,8 +146,9 @@ _registry.register_generation(
     "openrouter", OpenRouterGenerationClient, required_key="openrouter_api_key"
 )
 _registry.register_embedding("gemini", GoogleEmbeddingClient, required_key="gemini_api_key")
-# Ollama is self-hosted: no API key, so it is always eligible.
-_registry.register_embedding("ollama", OllamaEmbeddingClient)
+# Cloud embedding fallbacks (ADR-009): skipped when their API key is missing.
+_registry.register_embedding("jina", JinaEmbeddingClient, required_key="jina_api_key")
+_registry.register_embedding("cohere", CohereEmbeddingClient, required_key="cohere_api_key")
 # Mock is deterministic and keyless; only used when explicitly configured in
 # the provider order (offline dev / performance runs, never the default).
 _registry.register_generation("mock", MockGenerationClient)
@@ -143,10 +161,23 @@ def build_generation_fallback() -> FallbackGenerationClient:
     return FallbackGenerationClient(_registry.build_generation_chain(order))
 
 
-def build_embedding_fallback() -> FallbackEmbeddingClient:
-    """Build the configured embedding fallback chain (ADR-009)."""
+def build_embedding_fallback(
+    max_retries: int | None = None,
+) -> FallbackEmbeddingClient:
+    """Build the configured embedding fallback chain (ADR-009).
+
+    Pass `max_retries` (e.g. `settings.chat_embedding_max_retries`) from the
+    chat path so a hung embedding provider fails fast into the next one.
+    """
     order = get_settings().embedding_provider_order
-    return FallbackEmbeddingClient(_registry.build_embedding_chain(order))
+    return FallbackEmbeddingClient(_registry.build_embedding_chain(order, max_retries=max_retries))
+
+
+def _instantiate(factory: EmbeddingFactory, max_retries: int | None) -> EmbeddingClient:
+    """Build a provider, forwarding `max_retries` only when it accepts it."""
+    if max_retries is None or "max_retries" not in inspect.signature(factory).parameters:
+        return factory()
+    return factory(max_retries=max_retries)
 
 
 __all__ = [

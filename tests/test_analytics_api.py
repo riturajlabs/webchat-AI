@@ -256,7 +256,37 @@ async def test_performance_empty_returns_nulls(client) -> None:
         "avg_response_time": None,
         "fastest_response_time": None,
         "slowest_response_time": None,
+        "avg_embedding_ms": None,
+        "avg_retrieval_ms": None,
+        "avg_generation_ms": None,
     }
+
+
+async def test_performance_reports_stage_latencies(client) -> None:
+    """The performance endpoint breaks the response time down into per-stage
+    averages (embedding/retrieval/generation) from the persisted latencies."""
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_day(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        response_times=[0.5, 1.5],
+        embedding_ms=[20.0, 40.0],
+        retrieval_ms=[10.0, 30.0],
+        generation_ms=[100.0, 300.0],
+    )
+
+    response = test_client.get("/api/analytics/performance", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["avg_embedding_ms"] == 30.0
+    assert body["avg_retrieval_ms"] == 20.0
+    assert body["avg_generation_ms"] == 200.0
+    assert body["avg_response_time"] == 1.0
 
 
 async def test_analytics_isolates_tenants(client) -> None:

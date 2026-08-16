@@ -45,11 +45,19 @@ class TopWebsite(BaseModel):
 
 
 class ResponseMetrics(BaseModel):
-    """Assistant response-time statistics for a window."""
+    """Assistant response-time statistics for a window.
+
+    `avg_embedding_ms` / `avg_retrieval_ms` / `avg_generation_ms` break the
+    average response time down into where it went (Phase 12.6 latency work).
+    All values are `None` when the window has no assistant responses.
+    """
 
     avg_response_time: float | None
     fastest_response_time: float | None
     slowest_response_time: float | None
+    avg_embedding_ms: float | None
+    avg_retrieval_ms: float | None
+    avg_generation_ms: float | None
 
 
 class AnalyticsOverview(BaseModel):

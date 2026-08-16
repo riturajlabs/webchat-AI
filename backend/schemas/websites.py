@@ -70,6 +70,7 @@ class WidgetOut(BaseModel):
     primary_color: str
     accent_color: str
     font_size: str
+    theme_preset: str
     logo_url: str | None
     avatar_url: str | None
     welcome_message: str
@@ -78,6 +79,18 @@ class WidgetOut(BaseModel):
     branding: bool
     dark_mode: bool
     auto_open: bool
+    # Phase 11.6 branding presentation.
+    bot_name: str
+    bot_status_text: str
+    header_color: str | None
+    secondary_color: str | None
+    background_color: str | None
+    text_color: str | None
+    font_family: str | None
+    width: str
+    height: str
+    border_radius: str
+    launcher_size: str
     enabled: bool
     # Embed-origin allowlist (empty = blocked until configured; use "*" for
     # open embedding). Normalized bare hostnames / *.wildcards.
@@ -95,6 +108,7 @@ class WidgetOut(BaseModel):
             primary_color=widget.primary_color,
             accent_color=widget.accent_color,
             font_size=widget.font_size,
+            theme_preset=widget.theme_preset,
             logo_url=widget.logo_url,
             avatar_url=widget.avatar_url,
             welcome_message=widget.welcome_message,
@@ -103,6 +117,17 @@ class WidgetOut(BaseModel):
             branding=widget.branding,
             dark_mode=widget.dark_mode,
             auto_open=widget.auto_open,
+            bot_name=widget.bot_name,
+            bot_status_text=widget.bot_status_text,
+            header_color=widget.header_color,
+            secondary_color=widget.secondary_color,
+            background_color=widget.background_color,
+            text_color=widget.text_color,
+            font_family=widget.font_family,
+            width=widget.width,
+            height=widget.height,
+            border_radius=widget.border_radius,
+            launcher_size=widget.launcher_size,
             enabled=widget.enabled,
             allowed_domains=list(widget.allowed_domains or []),
             created_at=widget.created_at,

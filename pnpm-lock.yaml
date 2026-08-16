@@ -26,6 +26,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.101.4
         version: 5.101.4(react@19.1.0)
+      '@webchat/themes':
+        specifier: workspace:*
+        version: link:../../packages/themes
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -105,6 +108,9 @@ importers:
 
   apps/widget:
     dependencies:
+      '@webchat/themes':
+        specifier: workspace:*
+        version: link:../../packages/themes
       dompurify:
         specifier: ^3.2.4
         version: 3.4.13
@@ -142,6 +148,12 @@ importers:
       vite:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@20.19.43)(lightningcss@1.32.0)
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)(jsdom@25.0.1)(lightningcss@1.32.0)
+
+  packages/themes:
+    devDependencies:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)(jsdom@25.0.1)(lightningcss@1.32.0)

@@ -146,3 +146,39 @@ async def test_unavailable_without_api_key(fake_sdk) -> None:
                 pass
     finally:
         settings.gemini_api_key = old_key
+
+
+async def test_first_token_timeout_raises_unavailable(fake_sdk, monkeypatch) -> None:
+    """A stall before the FIRST token is `GenerationUnavailableError` so the
+    Phase 9 router can fall through to the next provider (fail-fast)."""
+    fake_sdk.chunks = [FakeGenerationChunk(text="ok")]
+    client = _client(fake_sdk, first_token_timeout_seconds=5.0)
+
+    async def _stall(awaitable, **kwargs):
+        raise TimeoutError("stalled before first token")
+
+    monkeypatch.setattr("backend.ai.gemini.asyncio.wait_for", _stall)
+    with pytest.raises(GenerationUnavailableError):
+        async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+
+
+async def test_mid_stream_stall_raises_generation_error(fake_sdk, monkeypatch) -> None:
+    """A stall AFTER the first token is `GenerationError` (unavailable -> error,
+    because the provider already started answering)."""
+    fake_sdk.chunks = [FakeGenerationChunk(text="partial")]
+    client = _client(fake_sdk, first_token_timeout_seconds=5.0)
+
+    calls = 0
+
+    async def _fail_second(awaitable, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await awaitable
+        raise TimeoutError("stalled mid-stream")
+
+    monkeypatch.setattr("backend.ai.gemini.asyncio.wait_for", _fail_second)
+    with pytest.raises(GenerationError, match="stalled for"):
+        async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
+            pass

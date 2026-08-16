@@ -28,7 +28,8 @@ class _FakeModels:
     def __init__(self, client: "FakeGenAIClient") -> None:
         self._client = client
 
-    async def embed_content(self, model: str, contents: list[str]):
+    async def embed_content(self, model: str, contents: list[str], config=None):
+        self._client.configs.append(config)
         return await self._client._embed_content(model, contents)
 
 
@@ -47,6 +48,7 @@ class FakeGenAIClient:
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self.configs: list[object] = []
         self.failures: list[Exception] = []
         self.next_values: list[list[float]] | None = None
         self.delay: float = 0.0
@@ -82,6 +84,7 @@ def _client(fake_sdk: FakeGenAIClient, **kwargs):
         max_retries=3,
         base_delay_ms=1,
         timeout_seconds=5.0,
+        dimensions=2,
         genai_client=fake_sdk,
         **kwargs,
     )
@@ -96,6 +99,39 @@ async def test_embeds_in_batches_and_returns_vectors_in_order(fake_sdk) -> None:
     assert [v[0] for v in vectors] == [1.0, 2.0, 3.0, 4.0, 5.0]
     # Batch size 2 => ceil(5/2) = 3 SDK calls.
     assert fake_sdk.calls == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
+
+
+async def test_sends_output_dimensionality_for_non_default_dimension(fake_sdk) -> None:
+    client = _client(fake_sdk)  # dimensions=2 -> output_dimensionality must be sent
+    await client.embed(["a", "b"])
+
+    assert all(config == {"output_dimensionality": 2} for config in fake_sdk.configs)
+
+
+async def test_default_dimension_sends_no_output_dimensionality(fake_sdk) -> None:
+    # 3072 is the model's native output; the request stays byte-identical to
+    # the pre-fallback client so existing 3072-index deployments see no change.
+    client = GoogleEmbeddingClient(
+        model="test-embedding",
+        batch_size=2,
+        max_retries=3,
+        base_delay_ms=1,
+        timeout_seconds=5.0,
+        dimensions=3072,
+        genai_client=fake_sdk,
+    )
+    fake_sdk.next_values = [[1.0] * 3072]
+    await client.embed(["a"])
+
+    assert all(config is None for config in fake_sdk.configs)
+
+
+async def test_raises_embedding_error_on_dimension_mismatch(fake_sdk) -> None:
+    fake_sdk.next_values = [[0.1, 0.2, 0.3]]  # 3-dim, client expects 2
+    client = _client(fake_sdk)
+
+    with pytest.raises(EmbeddingError, match="dimension mismatch.*gemini.*3.*2"):
+        await client.embed(["a"])
 
 
 async def test_empty_input_makes_no_sdk_calls(fake_sdk) -> None:

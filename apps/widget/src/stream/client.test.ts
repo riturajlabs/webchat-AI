@@ -148,7 +148,9 @@ describe('streamChat', () => {
     );
     const resultUnknown = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchUnknown);
     expect(resultUnknown.error?.code).toBe('server');
-    expect(resultUnknown.error?.userMessage).toBe('Something went wrong on our side');
+    expect(resultUnknown.error?.userMessage).toBe(
+      'Sorry, I couldn’t process that. Please try again.',
+    );
   });
 
   it('marks a stream that ends without a terminal event as a retryable network drop', async () => {

@@ -3,6 +3,7 @@
 import json
 from functools import lru_cache
 from typing import Annotated
+from urllib.parse import urlparse
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -151,17 +152,28 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
 
-    # Local embedding fallback (self-hosted, no API key; ADR-009).
-    # CAUTION: only use an embedding fallback whose vector dimension matches
-    # the primary provider, or vector search on a mixed corpus breaks.
-    embedding_dimensions: int = 3072
-    # Shared HTTP timeout for non-Gemini providers (Groq/OpenRouter/Ollama).
-    ai_provider_timeout_seconds: float = 60.0
+    # Vector length the MongoDB `$vectorSearch` index expects. All providers in
+    # `EMBEDDING_PROVIDER_ORDER` must produce this dimension or vector search
+    # on a mixed corpus breaks: Gemini is truncated to it via
+    # `outputDimensionality`, and Jina/Cohere must declare a matching
+    # dimension (validated at boot). Default 1024 matches the cloud fallback
+    # providers (jina-embeddings-v3 / embed-multilingual-v3.0).
+    embedding_dimensions: int = 1024
+    # Shared HTTP timeout for non-Gemini providers (Groq/OpenRouter/Jina/Cohere).
+    # Bounded at 10s so a hung provider fails fast and the fallback chain moves
+    # on instead of stalling the chat for a minute (Phase 12.6 latency work).
+    ai_provider_timeout_seconds: float = 10.0
 
-    # Ollama (local embedding fallback, ADR-009).
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "nomic-embed-text"
-    ollama_embedding_dimensions: int = 768
+    # Cloud embedding fallbacks (ADR-009). Keys are optional: a provider in
+    # `EMBEDDING_PROVIDER_ORDER` whose key is missing is skipped gracefully at
+    # registry build time (the next provider is tried). `embedding_dimensions`
+    # must match for every provider in the order (see `_validate_embedding_config`).
+    jina_api_key: str | None = None
+    jina_embedding_model: str = "jina-embeddings-v3"
+    jina_embedding_dimensions: int = 1024
+    cohere_api_key: str | None = None
+    cohere_embedding_model: str = "embed-multilingual-v3.0"
+    cohere_embedding_dimensions: int = 1024
 
     # Knowledge processing (Phase 5, docs/06 implementation plan).
     # Approximate-token chunk sizing (docs/02-TRD.md §6: 500-800 tokens/chunk,
@@ -171,10 +183,14 @@ class Settings(BaseSettings):
     # Embedding client (Google gemini-embedding-001 via the Gemini API, ADR-008).
     # The API key is never logged and never exposed through any API (00 rules §12).
     embedding_batch_size: int = 32
-    embedding_max_retries: int = 5
-    embedding_retry_base_delay_ms: int = 500
+    # Per-provider retries/timeout for embedding. Reduced for the Phase 12.6
+    # latency work: a hung provider now costs ~10s per attempt instead of 60s,
+    # and the chat path retries only once (see `chat_embedding_max_retries`) so
+    # it fails fast into the next fallback provider.
+    embedding_max_retries: int = 3
+    embedding_retry_base_delay_ms: int = 300
     # Fail a document's embedding pass when a single batch error exceeds this.
-    embedding_request_timeout_seconds: float = 60.0
+    embedding_request_timeout_seconds: float = 10.0
     # Document-level embedding retries (production hardening): a temporary
     # embedding outage must not permanently fail every queued document in one
     # crawl fan-out. A failed attempt re-enqueues the document with a growing
@@ -215,12 +231,23 @@ class Settings(BaseSettings):
     chat_memory_turns: int = 8
     # Character cap per retrieved chunk when building the model context.
     chat_context_chunk_chars: int = 4000
+    # Total character budget for the retrieved context (all chunks combined).
+    # Keeps the prompt small so the first token arrives fast (Phase 12.6).
+    chat_context_max_chars: int = 12000
+    # Relevance floor for retrieved chunks (cosine similarity). 0 disables the
+    # filter; raise it to drop low-signal chunks before they reach the prompt.
+    chat_context_min_score: float = 0.0
     # Question sanitization cap (prompt-injection defense, TRD §8).
     chat_question_max_chars: int = 2000
     # Generation settings for the Gemini answer stream.
     chat_max_output_tokens: int = 1024
     chat_temperature: float = 0.2
-    generation_timeout_seconds: float = 60.0
+    # Per-chunk stream timeout (guards a stalled answer mid-stream).
+    generation_timeout_seconds: float = 30.0
+    # Hard bound on the wait for the FIRST token: a provider that takes longer
+    # is treated as unavailable so the fallback chain can switch providers
+    # instead of leaving the user staring at a spinner.
+    generation_first_token_timeout_seconds: float = 10.0
     # Conversation/session retention (ADR-005 §5.7; TTL safety net is 90 days).
     chat_retention_days: int = 90
     # Daily usage rollup retention (ADR-005 §5.7: 3 years).
@@ -258,6 +285,23 @@ class Settings(BaseSettings):
     perf_timing_log_enabled: bool = False
     # Log MongoDB commands slower than this threshold (ms); 0 disables.
     mongodb_slow_query_threshold_ms: int = 0
+    # In-process LRU cache of question embeddings (per API worker). Repeated
+    # questions reuse the cached vector and skip the embedding API call, cutting
+    # perceived latency and provider usage on high-repeat traffic. Bounded by
+    # size only; set 0 to disable.
+    embedding_cache_size: int = 256
+    # Retrieval cache (per API worker): repeat questions - same website, same
+    # normalized text - reuse the embedding AND the vector-search results for
+    # `chat_retrieval_cache_ttl_seconds`, skipping both the embedding provider
+    # and the search query. Answers are NEVER cached: generation still runs so
+    # every turn is fresh. Bounded by size; set size 0 to disable.
+    chat_retrieval_cache_ttl_seconds: int = 900
+    chat_retrieval_cache_size: int = 512
+    # Chat-path embedding retries per provider. The chat must fail fast: a
+    # single hung embedding request (up to `embedding_request_timeout_seconds`)
+    # then the next provider. Ingestion keeps `embedding_max_retries` because
+    # a crawl has no interactive user waiting on it.
+    chat_embedding_max_retries: int = 1
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -278,6 +322,26 @@ class Settings(BaseSettings):
                         f"list, got: {value!r}"
                     ) from None
             return [host.strip() for host in value.split(",") if host.strip()]
+        return value
+
+    @field_validator("redis_url")
+    @classmethod
+    def _validate_redis_url(cls, value: object) -> object:
+        """Fail fast on a malformed REDIS_URL.
+
+        Both the API rate limiter and the ARQ worker parse this URL on every
+        startup / first use; an invalid scheme previously surfaced as an
+        opaque 500 (`ValueError: Redis URL must specify...`) or a worker crash
+        at runtime instead of a clear boot-time configuration error.
+        """
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("REDIS_URL must not be empty.")
+        scheme = urlparse(value.strip()).scheme.lower()
+        if scheme not in {"redis", "rediss", "unix"}:
+            raise ValueError(
+                "REDIS_URL must use a redis://, rediss:// or unix:// scheme "
+                f"(got: {value!r})."
+            )
         return value
 
     def effective_allowed_hosts(self) -> list[str]:
@@ -310,6 +374,37 @@ class Settings(BaseSettings):
         }
 
     @model_validator(mode="after")
+    def _validate_embedding_config(self) -> "Settings":
+        """Fail fast on an incoherent embedding configuration (ADR-009).
+
+        Every provider listed in `EMBEDDING_PROVIDER_ORDER` must agree on a
+        single vector dimension: the MongoDB index is built for
+        `EMBEDDING_DIMENSIONS`, so a fallback provider returning a different
+        length would silently corrupt `$vectorSearch`. Missing API keys are NOT
+        an error here - the registry skips a keyless provider gracefully and
+        the next one is tried. Only the dimension contract is enforced.
+        """
+        if self.embedding_dimensions <= 0:
+            raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer.")
+        for provider in self.embedding_provider_order:
+            if provider == "jina" and self.jina_embedding_dimensions != self.embedding_dimensions:
+                raise ValueError(
+                    "JINA_EMBEDDING_DIMENSIONS must match EMBEDDING_DIMENSIONS "
+                    f"({self.embedding_dimensions}); got {self.jina_embedding_dimensions}. "
+                    "A mismatched fallback provider corrupts $vectorSearch."
+                )
+            if (
+                provider == "cohere"
+                and self.cohere_embedding_dimensions != self.embedding_dimensions
+            ):
+                raise ValueError(
+                    "COHERE_EMBEDDING_DIMENSIONS must match EMBEDDING_DIMENSIONS "
+                    f"({self.embedding_dimensions}); got {self.cohere_embedding_dimensions}. "
+                    "A mismatched fallback provider corrupts $vectorSearch."
+                )
+        return self
+
+    @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":
         """Fail fast on weak production secrets (00-AI-Development-Rules §20).
 
@@ -332,8 +427,10 @@ class Settings(BaseSettings):
                 )
             if not self.embedding_provider_order:
                 raise ValueError("EMBEDDING_PROVIDER_ORDER must not be empty in production.")
-            if not self.embedding_provider_order or self.embedding_dimensions <= 0:
-                raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer in production.")
+            # Embedding API keys are intentionally NOT required at boot: a
+            # keyless provider is skipped gracefully by the registry (with a
+            # warning) and the next provider in the order is tried, so a missing
+            # key must never crash the application (ADR-009).
             # The embed script URL is baked into the dashboard embed code and
             # into customer pages; a localhost default would break every embed.
             # Allowed only under the explicit local-production-test flag.

@@ -122,7 +122,7 @@ describe('createBubble', () => {
     expect(bubble.innerHTML).not.toMatch(/vbscript:/i);
   });
 
-  it('renders multiple sources in order, opens links safely in a new tab', () => {
+  it('renders multiple sources as Learn-more cards in order, opening safely in a new tab', () => {
     const bubble = createBubble(
       message('assistant', 'answer', {
         sources: [
@@ -136,22 +136,100 @@ describe('createBubble', () => {
     expect(items.length).toBe(3);
     const links = bubble.querySelectorAll<HTMLAnchorElement>('.wc-sources-list a');
     expect(links.length).toBe(3);
-    expect(links[0]?.textContent).toContain('1. Homepage');
+    expect(links[0]?.querySelector('.wc-source-title')?.textContent).toBe('Homepage');
+    expect(links[0]?.querySelector('.wc-source-citation')?.textContent).toBe('1');
     expect(links[0]?.getAttribute('target')).toBe('_blank');
     expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer');
-    expect(links[1]?.textContent).toContain('2. Pricing');
-    expect(links[2]?.textContent).toContain('About');
+    expect(links[1]?.querySelector('.wc-source-title')?.textContent).toBe('Pricing');
+    // No citation field -> falls back to the list position.
+    expect(links[2]?.querySelector('.wc-source-citation')?.textContent).toBe('3');
   });
 
-  it('exposes a Sources label above the citation list (a11y landmark)', () => {
+  it('renders a favicon, derived description, truncated URL and Read-more per card', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [{ url: 'https://www.example.com/courses/admission', title: 'Admission' }],
+      }),
+    );
+    const card = bubble.querySelector<HTMLAnchorElement>('.wc-sources-list a');
+    const favicon = card?.querySelector<HTMLImageElement>('.wc-source-favicon img');
+    expect(favicon?.src).toContain('icons.duckduckgo.com');
+    expect(favicon?.src).toContain('example.com');
+    expect(card?.querySelector('.wc-source-desc')?.textContent).toBe('courses admission');
+    // URL is protocol-stripped, www-stripped, and present as truncated text.
+    expect(card?.querySelector('.wc-source-url')?.textContent).toBe(
+      'example.com/courses/admission',
+    );
+    expect(card?.querySelector('.wc-source-read')?.textContent).toContain('Read more');
+  });
+
+  it('exposes a friendly "Learn more" label above the citation cards (a11y landmark)', () => {
     const bubble = createBubble(
       message('assistant', 'answer', {
         sources: [{ url: 'https://example.com', title: 'Example' }],
       }),
     );
     const label = bubble.querySelector<HTMLElement>('.wc-sources-label');
-    expect(label?.textContent).toBe('Sources');
+    expect(label?.textContent).toBe('Learn more');
     expect(label?.tagName).toBe('SPAN');
+  });
+
+  it('shows only the first 3 sources and expands the rest via the toggle', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: Array.from({ length: 5 }, (_, index) => ({
+          url: `https://example.com/page/${index}`,
+          title: `Source ${index + 1}`,
+        })),
+      }),
+    );
+    const sources = bubble.querySelector('.wc-sources');
+    expect(sources?.querySelectorAll('.wc-source-item').length).toBe(5);
+    expect(sources?.querySelectorAll('.wc-source-item.wc-source-hidden').length).toBe(2);
+
+    const toggle = sources?.querySelector<HTMLButtonElement>('.wc-sources-toggle');
+    expect(toggle?.textContent).toBe('View all sources (2)');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle?.getAttribute('aria-controls')).toBeTruthy();
+    expect(sources?.classList.contains('wc-sources-expanded')).toBe(false);
+
+    toggle?.click();
+    expect(sources?.classList.contains('wc-sources-expanded')).toBe(true);
+    expect(toggle?.textContent).toBe('Show fewer');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+
+    toggle?.click();
+    expect(sources?.classList.contains('wc-sources-expanded')).toBe(false);
+    expect(toggle?.textContent).toBe('View all sources (2)');
+  });
+
+  it('shows no expand toggle when there are 3 or fewer sources', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [
+          { url: 'https://example.com/a', title: 'A' },
+          { url: 'https://example.com/b', title: 'B' },
+          { url: 'https://example.com/c', title: 'C' },
+        ],
+      }),
+    );
+    expect(bubble.querySelector('.wc-sources-toggle')).toBeNull();
+  });
+
+  it('renders unsafe-source cards without any anchor or external assets', () => {
+    const bubble = createBubble(
+      message('assistant', 'answer', {
+        sources: [{ url: 'javascript:alert(1)', title: 'XSS attempt' }],
+      }),
+    );
+    const card = bubble.querySelector<HTMLElement>('.wc-sources-list .wc-source-link');
+    expect(card?.classList.contains('wc-source-link-plain')).toBe(true);
+    expect(card?.querySelector('.wc-source-title')?.textContent).toBe('XSS attempt');
+    // No clickable link, no favicon request, no "Read more" affordance.
+    expect(bubble.querySelector('.wc-sources-list a')).toBeNull();
+    expect(bubble.querySelector('.wc-sources-list img')).toBeNull();
+    expect(bubble.querySelector('.wc-source-read')).toBeNull();
+    expect(bubble.innerHTML).not.toMatch(/javascript:/i);
   });
 
   it('collapses very long answers behind a Show-more toggle', () => {

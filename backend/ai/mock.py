@@ -3,12 +3,11 @@
 `MockGenerationClient` and `MockEmbeddingClient` implement the same
 `GenerationClient` / `EmbeddingClient` Protocols as the real providers, but
 never touch the network and never require an API key. They are *not* part of
-the default provider order: the registry registers them keyless (like the
-self-hosted Ollama embedding client) so an operator can opt in explicitly via
-`GENERATION_PROVIDER_ORDER`/`EMBEDDING_PROVIDER_ORDER` (e.g. for load tests
-and offline development). Output is deterministic so repeat runs are
-comparable; the embedding vectors are text-hashed so identical texts always
-yield identical vectors (giving cosine search meaningful signal).
+the default provider order: the registry registers them keyless so an operator
+can opt in explicitly via `GENERATION_PROVIDER_ORDER`/`EMBEDDING_PROVIDER_ORDER`
+(e.g. for load tests and offline development). Output is deterministic so
+repeat runs are comparable; the embedding vectors are text-hashed so identical
+texts always yield identical vectors (giving cosine search meaningful signal).
 """
 
 import asyncio

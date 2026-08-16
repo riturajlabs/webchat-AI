@@ -28,6 +28,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@webchat/themes": "workspace:*",
     "dompurify": "^3.2.4"
   },
   "devDependencies": {

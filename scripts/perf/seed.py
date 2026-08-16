@@ -25,6 +25,7 @@ from datetime import timedelta
 from typing import Any
 
 from backend.ai.mock import MockEmbeddingClient
+from backend.core.config import get_settings
 from backend.core.security import (
     hash_password,
     new_id,
@@ -106,6 +107,7 @@ async def seed(
     now = utcnow()
 
     tenant = Tenant.new(company_name="Performance Tenant")
+    tenant.plan = "enterprise"
     user = User.new(
         tenant_id=tenant.id,
         name="Performance Owner",
@@ -270,7 +272,14 @@ def main() -> None:
     parser.add_argument("--chunks", type=int, default=10)
     parser.add_argument("--sessions", type=int, default=500)
     parser.add_argument("--messages", type=int, default=6)
-    parser.add_argument("--embedding-dimensions", type=int, default=3072)
+    parser.add_argument(
+        "--embedding-dimensions",
+        type=int,
+        default=get_settings().embedding_dimensions,
+        help="vector length; must match EMBEDDING_DIMENSIONS on the perf API "
+        "so brute-force cosine search returns real hits (defaults to the app "
+        "setting so seed and API agree)",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 

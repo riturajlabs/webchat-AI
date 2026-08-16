@@ -7,6 +7,7 @@ model call), tenant isolation, conversation memory, and failure paths.
 
 import logging
 
+from backend.core.config import get_settings
 from backend.core.errors import EmbeddingUnavailableError, GenerationError
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER
 from backend.prompts.rag import RAG_PROMPT_VERSION, UNKNOWN_ANSWER_FALLBACK
@@ -22,6 +23,11 @@ from tests.chat_helpers import (
 TENANT_A = "tenant-a"
 TENANT_B = "tenant-b"
 WEB_1 = "web-1"
+
+
+def backend_settings():
+    """The pydantic-settings singleton the RAG service reads at construction."""
+    return get_settings()
 
 
 async def _stream(env, **kwargs):
@@ -369,3 +375,305 @@ async def test_zero_context_retrieval_logs_warning(caplog) -> None:
     assert "reason=retrieval_empty" in caplog.text
     assert f"website={WEB_1}" in caplog.text
     assert "About nothing?" in caplog.text
+
+
+async def test_repeated_question_reuses_the_embedding_cache() -> None:
+    """Asking the same question twice embeds once; generation still runs both turns."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    question = "What is the price?"
+    first = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
+    session_id = _done_event(first)["data"]["session_id"]
+    second = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question=question,
+        session_id=session_id,
+    )
+
+    # The second question never calls the embedding API; retrieval + generation
+    # still run (cache is a question-embedding shortcut, not a full answer cache).
+    assert len(env.embedder.calls) == 1
+    assert len(env.generation.calls) == 2
+    assert _done_event(second)["data"]["session_id"] == session_id
+
+
+async def test_embedding_cache_is_bounded(monkeypatch) -> None:
+    """Eviction is size-only: an LRU of N=1 forgets the first question.
+
+    Each question is asked on a different website so the (per-website)
+    retrieval cache can never serve the repeat - the embedding LRU alone
+    decides whether the provider is called again.
+    """
+    monkeypatch.setattr(backend_settings(), "embedding_cache_size", 1)
+    env = build_chat_env()
+    for index, question in enumerate(["What is A?", "What is B?", "What is A?"]):
+        await make_website(
+            env,
+            tenant_id=TENANT_A,
+            website_id=f"web-{index}",
+            knowledge_chunks=1,
+        )
+        await make_chunk(
+            env, tenant_id=TENANT_A, website_id=f"web-{index}", text="Knowledge."
+        )
+        await _stream(env, tenant_id=TENANT_A, website_id=f"web-{index}", question=question)
+
+    # B evicted A -> the final A is a fresh embedding (miss), so three calls.
+    assert len(env.embedder.calls) == 3
+
+
+async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, caplog) -> None:
+    """The opt-in timing flag adds a phase breakdown to `done` + a `rag_timing` log."""
+    monkeypatch.setattr(backend_settings(), "perf_timing_log_enabled", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    with caplog.at_level(logging.INFO, logger="webchat_ai"):
+        events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+
+    timing = _done_event(events)["data"]["timing"]
+    assert set(timing) == {
+        "embedding_ms",
+        "retrieval_ms",
+        "context_ms",
+        "history_ms",
+        "generation_ms",
+        "ttft_ms",
+        "total_ms",
+    }
+    assert timing["total_ms"] >= timing["embedding_ms"]
+
+    records = [r for r in caplog.records if r.getMessage() == "rag_timing"]
+    assert records
+    assert records[0].embedding_cache == "miss"
+    assert records[0].retrieval_cache == "miss"
+    assert records[0].website_id == WEB_1
+    assert records[0].total_ms >= 0
+
+
+async def test_done_event_omits_timing_when_disabled() -> None:
+    """Default (timing disabled) never leaks timing data into the SSE `done` event."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+
+    assert "timing" not in _done_event(events)["data"]
+
+
+async def test_retrieval_cache_reuses_embedding_and_search_but_not_generation() -> None:
+    """Same question + website inside the TTL skips the embedding AND the
+    vector search, but generation still runs (answers are never cached)."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    question = "What is the price?"
+    first = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
+    session_id = _done_event(first)["data"]["session_id"]
+    await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question=question,
+        session_id=session_id,
+    )
+
+    assert len(env.embedder.calls) == 1
+    assert env.vector.search_calls == 1
+    assert len(env.generation.calls) == 2
+
+
+async def test_retrieval_cache_is_scoped_per_website() -> None:
+    """The cache key includes the website: the same question on another
+    website runs its own embedding (if uncached globally) and its own search."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_website(env, tenant_id=TENANT_A, website_id="web-2", knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge A.")
+    await make_chunk(env, tenant_id=TENANT_A, website_id="web-2", text="Knowledge B.")
+
+    question = "Same question?"
+    for website_id in (WEB_1, "web-2"):
+        await _stream(env, tenant_id=TENANT_A, website_id=website_id, question=question)
+
+    assert len(env.embedder.calls) == 1
+    assert env.vector.search_calls == 2
+
+
+async def test_retrieval_cache_expires_after_ttl(monkeypatch) -> None:
+    """Cache entries expire after `chat_retrieval_cache_ttl_seconds`."""
+    monkeypatch.setattr(backend_settings(), "chat_retrieval_cache_ttl_seconds", 100)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    import backend.services.chat.rag_service as rag_module
+
+    clock = 0.0
+    monkeypatch.setattr(rag_module, "_now", lambda: clock)
+
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    clock += 50.0
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    assert env.vector.search_calls == 1  # still fresh: 50s < 100s TTL
+
+    clock += 60.0  # 110s total -> expired
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    assert env.vector.search_calls == 2
+
+
+async def test_context_is_capped_at_total_budget(monkeypatch) -> None:
+    """The combined context never exceeds `chat_context_max_chars`: the last
+    fitting chunk is truncated to the remaining budget and lower-ranked chunks
+    are dropped entirely."""
+    monkeypatch.setattr(backend_settings(), "chat_context_max_chars", 40)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=3)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="A" * 30,
+        url="https://a.test",
+        title="A",
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="B" * 30,
+        url="https://b.test",
+        title="B",
+        chunk_index=1,
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="C" * 30,
+        url="https://c.test",
+        title="C",
+        chunk_index=2,
+    )
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    sources = next(event for event in events if event["event"] == "sources")["data"]["sources"]
+    user_prompt = env.generation.calls[-1]["messages"][0][1]
+
+    assert [s["url"] for s in sources] == ["https://a.test", "https://b.test"]
+    assert "A" * 30 in user_prompt
+    assert "B" * 10 in user_prompt
+    assert "C" * 30 not in user_prompt
+
+
+async def test_context_min_score_drops_low_ranked_chunks(monkeypatch) -> None:
+    """`chat_context_min_score` filters retrieved chunks below the threshold."""
+    monkeypatch.setattr(backend_settings(), "chat_context_min_score", 0.895)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=2)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Top result.",
+        url="https://a.test",
+        title="A",
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Worse result.",
+        url="https://b.test",
+        title="B",
+        chunk_index=1,
+    )
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    sources = next(event for event in events if event["event"] == "sources")["data"]["sources"]
+    user_prompt = env.generation.calls[-1]["messages"][0][1]
+
+    assert [s["url"] for s in sources] == ["https://a.test"]
+    assert "Top result." in user_prompt
+    assert "Worse result." not in user_prompt
+
+
+async def test_stream_persists_stage_latencies() -> None:
+    """Assistant messages carry the per-stage latency breakdown (ms) used by
+    the performance dashboard."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    message_id = _done_event(events)["data"]["message_id"]
+    message = await env.messages.find_by_id(TENANT_A, message_id)
+    assert message is not None
+
+    assert message.latency_embedding_ms is not None
+    assert message.latency_retrieval_ms is not None
+    assert message.latency_context_ms is not None
+    assert message.latency_history_ms is not None
+    assert message.latency_generation_ms is not None
+    assert message.latency_ttft_ms is not None
+    assert message.latency_total_ms is not None
+    assert message.latency_total_ms >= message.latency_generation_ms
+
+
+async def test_context_cap_zero_disables_budget(monkeypatch) -> None:
+    """`chat_context_max_chars=0` means "no budget" - all chunks are kept."""
+    monkeypatch.setattr(backend_settings(), "chat_context_max_chars", 0)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=3)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="A" * 30,
+        url="https://a.test",
+        title="A",
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="B" * 30,
+        url="https://b.test",
+        title="B",
+        chunk_index=1,
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="C" * 30,
+        url="https://c.test",
+        title="C",
+        chunk_index=2,
+    )
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    sources = next(event for event in events if event["event"] == "sources")["data"]["sources"]
+
+    assert [s["url"] for s in sources] == ["https://a.test", "https://b.test", "https://c.test"]
+
+
+async def test_retrieval_cache_disabled_when_ttl_zero(monkeypatch) -> None:
+    """`chat_retrieval_cache_ttl_seconds=0` turns the retrieval cache off."""
+    monkeypatch.setattr(backend_settings(), "chat_retrieval_cache_ttl_seconds", 0)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    question = "Pricing?"
+    for _ in range(2):
+        await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
+
+    assert env.vector.search_calls == 2

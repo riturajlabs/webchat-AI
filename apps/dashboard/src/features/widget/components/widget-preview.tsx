@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { Send, X } from 'lucide-react';
+import { resolveTheme } from '@webchat/themes';
 
 import { DeviceId, DevicePreview } from './device-preview';
 import type { WidgetConfig } from '../types';
@@ -20,13 +21,23 @@ function effectiveDark(config: WidgetConfig): boolean {
   return false;
 }
 
+function parseCssLength(value: string, fallback: number): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  // vw/vh/em/rem aren't meaningful inside the phone preview; px is the norm.
+  return Math.min(parsed, 520);
+}
+
 /**
  * Live widget preview (Phase 11.5).
  *
  * A faithful React re-creation of the `@webchat/widget` SDK look - same CSS
  * tokens (`--wc-*` → inline styles, same radius/shadow/font-size mapping) so
- * the builder shows exactly what the live embed will look like. It only
- * renders the config; no SDK runtime behavior is mounted.
+ * the builder shows exactly what the live embed will look like. Colors are
+ * resolved by the shared `@webchat/themes` engine (`resolveTheme`), the same
+ * one the widget runtime applies, so preset and custom themes render
+ * identically here and on the live embed. It only renders the config; no SDK
+ * runtime behavior is mounted.
  */
 export function WidgetPreview({ config }: { config: WidgetConfig }) {
   const [device, setDevice] = useState<DeviceId>('desktop');
@@ -36,12 +47,17 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
   const fontPx = FONT_SIZES[config.font_size] ?? FONT_SIZES.md;
   const left = config.position === 'bottom-left';
 
-  const surface = dark ? '#0f172a' : '#ffffff';
-  const surface2 = dark ? '#1e293b' : '#f1f5f9';
-  const text = dark ? '#f8fafc' : '#0f172a';
-  const textMuted = dark ? '#94a3b8' : '#64748b';
-  const border = dark ? '#334155' : '#e2e8f0';
-  const primary = config.primary_color || '#2563eb';
+  const theme = resolveTheme(config, dark);
+  const radius = parseCssLength(config.border_radius, 12);
+  const width = parseCssLength(config.width, 360);
+  const launcherSize = parseCssLength(config.launcher_size, 56);
+  const botName = config.bot_name.trim() || (config.branding ? 'WebChat AI' : 'Assistant');
+  const statusText = config.bot_status_text.trim() || 'Online';
+
+  const scrollbarStyle = {
+    scrollbarWidth: 'thin' as const,
+    scrollbarColor: `${theme.scrollbarThumb} ${theme.scrollbarTrack}`,
+  };
 
   return (
     <DevicePreview siteUrl="https://your-site.com" device={device} onDeviceChange={setDevice}>
@@ -62,22 +78,28 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
             style={{
               [left ? 'left' : 'right']: 20,
               bottom: 88,
-              width: 360,
+              width,
               height: 'calc(100% - 108px)',
               maxHeight: 460,
-              borderRadius: 12,
-              background: surface,
-              border: `1px solid ${border}`,
+              borderRadius: radius,
+              background: theme.surface,
+              border: `1px solid ${theme.border}`,
               boxShadow: '0 16px 48px rgba(2, 6, 23, 0.22)',
               fontSize: fontPx,
-              color: text,
+              color: theme.text,
+              fontFamily: config.font_family ?? 'Inter, sans-serif',
             }}
             role="dialog"
             aria-label="Assistant preview"
           >
             <div
-              className="flex items-center gap-2 px-4 py-3 text-white"
-              style={{ background: primary }}
+              className="flex items-center gap-2 px-4 py-3"
+              style={{
+                background: theme.header,
+                color: theme.headerText,
+                borderTopLeftRadius: radius,
+                borderTopRightRadius: radius,
+              }}
             >
               <div className="flex size-8 items-center justify-center overflow-hidden rounded-full bg-white/20">
                 {config.avatar_url ? (
@@ -87,10 +109,8 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                 )}
               </div>
               <div className="flex flex-col">
-                <span className="text-sm font-semibold leading-tight">
-                  {config.branding ? 'WebChat AI' : 'Assistant'}
-                </span>
-                <span className="text-xs opacity-90">Online</span>
+                <span className="text-sm font-semibold leading-tight">{botName}</span>
+                <span className="text-xs opacity-90">{statusText}</span>
               </div>
               <button
                 type="button"
@@ -102,30 +122,38 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               </button>
             </div>
 
-            <div className="flex-1 overflow-hidden px-4 pb-2 pt-1">
+            <div className="flex-1 overflow-hidden px-4 pb-2 pt-1" style={scrollbarStyle}>
               {config.welcome_message ? (
                 <p
                   className="py-2 text-center text-[0.85em]"
-                  style={{ color: textMuted, fontStyle: 'italic' }}
+                  style={{ color: theme.muted, fontStyle: 'italic' }}
                 >
                   {config.welcome_message}
                 </p>
               ) : null}
               <div
                 className="mb-2 flex max-w-[80%] items-center gap-2 rounded-xl px-3 py-2"
-                style={{ background: surface2, color: text, fontSize: '0.9em' }}
+                style={{
+                  background: theme.assistantBubble,
+                  color: theme.text,
+                  fontSize: '0.9em',
+                }}
               >
                 <div
                   className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white/40 text-[10px] font-semibold"
-                  style={{ color: textMuted }}
+                  style={{ color: theme.muted }}
                 >
                   AI
                 </div>
                 <span>Hi! I’m your AI assistant. Ask me anything about this site.</span>
               </div>
               <div
-                className="mb-2 ml-auto w-fit max-w-[80%] rounded-xl px-3 py-2 text-white"
-                style={{ background: primary, fontSize: '0.9em' }}
+                className="mb-2 ml-auto w-fit max-w-[80%] rounded-xl px-3 py-2"
+                style={{
+                  background: theme.userBubble,
+                  color: theme.userText,
+                  fontSize: '0.9em',
+                }}
               >
                 What do you offer?
               </div>
@@ -133,14 +161,18 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
 
             {config.suggested_questions.length > 0 ? (
               <div className="flex flex-wrap gap-2 px-4 pb-2 pt-1">
-                <span className="w-full text-xs" style={{ color: textMuted }}>
+                <span className="w-full text-xs" style={{ color: theme.muted }}>
                   Try asking:
                 </span>
                 {config.suggested_questions.slice(0, 3).map((question) => (
                   <span
                     key={question}
                     className="rounded-full border px-3 py-1 text-xs"
-                    style={{ borderColor: border, color: text, background: surface }}
+                    style={{
+                      borderColor: theme.border,
+                      color: theme.text,
+                      background: theme.surface,
+                    }}
                   >
                     {question}
                   </span>
@@ -150,11 +182,15 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
 
             <div
               className="flex items-end gap-2 border-t px-3 py-2"
-              style={{ borderColor: border }}
+              style={{ borderColor: theme.border }}
             >
               <div
-                className="flex-1 rounded-lg px-3 py-2 text-[0.85em]"
-                style={{ background: surface2, color: textMuted }}
+                className="flex-1 rounded-full border px-3 py-2 text-[0.85em]"
+                style={{
+                  background: theme.inputBg,
+                  borderColor: theme.border,
+                  color: theme.muted,
+                }}
               >
                 {config.placeholder || 'Type your message…'}
               </div>
@@ -162,7 +198,9 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                 type="button"
                 aria-label="Send"
                 className="flex size-9 items-center justify-center rounded-full text-white"
-                style={{ background: primary }}
+                style={{
+                  background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+                }}
               >
                 <Send aria-hidden="true" className="size-4" />
               </button>
@@ -171,7 +209,7 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
             {config.branding ? (
               <p
                 className="border-t py-1.5 text-center text-[0.7em]"
-                style={{ color: textMuted, borderColor: 'transparent' }}
+                style={{ color: theme.muted, borderColor: 'transparent' }}
               >
                 Powered by WebChat AI
               </p>
@@ -183,8 +221,14 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
           type="button"
           aria-label="Open assistant"
           onClick={() => setOpen((value) => !value)}
-          className="absolute flex size-14 items-center justify-center rounded-full text-white shadow-lg transition-transform hover:scale-105"
-          style={{ [left ? 'left' : 'right']: 20, bottom: 20, background: primary }}
+          className="absolute flex items-center justify-center rounded-full text-white shadow-lg transition-transform hover:scale-105"
+          style={{
+            [left ? 'left' : 'right']: 20,
+            bottom: 20,
+            width: launcherSize,
+            height: launcherSize,
+            background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+          }}
         >
           {open ? (
             <X aria-hidden="true" className="size-6" />

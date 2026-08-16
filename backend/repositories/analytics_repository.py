@@ -67,11 +67,19 @@ class TopWebsiteRow:
 
 @dataclass(frozen=True)
 class ResponseMetricsRow:
-    """Assistant response-time statistics for a window."""
+    """Assistant response statistics for a window (Phase 12.6).
+
+    `avg_embedding_ms` / `avg_retrieval_ms` / `avg_generation_ms` are the
+    per-stage latency averages persisted on assistant messages, letting the
+    performance dashboard break the response time down into where it went.
+    """
 
     avg_response_time: float | None
     fastest_response_time: float | None
     slowest_response_time: float | None
+    avg_embedding_ms: float | None = None
+    avg_retrieval_ms: float | None = None
+    avg_generation_ms: float | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +384,9 @@ class MongoAnalyticsRepository:
                             "avg_response_time": {"$avg": "$response_time"},
                             "fastest_response_time": {"$min": "$response_time"},
                             "slowest_response_time": {"$max": "$response_time"},
+                            "avg_embedding_ms": {"$avg": "$latency_embedding_ms"},
+                            "avg_retrieval_ms": {"$avg": "$latency_retrieval_ms"},
+                            "avg_generation_ms": {"$avg": "$latency_generation_ms"},
                         }
                     },
                 ]
@@ -387,6 +398,9 @@ class MongoAnalyticsRepository:
             avg_response_time=float(doc["avg_response_time"]),
             fastest_response_time=float(doc["fastest_response_time"]),
             slowest_response_time=float(doc["slowest_response_time"]),
+            avg_embedding_ms=_optional_float(doc.get("avg_embedding_ms")),
+            avg_retrieval_ms=_optional_float(doc.get("avg_retrieval_ms")),
+            avg_generation_ms=_optional_float(doc.get("avg_generation_ms")),
         )
 
     async def overview(
@@ -609,6 +623,18 @@ class MongoAnalyticsRepository:
         async for doc in cursor:
             return dict(doc)
         return None
+
+
+def _optional_float(value: float | None) -> float | None:
+    """Coerce an aggregate result to float, mapping None (no docs) to None.
+
+    `$avg` over an absent field on an existing group still returns a value
+    (null) - and on a group with no matching documents the key is missing -
+    so both cases must collapse to `None` for the API contract.
+    """
+    if value is None:
+        return None
+    return float(value)
 
 
 __all__ = [

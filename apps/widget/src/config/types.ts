@@ -14,6 +14,8 @@ export interface WidgetPublicConfig {
   primary_color: string;
   accent_color: string;
   font_size: string;
+  /** Curated theme preset id ('' = classic fully-custom setup). */
+  theme_preset: string;
   logo_url: string | null;
   avatar_url: string | null;
   welcome_message: string;
@@ -22,6 +24,28 @@ export interface WidgetPublicConfig {
   branding: boolean;
   dark_mode: boolean;
   auto_open: boolean;
+  /** Bot display name shown in the chat header. */
+  bot_name: string;
+  /** Status text shown under the bot name (e.g. "Online"). */
+  bot_status_text: string;
+  /** Explicit header background color (falls back to the primary gradient). */
+  header_color: string | null;
+  /** Secondary brand color used in gradients (falls back to accent). */
+  secondary_color: string | null;
+  /** Overrides the surface/background color (falls back to theme). */
+  background_color: string | null;
+  /** Overrides the base text color (falls back to theme). */
+  text_color: string | null;
+  /** Overrides the UI font family (falls back to the system stack). */
+  font_family: string | null;
+  /** Chat window width (CSS length, e.g. "380px"). */
+  width: string;
+  /** Chat window height (CSS length, e.g. "600px"). */
+  height: string;
+  /** Chat window border radius (CSS length, e.g. "20px"). */
+  border_radius: string;
+  /** Floating launcher size (CSS length, e.g. "58px"). */
+  launcher_size: string;
 }
 
 export interface WidgetOptions {
@@ -52,6 +76,7 @@ export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   primary_color: '#2563eb',
   accent_color: '#f59e0b',
   font_size: 'md',
+  theme_preset: '',
   logo_url: null,
   avatar_url: null,
   welcome_message: "Hi 👋 I'm your AI assistant. Ask me anything about this site!",
@@ -60,6 +85,17 @@ export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   branding: true,
   dark_mode: false,
   auto_open: false,
+  bot_name: 'WebChat AI',
+  bot_status_text: 'Online',
+  header_color: null,
+  secondary_color: null,
+  background_color: null,
+  text_color: null,
+  font_family: null,
+  width: '380px',
+  height: '600px',
+  border_radius: '20px',
+  launcher_size: '58px',
 };
 
 /** Versioned public widget API prefix (ADR-004). */
@@ -94,6 +130,20 @@ export function resolveApiBaseUrl(apiBaseUrl?: string): string {
 
 export function defaultConfig(widgetId: string): WidgetPublicConfig {
   return { widget_id: widgetId, ...DEFAULT_CONFIG };
+}
+
+/**
+ * Fill any fields missing from a fetched config with the safe defaults.
+ *
+ * The backend public config is forward-compatible: older backends (or cached
+ * entries) omit fields added later. Normalizing on receipt keeps the SDK
+ * robust against partial payloads — every downstream consumer can assume the
+ * full `WidgetPublicConfig` shape.
+ */
+export function normalizeConfig(
+  config: Partial<WidgetPublicConfig> | WidgetPublicConfig,
+): WidgetPublicConfig {
+  return { ...DEFAULT_CONFIG, ...config, widget_id: config.widget_id ?? 'unknown' };
 }
 
 export function sanitizeApiBaseUrl(value: string): string {

@@ -99,7 +99,7 @@ describe('errorFromApiBody', () => {
       error: { code: 'INTERNAL_DB_PASSWORD', message: 'leak' },
     });
     expect(error.code).toBe('server');
-    expect(error.userMessage).toBe('Something went wrong on our side');
+    expect(error.userMessage).toBe('Sorry, I couldn’t process that. Please try again.');
   });
 });
 

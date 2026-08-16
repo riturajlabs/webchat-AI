@@ -78,6 +78,7 @@ FULL_PAYLOAD = {
     "primary_color": "#000000",
     "accent_color": "#ffffff",
     "font_size": "lg",
+    "theme_preset": "ocean-blue",
     "logo_url": "https://cdn.example.com/logo.png",
     "avatar_url": "https://cdn.example.com/avatar.png",
     "welcome_message": "Hello!",
@@ -108,6 +109,7 @@ def test_update_widget_config_applies_changes(client) -> None:
     assert widget["primary_color"] == "#000000"
     assert widget["accent_color"] == "#ffffff"
     assert widget["font_size"] == "lg"
+    assert widget["theme_preset"] == "ocean-blue"
     assert widget["logo_url"] == "https://cdn.example.com/logo.png"
     assert widget["avatar_url"] == "https://cdn.example.com/avatar.png"
     assert widget["welcome_message"] == "Hello!"
@@ -195,12 +197,124 @@ def test_update_widget_config_validation(client) -> None:
         ({"placeholder": "x" * 121}, "placeholder too long"),
         ({"allowed_domains": ["example"]}, "bare single-label hostname rejected"),
         ({}, "empty patch body"),
+        ({"header_color": "blue"}, "invalid override hex color"),
+        ({"secondary_color": "#12345"}, "short hex rejected"),
+        ({"background_color": "red"}, "invalid background color"),
+        ({"text_color": "transparent"}, "invalid text color"),
+        ({"bot_name": "   "}, "blank bot name"),
+        ({"bot_name": "x" * 61}, "bot name too long"),
+        ({"width": "420"}, "missing CSS unit"),
+        ({"width": "calc(100% - 10px)"}, "unsafe CSS expression"),
+        ({"height": "10emjunk"}, "garbage CSS length"),
+        ({"border_radius": "20px 10px"}, "multi-value radius rejected"),
+        ({"launcher_size": "big"}, "non-length launcher size"),
+        ({"theme_preset": "neon"}, "unknown theme preset"),
+        ({"theme_preset": "x" * 33}, "theme preset too long"),
     ]
     for payload, _label in cases:
         response = test_client.patch(
             f"/api/websites/{website_id}/widget", json=payload, headers=headers
         )
         assert response.status_code == 422, f"expected 422 for {payload}"
+
+
+def test_update_widget_config_branding_fields(client) -> None:
+    """Phase 11.6 branding: bot name, status, colors, fonts and window sizing."""
+    test_client, env, _ = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    response = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={
+            "bot_name": "Acme Support",
+            "bot_status_text": "Away",
+            "header_color": "#123456",
+            "secondary_color": "#abcdef",
+            "background_color": "#f5f5f5",
+            "text_color": "#111111",
+            "font_family": "Georgia",
+            "width": "480px",
+            "height": "720px",
+            "border_radius": "24px",
+            "launcher_size": "64px",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    widget = response.json()["widget"]
+    assert widget["bot_name"] == "Acme Support"
+    assert widget["bot_status_text"] == "Away"
+    assert widget["header_color"] == "#123456"
+    assert widget["secondary_color"] == "#abcdef"
+    assert widget["background_color"] == "#f5f5f5"
+    assert widget["text_color"] == "#111111"
+    assert widget["font_family"] == "Georgia"
+    assert widget["width"] == "480px"
+    assert widget["height"] == "720px"
+    assert widget["border_radius"] == "24px"
+    assert widget["launcher_size"] == "64px"
+
+    stored = next(iter(env.widgets.widgets.values()))
+    assert stored.bot_name == "Acme Support"
+    assert stored.header_color == "#123456"
+    assert stored.width == "480px"
+
+
+def test_update_widget_config_clears_branding_overrides_with_empty_strings(client) -> None:
+    """Empty strings on nullable branding fields revert to the widget defaults."""
+    test_client, env, _ = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+
+    response = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={
+            "header_color": "",
+            "secondary_color": " ",
+            "background_color": "#eeeeee",
+            "font_family": "",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    widget = response.json()["widget"]
+    assert widget["header_color"] is None
+    assert widget["secondary_color"] is None
+    assert widget["background_color"] == "#eeeeee"
+    assert widget["font_family"] is None
+
+
+def test_update_widget_config_theme_preset(client) -> None:
+    """Phase 12 theme presets are validated, stored and clearable."""
+    test_client, env, invalidated = client
+    headers = _auth_headers(test_client)
+    created = _create_website(test_client, headers)
+    website_id = created["website"]["id"]
+    widget_id = created["website"]["widget_id"]
+
+    applied = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"theme_preset": "emerald-support"},
+        headers=headers,
+    )
+    assert applied.status_code == 200
+    assert applied.json()["widget"]["theme_preset"] == "emerald-support"
+    assert next(iter(env.widgets.widgets.values())).theme_preset == "emerald-support"
+    assert invalidated == [widget_id]
+
+    cleared = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"theme_preset": ""},
+        headers=headers,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["widget"]["theme_preset"] == ""
+    assert next(iter(env.widgets.widgets.values())).theme_preset == ""
 
 
 def test_update_widget_config_tenant_isolation(client) -> None:

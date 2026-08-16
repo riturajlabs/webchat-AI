@@ -33,8 +33,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-muted/30">
-      <aside className="hidden w-60 shrink-0 flex-col border-r bg-background md:flex">
+    <div className="flex h-screen overflow-hidden bg-muted/30">
+      <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
         <Link href="/" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Bot className="size-4" aria-hidden="true" />
@@ -63,8 +63,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
+      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <header className="flex shrink-0 items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav />
             <p className="truncate text-sm text-muted-foreground">

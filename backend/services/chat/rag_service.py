@@ -2,8 +2,15 @@
 
 Per question: validate website ownership -> sanitize -> persist the user turn
 -> embed the question -> tenant-filtered Top-5 vector search -> build context
--> load conversation memory -> stream the Gemini answer -> persist the answer
-with sources + tokens + latency -> roll up `usage_records` (ADR-005 §5.5/§5.8).
+-> load conversation memory (overlapping the retrieval) -> stream the Gemini
+answer -> persist the answer with sources + tokens + per-stage latency ->
+roll up `usage_records` (ADR-005 §5.5/§5.8).
+
+Latency (Phase 12.6): repeated questions hit the bounded retrieval cache
+(embedding + search results, TTL-bounded, answers never cached), the context
+is capped by total characters, and every assistant message records the
+embedding/retrieval/context/history/generation/TTFT/total breakdown for the
+performance dashboard.
 
 Hallucination guard (docs/06 Phase 6 rules): the model is never called without
 retrieved context. When the knowledge base is empty or search yields no hits,
@@ -12,9 +19,12 @@ cannot fabricate answers. All failures are surfaced as SSE `error` events so
 the streaming endpoint stays uniform.
 """
 
+import asyncio
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from typing import Any
 
 from backend.ai.gemini import GenerationClient
@@ -48,6 +58,25 @@ logger = logging.getLogger("webchat_ai")
 
 def _error_event(code: str, message: str) -> dict[str, Any]:
     return {"event": "error", "data": {"code": code, "message": message}}
+
+
+def _now() -> float:
+    """Monotonic clock for cache TTL checks (module-level so tests can stub it)."""
+    return time.monotonic()
+
+
+@dataclass
+class _RetrievalCacheEntry:
+    """Cached embedding + search results for one (website, question) pair."""
+
+    vector: list[float]
+    results: list[VectorSearchResult]
+    cached_at: float
+
+
+def _round_ms(value: float | None) -> float | None:
+    """Round a millisecond duration for persistence (None passes through)."""
+    return round(value, 2) if value is not None else None
 
 
 def _error_code(exc: Exception) -> str:
@@ -90,6 +119,84 @@ class RagService:
             memory_turns if memory_turns is not None else settings.chat_memory_turns
         )
         self._max_chars_per_chunk = settings.chat_context_chunk_chars
+        self._max_context_chars = settings.chat_context_max_chars
+        self._min_score = settings.chat_context_min_score
+        self._timing_enabled = settings.perf_timing_log_enabled
+        # Bounded in-process LRU: repeated questions skip the embedding API
+        # call entirely (biggest single source of chat latency after the LLM).
+        self._embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
+        self._embedding_cache_size = settings.embedding_cache_size
+        # Retrieval cache: same website + same normalized question reuses the
+        # embedding AND the vector-search results within the TTL, skipping both
+        # the provider call and the search query. Answers are never cached -
+        # generation always runs, so every turn is a fresh answer.
+        self._retrieval_cache: OrderedDict[tuple[str, str], _RetrievalCacheEntry] = OrderedDict()
+        self._retrieval_cache_size = settings.chat_retrieval_cache_size
+        self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
+
+    async def _embed_question(self, question: str) -> tuple[list[float], bool]:
+        """Embed `question`, caching identical questions across turns.
+
+        Returns `(vector, cache_hit)` so callers can report hit/miss and the
+        opt-in timing breakdown. The cache is a bounded per-process LRU keyed on
+        the normalized (case-folded) question text; repeated/echoed questions hit
+        the cache and skip the provider call. Eviction is size-only so entries
+        never go stale.
+        """
+        key = question.strip().lower()
+        cached = self._embedding_cache.get(key)
+        if cached is not None:
+            self._embedding_cache.move_to_end(key)
+            return cached, True
+        vectors = await self._embedder.embed([question])
+        vector = vectors[0]
+        if self._embedding_cache_size > 0:
+            self._embedding_cache[key] = vector
+            self._embedding_cache.move_to_end(key)
+            while len(self._embedding_cache) > self._embedding_cache_size:
+                self._embedding_cache.popitem(last=False)
+        return vector, False
+
+    async def _retrieve(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        question: str,
+    ) -> tuple[list[float], list[VectorSearchResult], float, float, bool, bool]:
+        """Embed + search, memoizing repeats within the retrieval TTL.
+
+        Returns `(query_vector, results, embedding_ms, retrieval_ms,
+        embedding_cache_hit, retrieval_cache_hit)`. A retrieval-cache hit
+        reports zero stage latency (the work was already done) and skips both
+        the embedding provider and the vector query.
+        """
+        key = (website_id, question.strip().lower())
+        now = _now()
+        entry = self._retrieval_cache.get(key)
+        if entry is not None and now - entry.cached_at < self._retrieval_cache_ttl:
+            self._retrieval_cache.move_to_end(key)
+            return entry.vector, entry.results, 0.0, 0.0, True, True
+        t0 = time.perf_counter()
+        async with chat_stage("retrieval.embed"):
+            query_vector, embedding_cache_hit = await self._embed_question(question)
+        embedding_ms = (time.perf_counter() - t0) * 1000.0
+        t1 = time.perf_counter()
+        async with chat_stage("retrieval.vector_search"):
+            results = await self._vector.similarity_search(
+                tenant_id, website_id, query_vector, top_k=self._top_k
+            )
+        retrieval_ms = (time.perf_counter() - t1) * 1000.0
+        if self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0:
+            self._retrieval_cache[key] = _RetrievalCacheEntry(
+                vector=query_vector,
+                results=results,
+                cached_at=_now(),
+            )
+            self._retrieval_cache.move_to_end(key)
+            while len(self._retrieval_cache) > self._retrieval_cache_size:
+                self._retrieval_cache.popitem(last=False)
+        return query_vector, results, embedding_ms, retrieval_ms, embedding_cache_hit, False
 
     async def stream_answer(
         self,
@@ -106,6 +213,9 @@ class RagService:
         Events: `sources`, `message` (one per delta), `done`, or `error`.
         """
         started = time.monotonic()
+        # perf_counter for the phase breakdown; only measured when the opt-in
+        # timing flag is on (the value is unused otherwise).
+        perf_started = time.perf_counter()
         try:
             async with chat_stage("website.lookup"):
                 website = await self._websites.find_by_id(tenant_id, website_id)
@@ -158,31 +268,37 @@ class RagService:
                 yield event
             return
 
+        # Start the conversation-memory read up front so the Mongo query
+        # overlaps the embedding + vector search (both are usually slower than a
+        # recent-messages read).
+        history_task = asyncio.create_task(self._load_history(tenant_id, session.session_id))
         try:
-            async with chat_stage("retrieval.embed"):
-                vectors = await self._embedder.embed([question])
-            query_vector = vectors[0]
+            retrieval = await self._retrieve(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                question=question,
+            )
+            (
+                query_vector,
+                results,
+                embedding_ms,
+                retrieval_ms,
+                embedding_cache_hit,
+                retrieval_cache_hit,
+            ) = retrieval
         except Exception as exc:
+            history_task.cancel()
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
             return
         logger.info(
-            "chat_embedding tenant=%s website=%s provider=%s dims=%s",
+            "chat_embedding tenant=%s website=%s provider=%s dims=%s cache=%s",
             tenant_id,
             website_id,
             self._provider_name(self._embedder),
             len(query_vector),
+            "hit" if embedding_cache_hit else "miss",
         )
-
-        try:
-            async with chat_stage("retrieval.vector_search"):
-                results = await self._vector.similarity_search(
-                    tenant_id, website_id, query_vector, top_k=self._top_k
-                )
-        except Exception as exc:
-            logger.exception("vector search failed (tenant=%s)", tenant_id)
-            yield _error_event(_error_code(exc), _safe_message(exc))
-            return
         logger.info(
             "chat_vector_search tenant=%s website=%s top_k=%s hits=%s scores=%s",
             tenant_id,
@@ -206,6 +322,7 @@ class RagService:
             )
 
         if not results:
+            history_task.cancel()
             async for event in self._emit_fallback(
                 tenant_id=tenant_id,
                 website_id=website_id,
@@ -218,11 +335,15 @@ class RagService:
                 yield event
             return
 
+        t_context = time.perf_counter()
         async with chat_stage("retrieval.context"):
             context_items, sources = self._build_context(results)
+        context_ms = (time.perf_counter() - t_context) * 1000.0
         try:
+            t_history = time.perf_counter()
             async with chat_stage("retrieval.history"):
-                history = await self._load_history(tenant_id, session.session_id)
+                history = await history_task
+            history_ms = (time.perf_counter() - t_history) * 1000.0
         except Exception as exc:
             logger.exception("conversation memory load failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -258,14 +379,19 @@ class RagService:
         )
 
         deltas: list[str] = []
+        ttft_ms: float | None = None
         try:
+            t2 = time.perf_counter()
             async with chat_stage("generation.stream"):
                 async for delta in self._generation.stream_generate(
                     system=system_prompt,
                     messages=[(CHAT_ROLE_USER, user_prompt)],
                 ):
+                    if ttft_ms is None:
+                        ttft_ms = (time.perf_counter() - t2) * 1000.0
                     deltas.append(delta)
                     yield {"event": "message", "data": {"delta": delta}}
+            generation_ms = (time.perf_counter() - t2) * 1000.0
         except Exception as exc:
             logger.exception("answer generation failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -286,6 +412,15 @@ class RagService:
         assistant.response_time = response_time
         assistant.input_tokens = usage.input_tokens
         assistant.output_tokens = usage.output_tokens
+        # Persist the per-stage latency breakdown for the performance
+        # dashboard (Phase 12.6). Durations only - never content or secrets.
+        assistant.latency_embedding_ms = _round_ms(embedding_ms)
+        assistant.latency_retrieval_ms = _round_ms(retrieval_ms)
+        assistant.latency_context_ms = _round_ms(context_ms)
+        assistant.latency_history_ms = _round_ms(history_ms)
+        assistant.latency_generation_ms = _round_ms(generation_ms)
+        assistant.latency_ttft_ms = _round_ms(ttft_ms)
+        assistant.latency_total_ms = round(response_time * 1000.0, 2)
         async with chat_stage("persist.messages"):
             await self._messages.create(assistant)
         async with chat_stage("persist.session_touch"):
@@ -303,19 +438,45 @@ class RagService:
                     "vector_queries": 1,
                 },
             )
-        yield {
-            "event": "done",
-            "data": {
-                "message_id": assistant.id,
-                "session_id": session.session_id,
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "response_time_ms": int(response_time * 1000),
-                "created_at": assistant.created_at.isoformat(),
-                "prompt_version": self._prompt_version,
-                "fallback": False,
-            },
+        done_data: dict[str, Any] = {
+            "message_id": assistant.id,
+            "session_id": session.session_id,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "response_time_ms": int(response_time * 1000),
+            "created_at": assistant.created_at.isoformat(),
+            "prompt_version": self._prompt_version,
+            "fallback": False,
         }
+        if self._timing_enabled:
+            total_ms = (time.perf_counter() - perf_started) * 1000.0
+            done_data["timing"] = {
+                "embedding_ms": round(embedding_ms, 2),
+                "retrieval_ms": round(retrieval_ms, 2),
+                "context_ms": round(context_ms, 2),
+                "history_ms": round(history_ms, 2),
+                "generation_ms": round(generation_ms, 2),
+                "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
+                "total_ms": round(total_ms, 2),
+            }
+            logger.info(
+                "rag_timing",
+                extra={
+                    "tenant_id": tenant_id,
+                    "website_id": website_id,
+                    "session_id": session.session_id,
+                    "embedding_cache": "hit" if embedding_cache_hit else "miss",
+                    "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
+                    "embedding_ms": round(embedding_ms, 2),
+                    "retrieval_ms": round(retrieval_ms, 2),
+                    "context_ms": round(context_ms, 2),
+                    "history_ms": round(history_ms, 2),
+                    "generation_ms": round(generation_ms, 2),
+                    "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
+                    "total_ms": round(total_ms, 2),
+                },
+            )
+        yield {"event": "done", "data": done_data}
 
     async def _ensure_session(
         self,
@@ -360,11 +521,21 @@ class RagService:
     def _build_context(
         self, results: list[VectorSearchResult]
     ) -> tuple[list[ContextItem], list[dict[str, Any]]]:
-        """Deduplicate hits and produce prompt context + client-facing sources."""
+        """Deduplicate hits, apply the relevance floor, and cap total size.
+
+        Low-score chunks are dropped (when `chat_context_min_score` > 0) and
+        the combined context is bounded by `chat_context_max_chars`: the last
+        chunk that does not fit is truncated to the remaining budget and the
+        rest of the ranking is dropped, so the prompt never grows unbounded.
+        """
         items: list[ContextItem] = []
         sources: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
+        # `chat_context_max_chars <= 0` means "no total budget" (disabled).
+        budget = self._max_context_chars if self._max_context_chars > 0 else None
         for _index, result in enumerate(results, start=1):
+            if self._min_score > 0 and result.score < self._min_score:
+                continue
             chunk = result.chunk
             url = str(chunk.metadata.get("source_url") or "")
             title = str(chunk.metadata.get("title") or url or "Untitled")
@@ -372,7 +543,16 @@ class RagService:
             if key in seen:
                 continue
             seen.add(key)
-            items.append(ContextItem(url=url, title=title, heading=None, text=chunk.chunk_text))
+            text = chunk.chunk_text
+            if len(text) > self._max_chars_per_chunk:
+                text = text[: self._max_chars_per_chunk]
+            if budget is not None and budget >= 0:
+                if len(text) > budget:
+                    text = text[:budget]
+                    budget = 0
+                else:
+                    budget -= len(text)
+            items.append(ContextItem(url=url, title=title, heading=None, text=text))
             sources.append(
                 {
                     "chunk_id": chunk.id,
@@ -382,6 +562,8 @@ class RagService:
                     "citation": len(sources) + 1,
                 }
             )
+            if budget == 0:
+                break
         return items, sources
 
     async def _emit_fallback(

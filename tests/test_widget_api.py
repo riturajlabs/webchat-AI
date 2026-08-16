@@ -161,6 +161,26 @@ async def test_widget_config_returns_public_shape(client) -> None:
     assert "widget_secret_hash" not in body
 
 
+async def test_widget_config_includes_branding_defaults(client) -> None:
+    """Phase 11.6 branding fields ride on the public config with sane defaults."""
+    test_client, _, _, _ = client
+    response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["bot_name"] == "WebChat AI"
+    assert body["bot_status_text"] == "Online"
+    assert body["header_color"] is None
+    assert body["secondary_color"] is None
+    assert body["background_color"] is None
+    assert body["text_color"] is None
+    assert body["font_family"] is None
+    assert body["theme_preset"] == ""
+    assert body["width"] == "380px"
+    assert body["height"] == "600px"
+    assert body["border_radius"] == "20px"
+    assert body["launcher_size"] == "58px"
+
+
 async def test_widget_config_unknown_returns_404(client) -> None:
     test_client, _, _, _ = client
     response = test_client.get("/api/widget/v1/config/does-not-exist")

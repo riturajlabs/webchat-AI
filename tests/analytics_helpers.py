@@ -84,12 +84,17 @@ async def seed_day(
     input_tokens: int = 0,
     output_tokens: int = 0,
     response_times: list[float] | None = None,
+    embedding_ms: list[float] | None = None,
+    retrieval_ms: list[float] | None = None,
+    generation_ms: list[float] | None = None,
 ) -> None:
     """Seed one day of activity: a usage rollup, sessions, and AI messages.
 
     `date` is rounded to noon UTC so it never falls across a daily boundary.
     One `ChatSession` is created per `chats` and one assistant message per
-    entry in `response_times`.
+    entry in `response_times`. Optional per-message stage latencies
+    (`embedding_ms`/`retrieval_ms`/`generation_ms`) align with
+    `response_times` by index (Phase 12.6 performance breakdown).
     """
     day = date.date().isoformat()
     await env.usage.increment(
@@ -125,7 +130,17 @@ async def seed_day(
         message.created_at = _noon(date)
         message.input_tokens = input_tokens
         message.output_tokens = output_tokens
+        message.latency_embedding_ms = _at(embedding_ms, index)
+        message.latency_retrieval_ms = _at(retrieval_ms, index)
+        message.latency_generation_ms = _at(generation_ms, index)
         await env.messages.create(message)
+
+
+def _at(values: list[float] | None, index: int) -> float | None:
+    """Value at `index`, or None when the list is missing/too short."""
+    if values is None or index >= len(values):
+        return None
+    return values[index]
 
 
 def _noon(date: datetime) -> datetime:

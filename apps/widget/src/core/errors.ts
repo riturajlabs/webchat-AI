@@ -35,7 +35,7 @@ const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
   timeout: 'The assistant took too long to respond',
   unauthorized: 'Session expired, please retry',
   limit: 'Message limit reached',
-  server: 'Something went wrong on our side',
+  server: 'Sorry, I couldn’t process that. Please try again.',
   invalid: 'That request could not be sent',
   config: 'Unable to load widget settings',
   widget_not_found: 'Invalid widget ID',

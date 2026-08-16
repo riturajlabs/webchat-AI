@@ -134,6 +134,9 @@ async def get_response_metrics(
         avg_response_time=row.avg_response_time,
         fastest_response_time=row.fastest_response_time,
         slowest_response_time=row.slowest_response_time,
+        avg_embedding_ms=row.avg_embedding_ms,
+        avg_retrieval_ms=row.avg_retrieval_ms,
+        avg_generation_ms=row.avg_generation_ms,
     )
 
 

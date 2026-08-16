@@ -24,6 +24,28 @@ from backend.services.knowledge.chunker import count_tokens
 logger = logging.getLogger("webchat_ai")
 
 
+def ensure_vector_dimensions(
+    provider_name: str,
+    vectors: list[list[float]],
+    expected_dimensions: int,
+) -> None:
+    """Reject vectors whose length differs from the configured index dimension.
+
+    MongoDB `$vectorSearch` indexes a fixed vector length; silently inserting
+    vectors of another length (e.g. after an embedding-provider fallback)
+    corrupts retrieval. Raises a clear `EmbeddingError` before any vector is
+    committed (ADR-009, docs/EMBEDDING_PROVIDERS.md).
+    """
+    if not vectors:
+        return
+    first = len(vectors[0])
+    if first != expected_dimensions:
+        raise EmbeddingError(
+            f"Embedding dimension mismatch: {provider_name} returned {first}, "
+            f"configured index expects {expected_dimensions}."
+        )
+
+
 @dataclass(frozen=True)
 class EmbeddingUsage:
     """Aggregate embedding-API usage so far (hooks, ADR-008 token capture)."""
@@ -58,6 +80,7 @@ class GoogleEmbeddingClient:
         max_retries: int | None = None,
         base_delay_ms: int | None = None,
         timeout_seconds: float | None = None,
+        dimensions: int | None = None,
         on_usage: Callable[[EmbeddingUsage], None] | None = None,
         genai_client: Any | None = None,
     ) -> None:
@@ -73,10 +96,10 @@ class GoogleEmbeddingClient:
             if timeout_seconds is not None
             else settings.embedding_request_timeout_seconds
         )
+        self._dimensions = dimensions if dimensions is not None else settings.embedding_dimensions
         self._on_usage = on_usage
         self._genai_client = genai_client
         self._usage = EmbeddingUsage()
-        self._dimensions = settings.embedding_dimensions
 
     @property
     def usage(self) -> EmbeddingUsage:
@@ -120,8 +143,18 @@ class GoogleEmbeddingClient:
         batch_tokens = sum(count_tokens(text) for text in batch)
         for attempt in range(self._max_retries):
             try:
+                # Truncate Gemini's output to EMBEDDING_DIMENSIONS so every
+                # provider in the fallback chain emits the same vector length
+                # (the MongoDB index dimension). gemini-embedding-001 supports
+                # 1..3072 dimensions; the default 3072 is sent only implicitly
+                # (omitted) so existing 3072-index deployments see no change.
+                config: dict[str, int] | None = None
+                if self._dimensions and self._dimensions != 3072:
+                    config = {"output_dimensionality": self._dimensions}
                 vectors = await asyncio.wait_for(
-                    self._client().aio.models.embed_content(model=self._model, contents=batch),
+                    self._client().aio.models.embed_content(
+                        model=self._model, contents=batch, config=config
+                    ),
                     timeout=self._timeout_seconds,
                 )
                 parsed = self._parse_response(vectors, len(batch))
@@ -162,6 +195,7 @@ class GoogleEmbeddingClient:
             raise EmbeddingError(
                 f"Embedding response returned {len(values)} vectors for {expected} texts."
             )
+        ensure_vector_dimensions("gemini", values, self._dimensions)
         return values
 
     def _record_usage(
@@ -191,4 +225,5 @@ __all__ = [
     "EmbeddingClient",
     "EmbeddingUsage",
     "GoogleEmbeddingClient",
+    "ensure_vector_dimensions",
 ]

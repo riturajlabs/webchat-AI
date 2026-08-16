@@ -69,6 +69,12 @@ export interface ConversationState {
    */
   stoppable: boolean;
   error: string | null;
+  /**
+   * Monotonic counter incremented on every state change. Consumers that render
+   * external state (e.g. the DOM message list) can compare against their own
+   * last-rendered value to skip redundant work.
+   */
+  revision: number;
 }
 
 export interface ConversationOptions {
@@ -88,6 +94,7 @@ export class Conversation {
   private streaming = false;
   private stoppable = false;
   private error: string | null = null;
+  private revision = 0;
   onChange?: (state: ConversationState) => void;
 
   constructor(options: ConversationOptions = {}) {
@@ -102,10 +109,12 @@ export class Conversation {
       streaming: this.streaming,
       stoppable: this.stoppable,
       error: this.error,
+      revision: this.revision,
     };
   }
 
   private emit(): void {
+    this.revision += 1;
     this.onChange?.(this.getState());
   }
 

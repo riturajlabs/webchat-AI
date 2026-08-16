@@ -128,6 +128,9 @@ class AnalyticsService:
             avg_response_time=_round_optional(row.avg_response_time),
             fastest_response_time=_round_optional(row.fastest_response_time),
             slowest_response_time=_round_optional(row.slowest_response_time),
+            avg_embedding_ms=_round_optional(row.avg_embedding_ms),
+            avg_retrieval_ms=_round_optional(row.avg_retrieval_ms),
+            avg_generation_ms=_round_optional(row.avg_generation_ms),
         )
 
     async def get_overview(

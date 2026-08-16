@@ -6,19 +6,33 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS worker
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
+    UV_HTTP_TIMEOUT=600 \
+    UV_CONCURRENT_DOWNLOADS=8 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
-# Install dependencies first (cached layer)
+# Install dependencies first (cached layer). A flaky PyPI connection resets
+# large downloads mid-transfer; uv retries each file internally, so retry the
+# whole sync (uv reuses its wheel cache, making retries cheap) before failing.
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --no-dev --no-install-project --frozen
+RUN set -e; for attempt in 1 2 3 4 5; do \
+      uv sync --no-dev --no-install-project --frozen && exit 0; \
+      echo "uv sync attempt $attempt failed; retrying in 15s..."; \
+      sleep 15; \
+    done; \
+    exit 1
 
 # Copy application code
 COPY backend/ ./backend/
 
 # Install the project itself
-RUN uv sync --no-dev --frozen
+RUN set -e; for attempt in 1 2 3; do \
+      uv sync --no-dev --frozen && exit 0; \
+      echo "uv sync attempt $attempt failed; retrying in 15s..."; \
+      sleep 15; \
+    done; \
+    exit 1
 
 # Phase 4: headless Chromium for the Playwright crawler (docs/06, ADR-002).
 # `--with-deps` pulls the browser's runtime libraries onto bookworm-slim.
