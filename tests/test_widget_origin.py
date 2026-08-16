@@ -187,9 +187,7 @@ async def test_allowed_origin_full_flow(client) -> None:
     test_client, _, chat_env = client
     await _ready_website(chat_env)
 
-    config = test_client.get(
-        f"/api/widget/v1/config/{WIDGET_ID}", headers=_headers()
-    )
+    config = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}", headers=_headers())
     assert config.status_code == 200
     assert config.headers["access-control-allow-origin"] == "*"
 
@@ -297,9 +295,7 @@ async def test_disallowed_origin_rejected_on_all_routes(
 async def test_null_origin_rejected(client) -> None:
     test_client, _, _ = client
     # `Origin: null` (sandboxed iframe / file://) is never a legitimate embed.
-    response = test_client.get(
-        f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "null"}
-    )
+    response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": "null"})
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
 
@@ -369,9 +365,7 @@ async def test_development_hosts_allowed_without_allowlist_entry(client) -> None
     # Loopback hosts not in `cors_origins` are auto-permitted in development
     # so a developer can embed without editing the allowlist.
     for origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
-        response = test_client.get(
-            f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": origin}
-        )
+        response = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}", headers={"Origin": origin})
         assert response.status_code == 200, origin
 
 

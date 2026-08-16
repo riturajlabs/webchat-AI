@@ -131,10 +131,7 @@ class MongoChatSessionRepository:
             # An empty list matches nothing (search with zero hits).
             query["session_id"] = {"$in": session_ids}
         cursor = (
-            self._collection.find(query)
-            .sort("last_activity", DESCENDING)
-            .skip(offset)
-            .limit(limit)
+            self._collection.find(query).sort("last_activity", DESCENDING).skip(offset).limit(limit)
         )
         return [ChatSession.from_doc(doc) async for doc in cursor]
 

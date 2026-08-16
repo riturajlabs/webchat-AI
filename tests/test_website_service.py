@@ -370,9 +370,7 @@ async def test_create_website_allows_url_reuse_after_soft_delete() -> None:
 
 async def test_build_embed_script_includes_widget_api_base_url(monkeypatch) -> None:
     monkeypatch.setenv("WIDGET_API_BASE_URL", "https://api.example.com")
-    monkeypatch.setenv(
-        "WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js"
-    )
+    monkeypatch.setenv("WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js")
     get_settings.cache_clear()
     try:
         env = build_website_env()
@@ -411,9 +409,7 @@ async def test_build_embed_script_omits_api_base_when_unset_in_production(
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.setenv("EMBEDDING_PROVIDER_ORDER", '["gemini"]')
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
-    monkeypatch.setenv(
-        "WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js"
-    )
+    monkeypatch.setenv("WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js")
     monkeypatch.setenv("WIDGET_API_BASE_URL", "")
     monkeypatch.setenv("PAYMENT_PROVIDER", "stripe")
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test")

@@ -120,12 +120,10 @@ async def test_init_indexes_declares_admin_audit_log_indexes(monkeypatch) -> Non
     indexes = _index_map(db["admin_audit_logs"])
     # List + filter sort keys used by GET /api/admin/audit.
     assert any(
-        keys == (("tenant_id", 1), ("created_at", -1)) and not unique
-        for (keys, unique) in indexes
+        keys == (("tenant_id", 1), ("created_at", -1)) and not unique for (keys, unique) in indexes
     )
     assert any(
-        keys == (("action", 1), ("created_at", -1)) and not unique
-        for (keys, unique) in indexes
+        keys == (("action", 1), ("created_at", -1)) and not unique for (keys, unique) in indexes
     )
     assert any(
         keys == (("actor_user_id", 1), ("created_at", -1)) and not unique

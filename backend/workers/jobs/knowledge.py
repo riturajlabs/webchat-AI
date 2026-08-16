@@ -53,9 +53,7 @@ async def enqueue_process_document_deferred(document_id: str, delay_seconds: flo
     `_defer_by` seconds, so the exponential document-level retry schedule
     survives worker restarts and never blocks a worker slot while sleeping.
     """
-    await _arq_redis().enqueue_job(
-        "process_document", document_id, _defer_by=delay_seconds
-    )
+    await _arq_redis().enqueue_job("process_document", document_id, _defer_by=delay_seconds)
 
 
 async def enqueue_process_website_documents(website_id: str) -> None:

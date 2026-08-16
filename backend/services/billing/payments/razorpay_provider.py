@@ -86,9 +86,7 @@ class RazorpayPaymentProvider:
                 json=body,
             )
         if response.status_code >= 400:
-            raise PaymentProviderError(
-                f"Razorpay checkout failed: {_razorpay_error(response)}"
-            )
+            raise PaymentProviderError(f"Razorpay checkout failed: {_razorpay_error(response)}")
         order = response.json()
         order_id = order.get("id")
         if not order_id:
@@ -109,9 +107,7 @@ class RazorpayPaymentProvider:
                 auth=(self._key_id, self._key_secret),
             )
         if response.status_code >= 400:
-            raise PaymentProviderError(
-                f"Razorpay verification failed: {_razorpay_error(response)}"
-            )
+            raise PaymentProviderError(f"Razorpay verification failed: {_razorpay_error(response)}")
         payment = response.json()
         notes = payment.get("notes") or {}
         return PaymentVerification(
@@ -126,9 +122,7 @@ class RazorpayPaymentProvider:
             amount_cents=payment.get("amount"),
         )
 
-    def parse_webhook(
-        self, payload: bytes, headers: Mapping[str, str]
-    ) -> WebhookEvent:
+    def parse_webhook(self, payload: bytes, headers: Mapping[str, str]) -> WebhookEvent:
         if not self._webhook_secret:
             raise PaymentProviderError(
                 "Razorpay webhooks are not configured (missing RAZORPAY_WEBHOOK_SECRET)."

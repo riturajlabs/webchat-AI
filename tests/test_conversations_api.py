@@ -102,21 +102,28 @@ async def test_list_paginates_and_orders_by_activity(client) -> None:
     headers, tenant_id = _auth(test_client)
     base = datetime(2026, 1, 1, tzinfo=UTC)
     await _seed(
-        conv_env, tenant_id=tenant_id, session_id="old", turns=[("user", "Oldest")],
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="old",
+        turns=[("user", "Oldest")],
         last_activity=base,
     )
     await _seed(
-        conv_env, tenant_id=tenant_id, session_id="mid", turns=[("user", "Middle")],
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="mid",
+        turns=[("user", "Middle")],
         last_activity=base + timedelta(hours=1),
     )
     await _seed(
-        conv_env, tenant_id=tenant_id, session_id="new", turns=[("user", "Newest")],
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="new",
+        turns=[("user", "Newest")],
         last_activity=base + timedelta(hours=2),
     )
 
-    page_one = test_client.get(
-        "/api/conversations?per_page=2&page=1", headers=headers
-    ).json()
+    page_one = test_client.get("/api/conversations?per_page=2&page=1", headers=headers).json()
     assert [item["id"] for item in page_one["items"]] == ["new", "mid"]
     assert page_one["total"] == 3
 
@@ -134,9 +141,7 @@ async def test_list_search_matches_message_content(client) -> None:
         conv_env, tenant_id=tenant_id, session_id="nomatch", turns=[("user", "Shipping times?")]
     )
 
-    response = test_client.get(
-        "/api/conversations?search=refund", headers=headers
-    )
+    response = test_client.get("/api/conversations?search=refund", headers=headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -172,11 +177,17 @@ async def test_list_search_combined_with_website_filter(client) -> None:
     test_client, conv_env = client
     headers, tenant_id = _auth(test_client)
     await _seed(
-        conv_env, tenant_id=tenant_id, session_id="sess-a", website_id="web-a",
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="sess-a",
+        website_id="web-a",
         turns=[("user", "Pricing details")],
     )
     await _seed(
-        conv_env, tenant_id=tenant_id, session_id="sess-b", website_id="web-b",
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="sess-b",
+        website_id="web-b",
         turns=[("user", "Pricing details")],
     )
 

@@ -37,9 +37,7 @@ class SubscriptionRepository(Protocol):
 
     async def find_by_payment_id(self, payment_id: str) -> Subscription | None: ...
 
-    async def list_by_tenant(
-        self, tenant_id: str, *, limit: int = 50
-    ) -> list[Subscription]: ...
+    async def list_by_tenant(self, tenant_id: str, *, limit: int = 50) -> list[Subscription]: ...
 
     # Phase 15 revenue accounting (admin surface). Aggregate the money actually
     # charged for paid billing periods, newest first.
@@ -67,9 +65,7 @@ class MongoSubscriptionRepository:
             subscription.to_doc(),
         )
 
-    async def find_active_by_tenant(
-        self, tenant_id: str, *, now: datetime
-    ) -> Subscription | None:
+    async def find_active_by_tenant(self, tenant_id: str, *, now: datetime) -> Subscription | None:
         doc = await self._collection.find_one(
             {
                 "tenant_id": tenant_id,
@@ -99,9 +95,7 @@ class MongoSubscriptionRepository:
             }
         )
 
-    async def list_by_tenant(
-        self, tenant_id: str, *, limit: int = 50
-    ) -> list[Subscription]:
+    async def list_by_tenant(self, tenant_id: str, *, limit: int = 50) -> list[Subscription]:
         cursor = (
             self._collection.find({"tenant_id": tenant_id})
             .sort("created_at", DESCENDING)
@@ -124,9 +118,7 @@ class MongoSubscriptionRepository:
             if until is not None:
                 created_at["$lte"] = until
             query["created_at"] = created_at
-        cursor = (
-            self._collection.find(query).sort("created_at", DESCENDING).limit(limit)
-        )
+        cursor = self._collection.find(query).sort("created_at", DESCENDING).limit(limit)
         return [Subscription.from_doc(doc) async for doc in cursor]
 
 

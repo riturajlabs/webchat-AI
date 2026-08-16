@@ -33,10 +33,18 @@ async def test_get_overview_computes_resolution_and_fallback_rates(env) -> None:
     tenant_id = "tenant-1"
     await seed_website(env, tenant_id=tenant_id, website_id="web-1")
     await seed_question(
-        env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question="Course?",
+        env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="Course?",
     )
     await seed_question(
-        env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question="Course?",
+        env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="Course?",
     )
     await seed_fallback(env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1))
 
@@ -57,7 +65,11 @@ async def test_get_overview_rounds_rates_to_one_decimal(env) -> None:
     for _ in range(2):
         await seed_fallback(env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1))
     await seed_question(
-        env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question="A?",
+        env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        question="A?",
     )
 
     item = await env.service.get_overview(tenant_id, days=7)
@@ -86,7 +98,11 @@ async def test_get_overview_scopes_to_website(env) -> None:
     await seed_fallback(env, tenant_id=tenant_id, website_id="web-a", date=_days_ago(1))
     await seed_website(env, tenant_id=tenant_id, website_id="web-b")
     await seed_question(
-        env, tenant_id=tenant_id, website_id="web-b", date=_days_ago(1), question="B?",
+        env,
+        tenant_id=tenant_id,
+        website_id="web-b",
+        date=_days_ago(1),
+        question="B?",
     )
 
     item = await env.service.get_overview(tenant_id, days=7, website_id="web-a")
@@ -103,7 +119,11 @@ async def test_get_top_questions_ranks_by_frequency(env) -> None:
     for question, times in (("Top question?", 3), ("Second question?", 2), ("Rare question?", 1)):
         for _ in range(times):
             await seed_question(
-                env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question=question,
+                env,
+                tenant_id=tenant_id,
+                website_id="web-1",
+                date=_days_ago(1),
+                question=question,
             )
 
     rows = await env.service.get_top_questions(tenant_id, days=7, limit=10)
@@ -120,7 +140,11 @@ async def test_get_top_questions_respects_limit_and_skips_blank(env) -> None:
     await seed_website(env, tenant_id=tenant_id, website_id="web-1")
     for index in range(3):
         await seed_question(
-            env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question=f"Q {index}?",
+            env,
+            tenant_id=tenant_id,
+            website_id="web-1",
+            date=_days_ago(1),
+            question=f"Q {index}?",
         )
     blank = seed_question
     await blank(env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1), question="   ")
@@ -143,7 +167,11 @@ async def test_get_feedback_analytics_sentiment_buckets(env) -> None:
     await seed_website(env, tenant_id=tenant_id, website_id="web-1")
     for rating in (5, 5, 4, 3, 1):
         await seed_feedback(
-            env, tenant_id=tenant_id, website_id="web-1", rating=rating, date=_days_ago(1),
+            env,
+            tenant_id=tenant_id,
+            website_id="web-1",
+            rating=rating,
+            date=_days_ago(1),
         )
 
     row = await env.service.get_feedback_analytics(tenant_id, days=7)
@@ -170,11 +198,19 @@ async def test_get_feedback_analytics_scopes_to_website(env) -> None:
     tenant_id = "tenant-1"
     await seed_website(env, tenant_id=tenant_id, website_id="web-a")
     await seed_feedback(
-        env, tenant_id=tenant_id, website_id="web-a", rating=5, date=_days_ago(1),
+        env,
+        tenant_id=tenant_id,
+        website_id="web-a",
+        rating=5,
+        date=_days_ago(1),
     )
     await seed_website(env, tenant_id=tenant_id, website_id="web-b")
     await seed_feedback(
-        env, tenant_id=tenant_id, website_id="web-b", rating=1, date=_days_ago(1),
+        env,
+        tenant_id=tenant_id,
+        website_id="web-b",
+        rating=1,
+        date=_days_ago(1),
     )
 
     row = await env.service.get_feedback_analytics(tenant_id, days=7, website_id="web-a")

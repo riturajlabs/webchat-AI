@@ -42,4 +42,19 @@ describe('mount', () => {
     expect(controller.isOpen()).toBe(false);
     controller.destroy();
   });
+
+  it('returns the existing controller when the host is already mounted', () => {
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    document.body.appendChild(host);
+
+    const first = mount({ widgetId: 'widget_1', host });
+    const again = mount({ widgetId: 'widget_1', host });
+
+    expect(again).toBe(first);
+    expect(host.shadowRoot?.querySelectorAll('.wc-shell')).toHaveLength(1);
+
+    again.destroy();
+    expect(document.querySelector('webchat-widget')).toBeNull();
+  });
 });

@@ -137,6 +137,13 @@ export interface WidgetController {
 
 const HOST_TAG = 'webchat-widget';
 
+/**
+ * Hosts already mounted via `mount()`. Mounting the same element again (a
+ * double-init or a repeated `autoUpgrade`) returns the existing controller
+ * instead of attaching a second UI shell (multi-embed guard).
+ */
+const mountedHosts = new WeakMap<HTMLElement, WidgetController>();
+
 /** Register the custom element once (idempotent across HMR / re-imports). */
 export function defineWidgetElement(): void {
   if (!globalThis.customElements?.get(HOST_TAG)) {
@@ -173,7 +180,9 @@ async function copyText(text: string): Promise<boolean> {
 
 /**
  * Mount the widget into `host` (or a fresh `<webchat-widget>` appended to the
- * document body) and return a controller.
+ * document body) and return a controller. Re-mounting the same host is
+ * idempotent: the existing controller is returned and no duplicate UI is
+ * attached.
  */
 export function mount(options: WidgetHostOptions): WidgetController {
   const widgetId = options.widgetId;
@@ -182,6 +191,10 @@ export function mount(options: WidgetHostOptions): WidgetController {
   const configStore = options.configStore;
 
   const host = options.host ?? createHost(widgetId, apiBaseUrl);
+  const existing = mountedHosts.get(host);
+  if (existing) {
+    return existing;
+  }
   const shadowRoot = host.shadowRoot ?? host.attachShadow({ mode: 'closed' });
 
   const visitorId = getVisitorId();
@@ -631,6 +644,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
       window.removeEventListener('offline', onConnectivityChange);
       windowElement.releaseFocus();
       shadowRoot.replaceChildren();
+      mountedHosts.delete(host);
       host.remove();
     },
   };
@@ -668,6 +682,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
   if (options.autoStart ?? true) {
     void start();
   }
+  mountedHosts.set(host, controller);
   return controller;
 }
 

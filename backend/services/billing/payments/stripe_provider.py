@@ -103,9 +103,7 @@ class StripePaymentProvider:
         cancel_url: str,
     ) -> PaymentCheckout:
         if not self._secret_key:
-            raise PaymentProviderError(
-                "Stripe is not configured (missing STRIPE_SECRET_KEY)."
-            )
+            raise PaymentProviderError("Stripe is not configured (missing STRIPE_SECRET_KEY).")
         form: dict[str, str] = {
             "mode": "payment",
             "client_reference_id": tenant_id,
@@ -124,9 +122,7 @@ class StripePaymentProvider:
                 data=form,
             )
         if response.status_code >= 400:
-            raise PaymentProviderError(
-                f"Stripe checkout failed: {_stripe_error(response)}"
-            )
+            raise PaymentProviderError(f"Stripe checkout failed: {_stripe_error(response)}")
         body = response.json()
         checkout_id = body.get("id")
         url = body.get("url")
@@ -136,18 +132,14 @@ class StripePaymentProvider:
 
     async def verify_payment(self, payment_id: str) -> PaymentVerification:
         if not self._secret_key:
-            raise PaymentProviderError(
-                "Stripe is not configured (missing STRIPE_SECRET_KEY)."
-            )
+            raise PaymentProviderError("Stripe is not configured (missing STRIPE_SECRET_KEY).")
         async with self._client or httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.get(
                 f"{_STRIPE_API}/checkout/sessions/{payment_id}",
                 auth=(self._secret_key, ""),
             )
         if response.status_code >= 400:
-            raise PaymentProviderError(
-                f"Stripe verification failed: {_stripe_error(response)}"
-            )
+            raise PaymentProviderError(f"Stripe verification failed: {_stripe_error(response)}")
         session = response.json()
         metadata = session.get("metadata") or {}
         return PaymentVerification(
@@ -162,9 +154,7 @@ class StripePaymentProvider:
             amount_cents=session.get("amount_total"),
         )
 
-    def parse_webhook(
-        self, payload: bytes, headers: Mapping[str, str]
-    ) -> WebhookEvent:
+    def parse_webhook(self, payload: bytes, headers: Mapping[str, str]) -> WebhookEvent:
         if not self._webhook_secret:
             raise PaymentProviderError(
                 "Stripe webhooks are not configured (missing STRIPE_WEBHOOK_SECRET)."

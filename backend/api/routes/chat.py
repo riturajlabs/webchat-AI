@@ -63,6 +63,7 @@ async def stream_chat(
     The `messages_sent` plan limit is enforced before the pipeline runs; when
     exhausted the stream opens with an `error` frame (code `LIMIT_REACHED`).
     """
+
     async def event_stream() -> AsyncIterator[str]:
         async for frame in stream_answer_with_usage(
             request,

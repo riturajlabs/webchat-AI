@@ -159,9 +159,7 @@ class MongoVectorRepository(VectorRepository):
             website_id,
             top_k,
         )
-        return await self._brute_force_search(
-            tenant_id, website_id, query_embedding, top_k=top_k
-        )
+        return await self._brute_force_search(tenant_id, website_id, query_embedding, top_k=top_k)
 
     async def _has_search_index(self) -> bool:
         """Whether a usable Atlas Search vector index exists (cached probe).
@@ -177,9 +175,7 @@ class MongoVectorRepository(VectorRepository):
     async def _probe_search_support(self) -> bool:
         """`listSearchIndexes` works and reports a vector index on `embedding`."""
         try:
-            info = await self._database.command(
-                {"listSearchIndexes": self._collection.name}
-            )
+            info = await self._database.command({"listSearchIndexes": self._collection.name})
         except Exception:  # noqa: BLE001 - any probe failure means "no search"
             return False
         indexes = info.get("indexes", []) if isinstance(info, dict) else []
@@ -199,22 +195,47 @@ class MongoVectorRepository(VectorRepository):
         *,
         top_k: int,
     ) -> list[VectorSearchResult]:
-        """Exact cosine similarity over the tenant/website's chunks (fallback)."""
+        """Exact cosine similarity over the tenant/website's chunks (fallback).
+
+        Chunks whose embedding length differs from the query embedding cannot
+        be compared and are skipped. That is a sign of mixed embedding
+        dimensions in storage (e.g. an embedding-provider migration), and it
+        would otherwise surface only as silently missing hits - so the skip is
+        counted and reported. Only the expected/detected dimensions and the
+        skipped count are logged, never the vector values.
+        """
         cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
         scored: list[tuple[float, KnowledgeChunk]] = []
         scanned = 0
+        expected_dimension = len(query_embedding)
+        skipped_mismatched = 0
+        detected_dimensions: dict[int, int] = {}
         async for item in cursor:
             chunk = KnowledgeChunk.from_doc(item)
             scanned += 1
             if not chunk.embedding:
                 continue
+            if len(chunk.embedding) != expected_dimension:
+                skipped_mismatched += 1
+                detected_dimensions[len(chunk.embedding)] = (
+                    detected_dimensions.get(len(chunk.embedding), 0) + 1
+                )
+                continue
             score = _cosine_similarity(query_embedding, chunk.embedding)
             if score > 0:
                 scored.append((score, chunk))
+        if skipped_mismatched:
+            logger.warning(
+                "skipped %s chunk(s) with mismatched embedding dimensions "
+                "(expected=%s detected=%s tenant=%s website=%s)",
+                skipped_mismatched,
+                expected_dimension,
+                detected_dimensions,
+                tenant_id,
+                website_id,
+            )
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        results = [
-            VectorSearchResult(chunk=chunk, score=score) for score, chunk in scored[:top_k]
-        ]
+        results = [VectorSearchResult(chunk=chunk, score=score) for score, chunk in scored[:top_k]]
         logger.info(
             "exact cosine scan finished (tenant=%s website=%s scanned=%s hits=%s)",
             tenant_id,

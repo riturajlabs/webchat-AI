@@ -182,9 +182,7 @@ class FakeTenantRepository:
         plan: str | None = None,
         status: str | None = None,
     ) -> int:
-        return len(
-            await self.list_tenants(search=search, plan=plan, status=status, limit=10**9)
-        )
+        return len(await self.list_tenants(search=search, plan=plan, status=status, limit=10**9))
 
     async def update(self, tenant: Tenant) -> None:
         self._tenants[tenant.id] = tenant
@@ -672,11 +670,7 @@ class FakeDocumentRepository:
 
     async def count_by_tenant(self, tenant_id: str) -> int:
         return len(
-            [
-                document
-                for document in self._documents.values()
-                if document.tenant_id == tenant_id
-            ]
+            [document for document in self._documents.values() if document.tenant_id == tenant_id]
         )
 
     async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int:
@@ -1288,18 +1282,14 @@ class FakeSubscriptionRepository:
     async def update(self, subscription: Subscription) -> None:
         self._subscriptions[subscription.id] = subscription
 
-    async def find_active_by_tenant(
-        self, tenant_id: str, *, now: datetime
-    ) -> Subscription | None:
+    async def find_active_by_tenant(self, tenant_id: str, *, now: datetime) -> Subscription | None:
         candidates = sorted(
             (
                 subscription
                 for subscription in self._subscriptions.values()
                 if subscription.tenant_id == tenant_id
                 and subscription.status in SUBSCRIPTION_LIVE_STATUSES
-                and (
-                    subscription.end_date is None or subscription.end_date >= now
-                )
+                and (subscription.end_date is None or subscription.end_date >= now)
             ),
             key=lambda subscription: subscription.created_at,
             reverse=True,
@@ -1316,9 +1306,7 @@ class FakeSubscriptionRepository:
             None,
         )
 
-    async def list_by_tenant(
-        self, tenant_id: str, *, limit: int = 50
-    ) -> list[Subscription]:
+    async def list_by_tenant(self, tenant_id: str, *, limit: int = 50) -> list[Subscription]:
         candidates = sorted(
             (
                 subscription
@@ -1668,9 +1656,7 @@ class FakeAnalyticsRepository:
             total_messages=sum(r.counters.get("messages", 0) for r in records),
             total_questions=sum(1 for m in messages if m.role == CHAT_ROLE_USER),
             total_ai_responses=len(assistants),
-            successful_answers=sum(
-                1 for m in assistants if m.content != UNKNOWN_ANSWER_FALLBACK
-            ),
+            successful_answers=sum(1 for m in assistants if m.content != UNKNOWN_ANSWER_FALLBACK),
             fallback_responses=sum(1 for m in assistants if m.content == UNKNOWN_ANSWER_FALLBACK),
             avg_response_time=(
                 round(sum(response_times) / len(response_times), 3) if response_times else None

@@ -42,9 +42,7 @@ async def test_paid_webhook_activates_subscription(client) -> None:
     test_client, payment_env = client
     payment_env.provider.tenant_id = "tenant-web-1"
 
-    response = test_client.post(
-        "/api/webhooks/payment", content=b'{"event": "payment.captured"}'
-    )
+    response = test_client.post("/api/webhooks/payment", content=b'{"event": "payment.captured"}')
 
     assert response.status_code == 200
     assert response.json() == {"ok": "true", "event": "payment.captured"}
@@ -57,9 +55,7 @@ async def test_paid_webhook_activates_subscription(client) -> None:
 
 async def test_webhook_does_not_require_bearer_token(client) -> None:
     test_client, _ = client
-    response = test_client.post(
-        "/api/webhooks/payment", content=b'{"event": "payment.captured"}'
-    )
+    response = test_client.post("/api/webhooks/payment", content=b'{"event": "payment.captured"}')
     assert response.status_code == 200
 
 
@@ -67,9 +63,7 @@ async def test_webhook_with_bad_signature_is_rejected(client) -> None:
     test_client, payment_env = client
     payment_env.provider.signature_ok = False
 
-    response = test_client.post(
-        "/api/webhooks/payment", content=b'{"event": "payment.captured"}'
-    )
+    response = test_client.post("/api/webhooks/payment", content=b'{"event": "payment.captured"}')
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "INVALID_PAYMENT_SIGNATURE"
@@ -80,9 +74,7 @@ async def test_failed_payment_webhook_is_a_noop(client) -> None:
     test_client, payment_env = client
     payment_env.provider.webhook_status = PAYMENT_STATUS_FAILED
 
-    response = test_client.post(
-        "/api/webhooks/payment", content=b'{"event": "payment.failed"}'
-    )
+    response = test_client.post("/api/webhooks/payment", content=b'{"event": "payment.failed"}')
 
     assert response.status_code == 200
     assert payment_env.subscriptions.subscriptions == []

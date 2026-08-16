@@ -10,11 +10,11 @@ def test_production_rejects_short_jwt_secret() -> None:
 
 
 def test_production_rejects_missing_jwt_secret() -> None:
-    # No JWT_SECRET provided: the insecure example default must not pass.
-    # Skip the dotenv file so a developer's local .env cannot leak a secret
-    # into this assertion (tests must be independent of the working env).
+    # An empty/unset JWT_SECRET must never pass in production, even now that
+    # the development default is strong. Skip the dotenv file so a developer's
+    # local .env cannot leak a secret into this assertion.
     with pytest.raises(ValueError, match="JWT_SECRET"):
-        Settings(_env_file=None, environment="production")
+        Settings(_env_file=None, environment="production", jwt_secret="")
 
 
 def test_production_accepts_32_byte_jwt_secret() -> None:
@@ -36,6 +36,14 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
 def test_development_allows_example_jwt_secret() -> None:
     settings = Settings(environment="development", jwt_secret="change-me-in-production")
     assert settings.jwt_secret
+
+
+def test_default_jwt_secret_is_at_least_32_bytes() -> None:
+    # The development/test fallback must never regress below 32 bytes, or
+    # PyJWT's InsecureKeyLengthWarning (RFC 7518 §3.2) fires in every dev/test
+    # stack that relies on the default.
+    settings = Settings(_env_file=None)
+    assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
 
 def test_trust_proxy_defaults_to_false() -> None:

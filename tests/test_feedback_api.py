@@ -145,12 +145,8 @@ async def test_feedback_summary_accepts_days_filter(client) -> None:
     assert body["total"] == 3
     assert body["average_rating"] == 2.0
 
-    assert (
-        test_client.get("/api/feedback/summary?days=0", headers=headers).status_code == 422
-    )
-    assert (
-        test_client.get("/api/feedback/summary?days=91", headers=headers).status_code == 422
-    )
+    assert test_client.get("/api/feedback/summary?days=0", headers=headers).status_code == 422
+    assert test_client.get("/api/feedback/summary?days=91", headers=headers).status_code == 422
 
 
 async def test_feedback_isolates_tenants(client) -> None:

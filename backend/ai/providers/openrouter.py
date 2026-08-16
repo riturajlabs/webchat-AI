@@ -45,9 +45,7 @@ class OpenRouterGenerationClient:
         self._model = model or settings.openrouter_model
         self._api_key = api_key if api_key is not None else settings.openrouter_api_key
         self._timeout_seconds = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else settings.ai_provider_timeout_seconds
+            timeout_seconds if timeout_seconds is not None else settings.ai_provider_timeout_seconds
         )
         self._http_client = http_client
         self._usage = GenerationUsage()

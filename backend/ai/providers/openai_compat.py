@@ -117,17 +117,11 @@ def map_openai_http_error(status: int, provider_name: str) -> AppError:
     anything else is a plain generation failure.
     """
     if status in (401, 403):
-        return GenerationUnavailableError(
-            f"{provider_name} authentication failed (HTTP {status})."
-        )
+        return GenerationUnavailableError(f"{provider_name} authentication failed (HTTP {status}).")
     if status == 402:
-        return GenerationUnavailableError(
-            f"{provider_name} credits exhausted (HTTP {status})."
-        )
+        return GenerationUnavailableError(f"{provider_name} credits exhausted (HTTP {status}).")
     if status == 429:
-        return GenerationUnavailableError(
-            f"{provider_name} rate limit exceeded (HTTP {status})."
-        )
+        return GenerationUnavailableError(f"{provider_name} rate limit exceeded (HTTP {status}).")
     return GenerationError(f"{provider_name} request failed (HTTP {status}).")
 
 

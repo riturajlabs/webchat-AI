@@ -114,8 +114,7 @@ class ConversationService:
             tenant_id, [session.session_id for session in sessions]
         )
         items = [
-            self._summary_item(session, summaries.get(session.session_id))
-            for session in sessions
+            self._summary_item(session, summaries.get(session.session_id)) for session in sessions
         ]
         return items, total
 

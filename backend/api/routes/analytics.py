@@ -127,9 +127,7 @@ async def get_response_metrics(
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> ResponseMetrics:
-    row = await service.get_response_metrics(
-        principal.tenant_id, days=days, website_id=website_id
-    )
+    row = await service.get_response_metrics(principal.tenant_id, days=days, website_id=website_id)
     return ResponseMetrics(
         avg_response_time=row.avg_response_time,
         fastest_response_time=row.fastest_response_time,
@@ -149,9 +147,7 @@ async def get_analytics_overview(
     days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> AnalyticsOverview:
-    item = await service.get_overview(
-        principal.tenant_id, days=days, website_id=website_id
-    )
+    item = await service.get_overview(principal.tenant_id, days=days, website_id=website_id)
     return AnalyticsOverview(
         total_conversations=item.total_conversations,
         total_messages=item.total_messages,

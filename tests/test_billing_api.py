@@ -10,6 +10,8 @@ covered in `test_chat_api.py`; service-level gating for website creation and
 crawls in `test_usage_service.py`; webhook activation in `test_payment_webhooks.py`.
 """
 
+from dataclasses import replace
+
 import pytest
 from backend.api.deps import (
     get_auth_service,
@@ -19,6 +21,7 @@ from backend.api.deps import (
 )
 from backend.core.config import get_settings
 from backend.main import create_app
+from backend.models.plan import PLANS
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import build_auth_env
@@ -102,8 +105,11 @@ async def test_billing_usage_reflects_recorded_events_and_live_counts(client) ->
         tenant_id=tenant_id, user_id="user-1", website_id="web-1", event_type="messages_sent"
     )
     await billing_env.service.record_usage(
-        tenant_id=tenant_id, user_id="user-1", website_id="web-1",
-        event_type="tokens_used", quantity=250,
+        tenant_id=tenant_id,
+        user_id="user-1",
+        website_id="web-1",
+        event_type="tokens_used",
+        quantity=250,
     )
 
     response = test_client.get("/api/billing/usage", headers=headers)
@@ -200,9 +206,7 @@ async def test_checkout_rejects_non_purchasable_plan(client) -> None:
     test_client, _, _, _ = client
     headers, _tenant_id = _auth(test_client)
 
-    response = test_client.post(
-        "/api/billing/checkout", headers=headers, json={"plan_id": "free"}
-    )
+    response = test_client.post("/api/billing/checkout", headers=headers, json={"plan_id": "free"})
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "PLAN_NOT_PURCHASABLE"
@@ -250,9 +254,7 @@ async def test_subscription_reflects_activation_and_payment_history(client) -> N
     headers, tenant_id = _auth(test_client)
     payment_env.provider.tenant_id = tenant_id
 
-    await payment_env.service.activate_payment(
-        payment_env.provider.parse_webhook(b"payload", {})
-    )
+    await payment_env.service.activate_payment(payment_env.provider.parse_webhook(b"payload", {}))
 
     response = test_client.get("/api/billing/subscription", headers=headers)
 
@@ -270,3 +272,28 @@ async def test_subscription_reflects_activation_and_payment_history(client) -> N
     assert payment["plan_id"] == "pro"
     assert payment["amount_cents"] == 2_900
     assert payment["currency"] == "USD"
+
+
+async def test_payment_history_keeps_charged_amount_after_plan_price_change(
+    client, monkeypatch
+) -> None:
+    test_client, _, _, payment_env = client
+    headers, tenant_id = _auth(test_client)
+    payment_env.provider.tenant_id = tenant_id
+
+    await payment_env.service.activate_payment(payment_env.provider.parse_webhook(b"payload", {}))
+
+    monkeypatch.setitem(PLANS, "pro", replace(PLANS["pro"], price_cents=9_999))
+
+    response = test_client.get("/api/billing/subscription", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["subscription"]["plan_id"] == "pro"
+    assert len(body["payments"]) == 1
+    assert body["payments"][0]["amount_cents"] == 2_900
+
+    plans_response = test_client.get("/api/billing/plans", headers=headers)
+    pro = next(plan for plan in plans_response.json() if plan["id"] == "pro")
+    assert pro["price_cents"] == 9_999
+    assert body["payments"][0]["amount_cents"] != pro["price_cents"]

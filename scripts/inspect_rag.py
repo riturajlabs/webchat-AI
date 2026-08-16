@@ -111,9 +111,7 @@ def main() -> None:
         print(f"  website_id={website_id}: {count} chunks, embedding dims={dims}")
     print(f"  chunks with no embedding: {no_embedding}")
 
-    sample_chunks = list(
-        db["knowledge_chunks"].find({}).sort([("created_at", -1)]).limit(3)
-    )
+    sample_chunks = list(db["knowledge_chunks"].find({}).sort([("created_at", -1)]).limit(3))
     for c in sample_chunks:
         print(
             f"  chunk id={c.get('_id')} tenant_id={c.get('tenant_id')} "

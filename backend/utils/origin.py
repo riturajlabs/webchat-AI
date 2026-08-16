@@ -102,11 +102,7 @@ def normalize_allowed_domains(allowed_domains: list[str]) -> list[str]:
     opt-in) only. Use `normalize_domain_entry` when the input may be a full
     URL (dashboard input / data migration).
     """
-    return [
-        entry
-        for value in allowed_domains
-        if (entry := _normalize_entry(value)) is not None
-    ]
+    return [entry for value in allowed_domains if (entry := _normalize_entry(value)) is not None]
 
 
 def normalize_domain_entry(entry: str) -> str | None:
@@ -154,8 +150,6 @@ def origin_allowed(origin: str | None, allowed_domains: list[str]) -> bool:
     for entry in normalized:
         if entry == host:
             return True
-        if entry.startswith("*.") and (
-            host == entry[2:] or host.endswith(f".{entry[2:]}")
-        ):
+        if entry.startswith("*.") and (host == entry[2:] or host.endswith(f".{entry[2:]}")):
             return True
     return False

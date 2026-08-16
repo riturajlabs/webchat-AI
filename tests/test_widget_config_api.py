@@ -350,9 +350,7 @@ def test_update_widget_config_missing_website_returns_404(client) -> None:
 
 def test_update_widget_config_requires_authentication(client) -> None:
     test_client, _, _ = client
-    response = test_client.patch(
-        "/api/websites/some-id/widget", json={"welcome_message": "Hi"}
-    )
+    response = test_client.patch("/api/websites/some-id/widget", json={"welcome_message": "Hi"})
     assert response.status_code == 401
 
 

@@ -220,9 +220,7 @@ class WidgetConfigUpdate(BaseModel):
             raise ValueError(f"no more than {MAX_ALLOWED_DOMAINS} domains are allowed")
         cleaned = normalize_allowed_domains(value)
         if len(cleaned) != len(value):
-            raise ValueError(
-                "allowed domains must be bare hostnames (optionally *.wildcards)"
-            )
+            raise ValueError("allowed domains must be bare hostnames (optionally *.wildcards)")
         return cleaned
 
     @model_validator(mode="after")

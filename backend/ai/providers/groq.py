@@ -45,9 +45,7 @@ class GroqGenerationClient:
         self._model = model or settings.groq_model
         self._api_key = api_key if api_key is not None else settings.groq_api_key
         self._timeout_seconds = (
-            timeout_seconds
-            if timeout_seconds is not None
-            else settings.ai_provider_timeout_seconds
+            timeout_seconds if timeout_seconds is not None else settings.ai_provider_timeout_seconds
         )
         self._http_client = http_client
         self._usage = GenerationUsage()

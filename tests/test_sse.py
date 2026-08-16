@@ -42,9 +42,7 @@ def _events(*, close_after: int | None = None, finalized: list[str]) -> Any:
 
 
 async def test_sse_serializes_event_frame() -> None:
-    assert sse("delta", {"chunk": "hello"}) == (
-        'event: delta\ndata: {"chunk": "hello"}\n\n'
-    )
+    assert sse("delta", {"chunk": "hello"}) == ('event: delta\ndata: {"chunk": "hello"}\n\n')
 
 
 async def test_stream_with_disconnect_yields_all_events_when_connected() -> None:

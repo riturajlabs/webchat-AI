@@ -393,9 +393,7 @@ class KnowledgeProcessor:
             website.knowledge_status = KNOWLEDGE_STATUS_FAILED
         elif (
             website.knowledge_status == KNOWLEDGE_STATUS_PROCESSING
-            and await self._documents.count_non_terminal_by_website(
-                website.tenant_id, website.id
-            )
+            and await self._documents.count_non_terminal_by_website(website.tenant_id, website.id)
             == 0
             and await self._documents.count_failed_by_website(website.tenant_id, website.id) > 0
         ):

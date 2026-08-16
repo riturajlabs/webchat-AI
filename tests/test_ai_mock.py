@@ -19,12 +19,12 @@ from backend.core.config import Settings
 
 async def test_mock_generation_streams_deterministic_chunks() -> None:
     client = MockGenerationClient(words_per_chunk=4)
-    chunks_a = [chunk async for chunk in client.stream_generate(
-        system="s", messages=[("user", "hello")]
-    )]
-    chunks_b = [chunk async for chunk in client.stream_generate(
-        system="s", messages=[("user", "hello")]
-    )]
+    chunks_a = [
+        chunk async for chunk in client.stream_generate(system="s", messages=[("user", "hello")])
+    ]
+    chunks_b = [
+        chunk async for chunk in client.stream_generate(system="s", messages=[("user", "hello")])
+    ]
     assert chunks_a == chunks_b
     assert len(chunks_a) > 1
     assert all(isinstance(chunk, str) and chunk for chunk in chunks_a)
@@ -33,12 +33,12 @@ async def test_mock_generation_streams_deterministic_chunks() -> None:
 
 async def test_mock_generation_answer_varies_with_prompt() -> None:
     client = MockGenerationClient()
-    a = "".join([chunk async for chunk in client.stream_generate(
-        system="s", messages=[("user", "one")]
-    )])
-    b = "".join([chunk async for chunk in client.stream_generate(
-        system="s", messages=[("user", "two")]
-    )])
+    a = "".join(
+        [chunk async for chunk in client.stream_generate(system="s", messages=[("user", "one")])]
+    )
+    b = "".join(
+        [chunk async for chunk in client.stream_generate(system="s", messages=[("user", "two")])]
+    )
     assert a != b
 
 

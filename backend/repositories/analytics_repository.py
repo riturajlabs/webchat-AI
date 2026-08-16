@@ -30,7 +30,6 @@ FEEDBACK_POSITIVE_RATING = 4
 FEEDBACK_NEGATIVE_RATING = 2
 
 
-
 @dataclass(frozen=True)
 class AnalyticsSummaryRow:
     """Raw aggregates backing the summary endpoint (Phase 11.3)."""
@@ -236,9 +235,7 @@ class MongoAnalyticsRepository:
             )
         )
         total_ai_responses = int(response_doc.get("total_ai_responses", 0)) if response_doc else 0
-        avg_response_time = (
-            float(response_doc["avg_response_time"]) if response_doc else None
-        )
+        avg_response_time = float(response_doc["avg_response_time"]) if response_doc else None
 
         usage_match: dict[str, Any] = {
             "tenant_id": tenant_id,
@@ -563,14 +560,10 @@ class MongoAnalyticsRepository:
             total += count
             weighted += rating * count
         positive = sum(
-            count
-            for rating, count in distribution.items()
-            if rating >= FEEDBACK_POSITIVE_RATING
+            count for rating, count in distribution.items() if rating >= FEEDBACK_POSITIVE_RATING
         )
         negative = sum(
-            count
-            for rating, count in distribution.items()
-            if rating <= FEEDBACK_NEGATIVE_RATING
+            count for rating, count in distribution.items() if rating <= FEEDBACK_NEGATIVE_RATING
         )
         neutral = sum(
             count

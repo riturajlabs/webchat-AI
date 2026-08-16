@@ -122,9 +122,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def request_validation_handler(
-        _: FastAPI, exc: RequestValidationError
-    ) -> JSONResponse:
+    async def request_validation_handler(_: FastAPI, exc: RequestValidationError) -> JSONResponse:
         """Surface request validation failures in the standard error envelope.
 
         The frontend parses `error.message`; without this handler FastAPI's

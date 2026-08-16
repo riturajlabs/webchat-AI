@@ -93,8 +93,8 @@ def _payment_out(subscription: Subscription, currency: str) -> PaymentOut:
         plan_id=subscription.plan_id,
         plan_name=plan.name,
         status=subscription.status,
-        amount_cents=plan.price_cents,
-        currency=currency,
+        amount_cents=subscription.amount_cents,
+        currency=subscription.currency or currency,
         payment_provider=subscription.payment_provider,
         payment_id=subscription.payment_id,
         created_at=subscription.created_at,
@@ -169,9 +169,7 @@ async def get_billing_subscription(
     currency = get_settings().payment_currency
     current, history = await service.get_report(principal.tenant_id)
     return SubscriptionReportOut(
-        subscription=(
-            _subscription_out(current, currency) if current is not None else None
-        ),
+        subscription=(_subscription_out(current, currency) if current is not None else None),
         payments=[_payment_out(subscription, currency) for subscription in history],
     )
 

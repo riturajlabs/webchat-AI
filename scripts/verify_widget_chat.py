@@ -40,9 +40,7 @@ def _resolve_widget_id() -> str:
     import pymongo
 
     _load_env()
-    db = pymongo.MongoClient(os.environ["MONGODB_URI"])[
-        os.environ.get("MONGODB_DB", "webchat_ai")
-    ]
+    db = pymongo.MongoClient(os.environ["MONGODB_URI"])[os.environ.get("MONGODB_DB", "webchat_ai")]
     widget = db["widgets"].find_one({})
     return str(widget["widget_id"])
 

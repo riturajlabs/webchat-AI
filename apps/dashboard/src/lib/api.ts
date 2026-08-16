@@ -14,6 +14,9 @@
  *   the httpOnly refresh cookie, then retries the original request once.
  *   If the refresh fails the session is cleared and the user is redirected
  *   to /login. The retry flag prevents infinite refresh loops.
+ * - Every request runs with a client-side timeout (30s default, override via
+ *   `timeoutMs`); a hang aborts the request and rejects with a
+ *   `RequestTimeoutError` instead of leaving the request pending forever.
  */
 
 import {
@@ -42,6 +45,34 @@ export class ApiError extends Error {
   }
 }
 
+export const TIMEOUT_MESSAGE = 'Request timed out. Please try again.';
+
+/** Default client-side request timeout in milliseconds. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * A request that exceeded the client-side timeout. Distinct from backend
+ * `ApiError`s (no HTTP response was ever received) and `NetworkError`s (the
+ * connection failed before the timeout fired).
+ */
+export class RequestTimeoutError extends Error {
+  readonly status = 408;
+  readonly code = 'timeout';
+
+  constructor() {
+    super(TIMEOUT_MESSAGE);
+    this.name = 'RequestTimeoutError';
+  }
+}
+
+/** A request that failed at the network layer (DNS, CORS, dropped connection). */
+export class NetworkError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
 interface ApiErrorPayload {
   error?: { code?: string; message?: string };
 }
@@ -57,6 +88,67 @@ function readCsrfCookie(): string | null {
     }
   }
   return null;
+}
+
+/** `RequestInit` extended with a client-side timeout override (ms). */
+export interface ApiRequestInit extends RequestInit {
+  timeoutMs?: number;
+}
+
+const NETWORK_ERROR_MESSAGE = 'Network request failed. Please try again.';
+
+/**
+ * `fetch` wrapped with a client-side timeout. The internal timeout signal is
+ * merged with any caller-provided `signal` — whichever fires first wins. The
+ * timer is always cleared once the request settles (no leaked timers) and
+ * failures are classified as `RequestTimeoutError` (timeout), `NetworkError`
+ * (connection failure), or rethrown unchanged (caller cancellation).
+ */
+async function fetchWithTimeout(url: string, init: ApiRequestInit): Promise<Response> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...fetchInit } = init;
+  const controller = new AbortController();
+  let timedOut = false;
+  let callerAborted = false;
+
+  const onCallerAbort = (): void => {
+    callerAborted = true;
+    controller.abort();
+  };
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      callerAborted = true;
+      controller.abort();
+    } else {
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs > 0) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+  }
+
+  try {
+    return await fetch(url, { ...fetchInit, signal: controller.signal });
+  } catch (error) {
+    if (timedOut) {
+      throw new RequestTimeoutError();
+    }
+    if (callerAborted) {
+      throw error;
+    }
+    throw new NetworkError(error instanceof Error ? error.message : NETWORK_ERROR_MESSAGE);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    if (callerSignal) {
+      callerSignal.removeEventListener('abort', onCallerAbort);
+    }
+  }
 }
 
 function redirectToLogin(): void {
@@ -78,7 +170,7 @@ async function refreshSession(): Promise<boolean> {
     headers.set('X-CSRF-Token', csrf);
   }
   try {
-    const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+    const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/refresh`, {
       method: 'POST',
       headers,
       credentials: 'include',
@@ -105,9 +197,9 @@ interface RequestOptions {
   retry?: boolean;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
-  init: RequestInit = {},
+  init: ApiRequestInit = {},
   { retry = true }: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
@@ -125,7 +217,7 @@ async function request<T>(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, {
     ...init,
     headers,
     credentials: 'include',

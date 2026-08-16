@@ -112,9 +112,7 @@ class MockEmbeddingClient:
 
     def __init__(self, *, dimensions: int | None = None) -> None:
         settings = get_settings()
-        self._dimensions = (
-            dimensions if dimensions is not None else settings.embedding_dimensions
-        )
+        self._dimensions = dimensions if dimensions is not None else settings.embedding_dimensions
         self._usage = EmbeddingUsage()
 
     @property

@@ -85,9 +85,7 @@ class AnalyticsService:
             total_tokens=row.total_input_tokens + row.total_output_tokens,
             total_input_tokens=row.total_input_tokens,
             total_output_tokens=row.total_output_tokens,
-            estimated_cost=self._estimated_cost(
-                row.total_input_tokens, row.total_output_tokens
-            ),
+            estimated_cost=self._estimated_cost(row.total_input_tokens, row.total_output_tokens),
             avg_response_time=_round_optional(row.avg_response_time),
         )
 

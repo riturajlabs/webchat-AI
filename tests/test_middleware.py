@@ -52,9 +52,7 @@ def test_hsts_only_when_cookie_secure(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     _, client = _build_client()
     response = client.get("/ping")
-    assert response.headers["strict-transport-security"] == (
-        "max-age=63072000; includeSubDomains"
-    )
+    assert response.headers["strict-transport-security"] == ("max-age=63072000; includeSubDomains")
 
     monkeypatch.setattr(
         "backend.api.middleware.get_settings",
@@ -74,9 +72,7 @@ def test_trusted_host_allowlist_accepts_known_host() -> None:
 
     from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-    app.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=["api.example.com", "localhost"]
-    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["api.example.com", "localhost"])
     client = TestClient(app)
 
     assert client.get("/ping", headers={"Host": "api.example.com"}).status_code == 200

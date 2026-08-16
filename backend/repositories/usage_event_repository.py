@@ -40,9 +40,7 @@ class UsageEventRepository(Protocol):
 
     async def record(self, event: UsageEvent) -> None: ...
 
-    async def totals_by_type_since(
-        self, tenant_id: str, since: datetime
-    ) -> UsageEventTotals: ...
+    async def totals_by_type_since(self, tenant_id: str, since: datetime) -> UsageEventTotals: ...
 
 
 class MongoUsageEventRepository:
@@ -56,9 +54,7 @@ class MongoUsageEventRepository:
             raise ValueError(f"Unknown usage event type: {event.event_type}")
         await self._collection.insert_one(event.to_doc())
 
-    async def totals_by_type_since(
-        self, tenant_id: str, since: datetime
-    ) -> UsageEventTotals:
+    async def totals_by_type_since(self, tenant_id: str, since: datetime) -> UsageEventTotals:
         rows: dict[str, int] = {}
         cursor = self._collection.aggregate(
             [

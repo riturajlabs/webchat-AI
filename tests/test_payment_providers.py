@@ -88,36 +88,26 @@ def test_stripe_webhook_requires_webhook_secret() -> None:
 
 
 def test_stripe_webhook_requires_signature_header() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     with pytest.raises(PaymentSignatureError):
         provider.parse_webhook(b"{}", {})
 
 
 def test_stripe_webhook_rejects_malformed_signature() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     with pytest.raises(PaymentSignatureError):
         provider.parse_webhook(b"{}", {"stripe-signature": "garbage"})
 
 
 def test_stripe_webhook_rejects_expired_signature() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     signature = _stripe_signature(_stripe_completed_payload(), "whsec_test", timestamp=1)
     with pytest.raises(PaymentSignatureError):
-        provider.parse_webhook(
-            _stripe_completed_payload(), {"stripe-signature": signature}
-        )
+        provider.parse_webhook(_stripe_completed_payload(), {"stripe-signature": signature})
 
 
 def test_stripe_webhook_rejects_tampered_payload() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     signature = _stripe_signature(_stripe_completed_payload(), "whsec_test")
     tampered = b'{"type": "checkout.session.completed"}'
     with pytest.raises(PaymentSignatureError):
@@ -125,14 +115,10 @@ def test_stripe_webhook_rejects_tampered_payload() -> None:
 
 
 def test_stripe_webhook_normalizes_completed_session_to_paid() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     signature = _stripe_signature(_stripe_completed_payload(), "whsec_test")
 
-    event = provider.parse_webhook(
-        _stripe_completed_payload(), {"stripe-signature": signature}
-    )
+    event = provider.parse_webhook(_stripe_completed_payload(), {"stripe-signature": signature})
 
     assert event.event_type == "checkout.session.completed"
     assert event.status == PAYMENT_STATUS_PAID
@@ -143,9 +129,7 @@ def test_stripe_webhook_normalizes_completed_session_to_paid() -> None:
 
 
 def test_stripe_webhook_maps_failed_events() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     payload = json.dumps(
         {"type": "invoice.payment_failed", "data": {"object": {"id": "cs_test_2"}}}
     ).encode()
@@ -159,9 +143,7 @@ def test_stripe_webhook_maps_failed_events() -> None:
 
 
 def test_stripe_webhook_other_events_are_pending() -> None:
-    provider = StripePaymentProvider(
-        secret_key="sk_test", webhook_secret="whsec_test"
-    )
+    provider = StripePaymentProvider(secret_key="sk_test", webhook_secret="whsec_test")
     payload = b'{"type": "customer.created", "data": {"object": {}}}'
     signature = _stripe_signature(payload, "whsec_test")
 
@@ -196,9 +178,7 @@ def _razorpay_captured_payload() -> bytes:
 
 
 def test_razorpay_webhook_requires_webhook_secret() -> None:
-    provider = RazorpayPaymentProvider(
-        key_id="rzp_test", key_secret="secret", webhook_secret=None
-    )
+    provider = RazorpayPaymentProvider(key_id="rzp_test", key_secret="secret", webhook_secret=None)
     with pytest.raises(PaymentProviderError):
         provider.parse_webhook(b"{}", {})
 

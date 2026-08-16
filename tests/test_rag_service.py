@@ -417,9 +417,7 @@ async def test_embedding_cache_is_bounded(monkeypatch) -> None:
             website_id=f"web-{index}",
             knowledge_chunks=1,
         )
-        await make_chunk(
-            env, tenant_id=TENANT_A, website_id=f"web-{index}", text="Knowledge."
-        )
+        await make_chunk(env, tenant_id=TENANT_A, website_id=f"web-{index}", text="Knowledge.")
         await _stream(env, tenant_id=TENANT_A, website_id=f"web-{index}", question=question)
 
     # B evicted A -> the final A is a fresh embedding (miss), so three calls.

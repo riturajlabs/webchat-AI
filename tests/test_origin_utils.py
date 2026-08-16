@@ -112,9 +112,7 @@ def test_normalize_entries_rejects_scheme_port_path_or_oversized(entry: str) -> 
         ("  Acme.Example.  ", "acme.example"),
     ],
 )
-def test_normalize_domain_entry_extracts_hostname_from_urls(
-    input: str, expected: str
-) -> None:
+def test_normalize_domain_entry_extracts_hostname_from_urls(input: str, expected: str) -> None:
     assert normalize_domain_entry(input) == expected
 
 

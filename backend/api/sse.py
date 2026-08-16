@@ -104,9 +104,7 @@ async def _recording_events(
             )
         elif event["event"] == "done":
             data = event["data"]
-            tokens = int(data.get("input_tokens", 0) or 0) + int(
-                data.get("output_tokens", 0) or 0
-            )
+            tokens = int(data.get("input_tokens", 0) or 0) + int(data.get("output_tokens", 0) or 0)
             await _record(
                 usage,
                 tenant_id=tenant_id,
@@ -145,9 +143,7 @@ async def _record(
             quantity=quantity,
         )
     except Exception:
-        logger.exception(
-            "Failed to record usage event %s for tenant %s", event_type, tenant_id
-        )
+        logger.exception("Failed to record usage event %s for tenant %s", event_type, tenant_id)
 
 
 __all__ = ["sse", "stream_answer_with_usage", "stream_with_disconnect"]

@@ -42,7 +42,10 @@ class Settings(BaseSettings):
     backend_port: int = 8000
 
     # Security
-    jwt_secret: str = "change-me-in-production"
+    # Development/test fallback only. Strong enough (>= 32 bytes) that PyJWT's
+    # InsecureKeyLengthWarning (RFC 7518 §3.2) never fires in dev/test stacks;
+    # production enforces its own minimum and rejects weak values at boot.
+    jwt_secret: str = "dev-only-jwt-secret-change-me-please"
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 15
     jwt_refresh_token_expire_days: int = 30
@@ -339,8 +342,7 @@ class Settings(BaseSettings):
         scheme = urlparse(value.strip()).scheme.lower()
         if scheme not in {"redis", "rediss", "unix"}:
             raise ValueError(
-                "REDIS_URL must use a redis://, rediss:// or unix:// scheme "
-                f"(got: {value!r})."
+                f"REDIS_URL must use a redis://, rediss:// or unix:// scheme (got: {value!r})."
             )
         return value
 
@@ -415,7 +417,7 @@ class Settings(BaseSettings):
         """
         if self.environment.lower() == "production":
             if len(self.jwt_secret.encode("utf-8")) < 32:
-                raise ValueError("JWT_SECRET must be at least 32 bytes in production.")
+                raise ValueError("JWT_SECRET must be at least 32 characters in production.")
             # At least one provider per capability must be configured (ADR-009).
             generation_keys = bool(
                 self.gemini_api_key or self.groq_api_key or self.openrouter_api_key

@@ -57,8 +57,7 @@ async def test_streams_deltas_and_captures_usage() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         provider = _provider(client)
         deltas = [
-            d
-            async for d in provider.stream_generate(system="sys", messages=[("user", "hi")])
+            d async for d in provider.stream_generate(system="sys", messages=[("user", "hi")])
         ]
 
     assert deltas == ["Hel", "lo"]
@@ -149,7 +148,7 @@ async def test_malformed_sse_line_is_skipped() -> None:
     body = (
         "data: not-json\n\n"
         "data: {}\n\n"
-        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
         "data: [DONE]\n\n"
     )
 

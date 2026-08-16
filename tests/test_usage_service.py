@@ -131,11 +131,17 @@ async def test_get_current_usage_reports_totals_and_live_counts(env) -> None:
         tenant_id="tenant-a", user_id="user-a", website_id="web-1", event_type="messages_sent"
     )
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id="user-a", website_id="web-1", event_type="tokens_used",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        website_id="web-1",
+        event_type="tokens_used",
         quantity=150,
     )
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id=None, website_id=None, event_type="crawl_pages",
+        tenant_id="tenant-a",
+        user_id=None,
+        website_id=None,
+        event_type="crawl_pages",
         quantity=3,
     )
     await env.websites.create(Website.new(tenant_id="tenant-a", name="A", url="https://a.example"))
@@ -171,9 +177,7 @@ async def test_get_current_usage_reports_totals_and_live_counts(env) -> None:
 
 async def test_get_current_usage_excludes_previous_month_events(env) -> None:
     last_month = datetime(2026, 5, 30, 12, 0, 0, tzinfo=UTC)
-    await env.events.record(
-        _event(event_type="messages_sent", quantity=40, created_at=last_month)
-    )
+    await env.events.record(_event(event_type="messages_sent", quantity=40, created_at=last_month))
     await env.service.record_usage(
         tenant_id="tenant-a", user_id="user-a", website_id="web-1", event_type="messages_sent"
     )
@@ -203,8 +207,11 @@ async def test_check_limit_passes_below_limit(env) -> None:
 
 async def test_check_limit_raises_for_exhausted_event_metric(env) -> None:
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id="user-a", website_id="web-1",
-        event_type="messages_sent", quantity=1_000,
+        tenant_id="tenant-a",
+        user_id="user-a",
+        website_id="web-1",
+        event_type="messages_sent",
+        quantity=1_000,
     )
     with pytest.raises(LimitReachedError) as exc_info:
         await env.service.check_limit("tenant-a", event_type="messages_sent")
@@ -219,23 +226,27 @@ async def test_check_limit_raises_for_exhausted_event_metric(env) -> None:
 
 async def test_check_limit_raises_for_exhausted_live_count(env) -> None:
     await env.service.check_limit("tenant-a", event_type="websites")
-    await env.websites.create(
-        Website.new(tenant_id="tenant-a", name="A", url="https://a.example")
-    )
+    await env.websites.create(Website.new(tenant_id="tenant-a", name="A", url="https://a.example"))
     with pytest.raises(LimitReachedError):
         await env.service.check_limit("tenant-a", event_type="websites")
 
 
 async def test_check_limit_raises_for_tokens_and_crawl_pages(env) -> None:
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id="user-a", website_id="web-1",
-        event_type="tokens_used", quantity=100_000,
+        tenant_id="tenant-a",
+        user_id="user-a",
+        website_id="web-1",
+        event_type="tokens_used",
+        quantity=100_000,
     )
     with pytest.raises(LimitReachedError):
         await env.service.check_limit("tenant-a", event_type="tokens_used")
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id=None, website_id=None,
-        event_type="crawl_pages", quantity=500,
+        tenant_id="tenant-a",
+        user_id=None,
+        website_id=None,
+        event_type="crawl_pages",
+        quantity=500,
     )
     with pytest.raises(LimitReachedError):
         await env.service.check_limit("tenant-a", event_type="crawl_pages")
@@ -259,7 +270,9 @@ async def test_check_limit_ignores_unknown_metric(env) -> None:
 
 async def test_record_usage_appends_events(env) -> None:
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id="user-a", website_id="web-1",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        website_id="web-1",
         event_type="messages_sent",
     )
     assert len(env.events.events) == 1
@@ -274,7 +287,10 @@ async def test_record_usage_validates_type_and_quantity(env) -> None:
         )
     with pytest.raises(ValueError):
         await env.service.record_usage(
-            tenant_id="tenant-a", user_id=None, website_id=None, event_type="messages_sent",
+            tenant_id="tenant-a",
+            user_id=None,
+            website_id=None,
+            event_type="messages_sent",
             quantity=0,
         )
 
@@ -298,9 +314,7 @@ async def test_website_service_blocks_creation_at_max_websites(env) -> None:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     website_env = build_website_env(usage=env.service)
-    await env.websites.create(
-        Website.new(tenant_id="tenant-a", name="A", url="https://a.example")
-    )
+    await env.websites.create(Website.new(tenant_id="tenant-a", name="A", url="https://a.example"))
 
     with pytest.raises(LimitReachedError):
         await website_env.service.create_website(
@@ -363,8 +377,11 @@ async def test_crawl_service_blocks_when_crawl_pages_exhausted(env) -> None:
     website.id = "web-1"
     await crawl_env.websites.create(website)
     await env.service.record_usage(
-        tenant_id="tenant-a", user_id=None, website_id=None,
-        event_type="crawl_pages", quantity=500,
+        tenant_id="tenant-a",
+        user_id=None,
+        website_id=None,
+        event_type="crawl_pages",
+        quantity=500,
     )
 
     with pytest.raises(LimitReachedError):

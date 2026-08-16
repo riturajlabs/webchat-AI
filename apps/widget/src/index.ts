@@ -21,10 +21,10 @@ export function init(options: WidgetOptions): WidgetController {
   return mount(options);
 }
 
-// Embed flow: `data-widget-id` on the script tag upgrades automatically, so
-// `<script src=... data-widget-id=abc defer>` works with no init() call.
-const embedded = autoUpgrade();
-if (embedded) {
+// Embed flow: `data-widget-id` on the script tag (or on individual hosts)
+// upgrades automatically, so `<script src=... data-widget-id=abc defer>`
+// works with no init() call — including multiple hosts on the same page.
+for (const embedded of autoUpgrade()) {
   void embedded.controller;
 }
 

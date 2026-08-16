@@ -29,9 +29,12 @@ def test_normalize_allowlist_converts_legacy_urls_to_hostnames(migration) -> Non
 
 
 def test_normalize_allowlist_drops_invalid_entries(migration) -> None:
-    assert migration._normalize_allowlist(
-        ["example.com/path", "localhost:3000", "example", "*.localhost", "not a hostname"]
-    ) == []
+    assert (
+        migration._normalize_allowlist(
+            ["example.com/path", "localhost:3000", "example", "*.localhost", "not a hostname"]
+        )
+        == []
+    )
 
 
 def test_normalize_allowlist_preserves_wildcards_and_open_embed(migration) -> None:

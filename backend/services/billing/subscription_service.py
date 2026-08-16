@@ -130,9 +130,7 @@ class SubscriptionService:
 
     async def get_current_subscription(self, tenant_id: str) -> Subscription | None:
         """The newest plan-granting subscription for the tenant (or None)."""
-        return await self._subscriptions.find_active_by_tenant(
-            tenant_id, now=self._now()
-        )
+        return await self._subscriptions.find_active_by_tenant(tenant_id, now=self._now())
 
     async def get_effective_plan(self, tenant_id: str) -> Plan:
         """Resolve the tenant's plan: subscription > tenants.plan > Free."""
@@ -144,9 +142,7 @@ class SubscriptionService:
             return get_plan("free")
         return get_plan(tenant.plan)
 
-    async def get_report(
-        self, tenant_id: str
-    ) -> tuple[Subscription | None, list[Subscription]]:
+    async def get_report(self, tenant_id: str) -> tuple[Subscription | None, list[Subscription]]:
         """Return (current subscription, payment history) for the Billing page.
 
         When the newest subscription has lapsed (`end_date` passed) its status

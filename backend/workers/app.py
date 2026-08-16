@@ -8,14 +8,20 @@ Job functions are registered in `backend.workers.tasks` and land in Phase 2
 docs/07-Architecture-Decisions.md ADR-002.
 """
 
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from arq.connections import RedisSettings
 
 from backend.ai.registry import build_embedding_fallback
 from backend.core.config import get_settings
+from backend.core.database import MongoDB
+from backend.core.redis import close_redis
 from backend.services.ingestion.browser import close_browser
 from backend.workers import tasks
+
+logger = logging.getLogger("webchat_ai")
 
 _settings = get_settings()
 
@@ -29,10 +35,27 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["embedding_client"] = build_embedding_fallback()
 
 
+async def _close_async(resource: str, closer: Callable[[], Awaitable[None]]) -> None:
+    """Run one async closer, logging instead of aborting the rest."""
+    try:
+        await closer()
+    except Exception:
+        logger.exception("Worker shutdown failed to close %s.", resource)
+
+
 async def shutdown(ctx: dict[str, Any]) -> None:
-    """Runs once when the worker stops."""
+    """Runs once when the worker stops: release browser, Mongo and Redis.
+
+    Each resource is closed independently so a failure in one never prevents
+    the others from being released. Every close function is idempotent (a
+    no-op when the resource was never initialized), so a worker that never
+    opened a browser or touched Redis still shuts down cleanly. ARQ's own
+    queue connection is managed by ARQ itself and is deliberately left alone.
+    """
     _ = ctx
-    await close_browser()
+    await _close_async("Playwright browser", close_browser)
+    await _close_async("MongoDB client", MongoDB.close)
+    await _close_async("Redis client", close_redis)
 
 
 class WorkerSettings:

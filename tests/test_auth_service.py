@@ -539,12 +539,14 @@ async def test_super_admin_email_without_membership_still_gets_role() -> None:
     env.members.members.clear()  # drop the tenant membership entirely
 
     principal = await env.service.authenticate(
-        (await env.service.login(
-            email="ops@webchat.example",
-            password=VALID_PASSWORD,
-            ip_address=None,
-            user_agent=None,
-        )).access_token
+        (
+            await env.service.login(
+                email="ops@webchat.example",
+                password=VALID_PASSWORD,
+                ip_address=None,
+                user_agent=None,
+            )
+        ).access_token
     )
     assert principal.role == "super_admin"
 

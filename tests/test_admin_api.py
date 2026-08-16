@@ -615,9 +615,7 @@ def test_tenant_suspend_activate_endpoints(client) -> None:
     target = _register(test_client, name="Target Co")
     tenant_id = target["tenant_id"]
 
-    response = test_client.post(
-        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
-    )
+    response = test_client.post(f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"])
     assert response.status_code == 200
     assert response.json()["status"] == "suspended"
     assert admin_env.tenants.tenants[tenant_id].status == "suspended"
@@ -631,13 +629,9 @@ def test_tenant_suspend_activate_endpoints(client) -> None:
     )
 
     # Idempotent: a second suspend writes no new audit event.
-    response = test_client.post(
-        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
-    )
+    response = test_client.post(f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"])
     assert response.status_code == 200
-    assert (
-        len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_SUSPENDED"]) == 1
-    )
+    assert len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_SUSPENDED"]) == 1
 
     response = test_client.post(
         f"/api/admin/tenants/{tenant_id}/activate", headers=admin["headers"]
@@ -681,8 +675,7 @@ def test_tenant_plan_change_endpoint(client) -> None:
     )
     assert response.status_code == 200
     assert (
-        len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_PLAN_CHANGED"])
-        == 1
+        len([log for log in admin_env.admin_audit.logs if log.action == "TENANT_PLAN_CHANGED"]) == 1
     )
 
 
@@ -863,9 +856,7 @@ def test_admin_audit_dedicated_trail_viewer(client) -> None:
     target = _register(test_client, name="Target Co")
     tenant_id = target["tenant_id"]
 
-    response = test_client.post(
-        f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"]
-    )
+    response = test_client.post(f"/api/admin/tenants/{tenant_id}/suspend", headers=admin["headers"])
     assert response.status_code == 200
     response = test_client.post(
         f"/api/admin/tenants/{tenant_id}/plan", json={"plan": "pro"}, headers=admin["headers"]

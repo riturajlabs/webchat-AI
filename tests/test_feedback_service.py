@@ -288,9 +288,7 @@ async def test_summary_respects_explicit_since() -> None:
         category="helpful",
     )
 
-    summary = await env.service.get_summary(
-        "tenant-a", since=datetime.now(UTC) - timedelta(days=1)
-    )
+    summary = await env.service.get_summary("tenant-a", since=datetime.now(UTC) - timedelta(days=1))
     assert summary.total == 1
     assert summary.distribution == {4: 1}
 

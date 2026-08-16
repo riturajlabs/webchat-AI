@@ -118,9 +118,7 @@ async def test_activate_payment_is_idempotent_on_payment_id(env) -> None:
 
 
 async def test_activate_payment_ignores_failed_events(env) -> None:
-    result = await env.service.activate_payment(
-        _paid_event(status=PAYMENT_STATUS_FAILED)
-    )
+    result = await env.service.activate_payment(_paid_event(status=PAYMENT_STATUS_FAILED))
     assert result is None
     assert env.subscriptions.subscriptions == []
 

@@ -668,6 +668,8 @@ widget_feedback_limiter = WidgetRateLimitDependency(
     window_seconds=60,
     limit_setting="widget_feedback_limit",
 )
+
+
 # Per-IP backup budget per widget endpoint (production hardening). The
 # entity-keyed limits above derive from a client-supplied visitor_id / body
 # widget_id, so a hostile client can rotate them; an IP-shaped budget cannot

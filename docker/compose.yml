@@ -46,7 +46,7 @@ x-backend-env: &backend-env
   REDIS_PREFIX: ${REDIS_PREFIX-webchat_ai}
 
   # Auth (from .env when present; safe dev fallback otherwise).
-  JWT_SECRET: ${JWT_SECRET-dev-only-jwt-secret-change-me}
+  JWT_SECRET: ${JWT_SECRET-dev-only-jwt-secret-change-me-please}
   JWT_ALGORITHM: ${JWT_ALGORITHM-HS256}
   JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES-15}
   JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS-30}

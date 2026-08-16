@@ -61,9 +61,7 @@ def migrate(uri: str, db_name: str, *, dry_run: bool) -> int:
         changed_widgets += 1
         dropped_entries += len(stored) - len(fixed)
         if not dry_run:
-            collection.update_one(
-                {"_id": widget["_id"]}, {"$set": {"allowed_domains": fixed}}
-            )
+            collection.update_one({"_id": widget["_id"]}, {"$set": {"allowed_domains": fixed}})
         print(
             f"{'[dry-run] ' if dry_run else ''}{widget.get('widget_id', widget['_id'])}: "
             f"{stored} -> {fixed}"

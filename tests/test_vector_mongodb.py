@@ -10,6 +10,8 @@ fail-fast error. All paths are exercised with a fake collection below.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.repositories.vector.mongodb import MongoVectorRepository
@@ -73,8 +75,13 @@ class FakeCollection:
 
 
 class _FakeDb:
-    def __init__(self, collection: FakeCollection, *, search_indexes: list[dict] | None = None,
-                 command_fails: bool = False) -> None:
+    def __init__(
+        self,
+        collection: FakeCollection,
+        *,
+        search_indexes: list[dict] | None = None,
+        command_fails: bool = False,
+    ) -> None:
         self._collection = collection
         self._search_indexes = search_indexes or []
         self.command_fails = command_fails
@@ -172,10 +179,114 @@ async def test_silent_zero_kept_empty_on_search_capable_deployment() -> None:
     query = [1.0, 0.0]
     docs = [_chunk("Indira University offers BA and B.Com courses", [1.0, 0.0], index=0)]
     collection = FakeCollection(docs)
-    repo = MongoVectorRepository(
-        _FakeDb(collection, search_indexes=[_vector_index_definition()])
-    )
+    repo = MongoVectorRepository(_FakeDb(collection, search_indexes=[_vector_index_definition()]))
 
     results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
 
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_matching_dimensions_log_no_warning(caplog) -> None:
+    """Uniform dimensions never trip the mismatch warning."""
+    query = [1.0, 0.0, 0.0, 0.0]
+    docs = [
+        _chunk("exact match", [1.0, 0.0, 0.0, 0.0], index=0),
+        _chunk("partially related", [0.8, 0.6, 0.0, 0.0], index=1),
+    ]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "$vectorSearch stage is only allowed on MongoDB Atlas"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
+
+    assert len(results) == 2
+    mismatch = [r for r in caplog.records if "mismatched embedding dimensions" in r.getMessage()]
+    assert mismatch == []
+
+
+@pytest.mark.asyncio
+async def test_mismatched_dimensions_emit_warning(caplog) -> None:
+    """A stored chunk with a different embedding length is skipped, and the
+    skip is reported with the expected/detected dimensions and tenant."""
+    query = [1.0, 0.0]  # expected dimension 2
+    docs = [
+        _chunk("exact match", [1.0, 0.0], index=0),
+        _chunk("wrong dimension", [1.0, 0.0, 0.0], index=1),
+    ]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "$vectorSearch stage is only allowed on MongoDB Atlas"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
+
+    # The mismatched chunk is silently excluded from results (behavior unchanged)...
+    assert [r.chunk.chunk_text for r in results] == ["exact match"]
+    # ...but the skip is no longer invisible.
+    mismatch = [r for r in caplog.records if "mismatched embedding dimensions" in r.getMessage()]
+    assert len(mismatch) == 1
+    message = mismatch[0].getMessage()
+    assert "expected=2" in message
+    assert "detected={3: 1}" in message
+    assert "skipped 1 chunk(s)" in message
+    assert "tenant-a" in message
+
+
+@pytest.mark.asyncio
+async def test_multiple_mismatched_chunks_counted(caplog) -> None:
+    """Multiple skipped chunks across several detected dimensions are all
+    counted in a single warning."""
+    query = [1.0, 0.0]
+    docs = [
+        _chunk("exact match", [1.0, 0.0], index=0),
+        _chunk("bad-3a", [1.0, 0.0, 0.0], index=1),
+        _chunk("bad-3b", [0.0, 1.0, 0.0], index=2),
+        _chunk("bad-5", [1.0, 0.0, 0.0, 0.0, 0.0], index=3),
+    ]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "$vectorSearch stage is only allowed on MongoDB Atlas"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
+
+    assert [r.chunk.chunk_text for r in results] == ["exact match"]
+    mismatch = [r for r in caplog.records if "mismatched embedding dimensions" in r.getMessage()]
+    assert len(mismatch) == 1
+    message = mismatch[0].getMessage()
+    assert "skipped 3 chunk(s)" in message
+    assert "expected=2" in message
+    assert "detected={3: 2, 5: 1}" in message
+
+
+@pytest.mark.asyncio
+async def test_mismatch_warning_never_logs_vector_values(caplog) -> None:
+    """The mismatch warning carries dimensions and counts only - never any
+    embedding coordinates."""
+    query = [1.0, 0.0]
+    docs = [_chunk("bad", [1.0, 0.0, 0.0], index=0)]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "$vectorSearch stage is only allowed on MongoDB Atlas"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    with caplog.at_level(logging.WARNING, logger="webchat_ai"):
+        results = await repo.similarity_search("tenant-a", "site-a", query, top_k=2)
+
+    assert results == []
+    mismatch = [r for r in caplog.records if "mismatched embedding dimensions" in r.getMessage()]
+    assert len(mismatch) == 1
+    message = mismatch[0].getMessage()
+    assert "1.0" not in message
+    assert "0.0" not in message
+    assert "[" not in message
+    assert "embedding=[" not in message

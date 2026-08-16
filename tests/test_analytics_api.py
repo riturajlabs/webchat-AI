@@ -127,9 +127,7 @@ async def test_summary_can_filter_by_website(client) -> None:
     await seed_day(analytics_env, tenant_id=tenant_id, website_id="web-a", date=_days_ago(1))
     await seed_day(analytics_env, tenant_id=tenant_id, website_id="web-b", date=_days_ago(1))
 
-    response = test_client.get(
-        "/api/analytics/summary?website_id=web-a", headers=headers
-    )
+    response = test_client.get("/api/analytics/summary?website_id=web-a", headers=headers)
 
     assert response.status_code == 200
     assert response.json()["total_conversations"] == 1
@@ -299,9 +297,12 @@ async def test_analytics_isolates_tenants(client) -> None:
 
     other_headers, _other_tenant = _auth(test_client)
 
-    assert test_client.get("/api/analytics/summary", headers=other_headers).json()[
-        "total_conversations"
-    ] == 0
+    assert (
+        test_client.get("/api/analytics/summary", headers=other_headers).json()[
+            "total_conversations"
+        ]
+        == 0
+    )
     assert test_client.get("/api/analytics/top-websites", headers=other_headers).json() == []
 
 
@@ -314,15 +315,9 @@ async def test_analytics_rejects_invalid_days(client) -> None:
     assert (
         test_client.get("/api/analytics/top-websites?limit=0", headers=headers).status_code == 422
     )
-    assert (
-        test_client.get("/api/analytics/overview?days=0", headers=headers).status_code == 422
-    )
-    assert (
-        test_client.get("/api/analytics/questions?limit=0", headers=headers).status_code == 422
-    )
-    assert (
-        test_client.get("/api/analytics/questions?limit=51", headers=headers).status_code == 422
-    )
+    assert test_client.get("/api/analytics/overview?days=0", headers=headers).status_code == 422
+    assert test_client.get("/api/analytics/questions?limit=0", headers=headers).status_code == 422
+    assert test_client.get("/api/analytics/questions?limit=51", headers=headers).status_code == 422
 
 
 async def test_analytics_requires_owner_or_admin_role(client) -> None:
@@ -439,9 +434,7 @@ async def test_overview_can_filter_by_website(client) -> None:
         response_time=2.5,
     )
 
-    response = test_client.get(
-        "/api/analytics/overview?website_id=web-a", headers=headers
-    )
+    response = test_client.get("/api/analytics/overview?website_id=web-a", headers=headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -544,9 +537,7 @@ async def test_questions_can_filter_by_website(client) -> None:
         question="For B?",
     )
 
-    response = test_client.get(
-        "/api/analytics/questions?website_id=web-a", headers=headers
-    )
+    response = test_client.get("/api/analytics/questions?website_id=web-a", headers=headers)
 
     assert response.status_code == 200
     assert [item["question"] for item in response.json()] == ["For A?"]

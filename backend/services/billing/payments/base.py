@@ -88,9 +88,7 @@ class PaymentProvider(Protocol):
 
     async def verify_payment(self, payment_id: str) -> PaymentVerification: ...
 
-    def parse_webhook(
-        self, payload: bytes, headers: Mapping[str, str]
-    ) -> WebhookEvent: ...
+    def parse_webhook(self, payload: bytes, headers: Mapping[str, str]) -> WebhookEvent: ...
 
 
 class MockPaymentProvider:
@@ -122,9 +120,7 @@ class MockPaymentProvider:
     async def verify_payment(self, payment_id: str) -> PaymentVerification:
         return PaymentVerification(payment_id=payment_id, status=PAYMENT_STATUS_PAID)
 
-    def parse_webhook(
-        self, payload: bytes, headers: Mapping[str, str]
-    ) -> WebhookEvent:
+    def parse_webhook(self, payload: bytes, headers: Mapping[str, str]) -> WebhookEvent:
         raise PaymentSignatureError(
             "Payment webhooks are not processed while the mock provider is configured."
         )

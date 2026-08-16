@@ -127,9 +127,7 @@ class UsageService:
     async def get_current_usage(self, tenant_id: str) -> UsageSnapshot:
         """Compute live counts + monthly events and limit utilization."""
         plan = await self.get_plan(tenant_id)
-        totals = await self._events.totals_by_type_since(
-            tenant_id, since=_month_start(self._now())
-        )
+        totals = await self._events.totals_by_type_since(tenant_id, since=_month_start(self._now()))
         websites = await self._websites.count_by_tenant(tenant_id)
         documents = await self._documents.count_by_tenant(tenant_id)
 
@@ -225,9 +223,7 @@ class UsageService:
             return await self._websites.count_by_tenant(tenant_id)
         if metric == "documents":
             return await self._documents.count_by_tenant(tenant_id)
-        totals = await self._events.totals_by_type_since(
-            tenant_id, since=_month_start(self._now())
-        )
+        totals = await self._events.totals_by_type_since(tenant_id, since=_month_start(self._now()))
         return totals.total(metric)
 
 

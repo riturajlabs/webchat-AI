@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError } from '@/lib/api';
+import {
+  api,
+  ApiError,
+  DEFAULT_TIMEOUT_MS,
+  NetworkError,
+  request,
+  RequestTimeoutError,
+  TIMEOUT_MESSAGE,
+} from '@/lib/api';
 import {
   clearSession,
   getAccessToken,
@@ -37,6 +45,26 @@ function stubLocation(assign: ReturnType<typeof vi.fn>) {
   });
 }
 
+/**
+ * A fetch that never settles on its own: it only rejects when the request
+ * signal fires, mimicking a real network hang being aborted.
+ */
+function hangingFetch(): ReturnType<typeof vi.fn> {
+  return vi.fn(
+    (_url: unknown, init?: RequestInit) =>
+      new Promise<never>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectAborted = () =>
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        if (signal?.aborted) {
+          rejectAborted();
+          return;
+        }
+        signal?.addEventListener('abort', rejectAborted);
+      }),
+  );
+}
+
 describe('api client', () => {
   beforeEach(() => {
     clearSession();
@@ -48,6 +76,7 @@ describe('api client', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     clearSession();
   });
 
@@ -181,5 +210,94 @@ describe('api client', () => {
         message: 'URL already exists.',
       }),
     );
+  });
+
+  it('resolves the request before the timeout fires', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockResolvedValue(jsonResponse([{ id: 'site-1' }]));
+
+    const result = await request<{ id: string }[]>('/api/websites');
+
+    expect(result).toEqual([{ id: 'site-1' }]);
+    // The timeout timer was cleared once the request settled — nothing leaks.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('aborts the request and rejects with a timeout error when it hangs', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(hangingFetch());
+
+    const promise = request('/api/websites').catch((e) => e);
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS);
+
+    const error = (await promise) as RequestTimeoutError;
+    expect(error).toBeInstanceOf(RequestTimeoutError);
+    expect(error.message).toBe(TIMEOUT_MESSAGE);
+    expect(error.status).toBe(408);
+    expect(error.code).toBe('timeout');
+    expect(vi.getTimerCount()).toBe(0);
+
+    // The request was actually aborted via the merged signal.
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('honors a custom timeoutMs override', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockImplementation(hangingFetch());
+
+    const promise = request('/api/websites', { timeoutMs: 100 }).catch((e) => e);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(vi.getTimerCount()).toBe(1); // still pending under the short timeout
+    await vi.advanceTimersByTimeAsync(1);
+
+    const error = await promise;
+    expect(error).toBeInstanceOf(RequestTimeoutError);
+  });
+
+  it('still honors a caller-provided AbortSignal', async () => {
+    const abort = new AbortController();
+    vi.mocked(fetch).mockImplementation(hangingFetch());
+
+    const promise = request('/api/websites', { signal: abort.signal });
+    abort.abort();
+
+    const error = (await promise.catch((e) => e)) as Error;
+    expect(error.name).toBe('AbortError');
+    expect(error).not.toBeInstanceOf(RequestTimeoutError);
+    expect(error).not.toBeInstanceOf(NetworkError);
+  });
+
+  it('handles a caller signal that is already aborted', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    vi.mocked(fetch).mockImplementation(hangingFetch());
+
+    const error = (await request('/api/websites', { signal: abort.signal }).catch(
+      (e) => e,
+    )) as Error;
+    expect(error.name).toBe('AbortError');
+  });
+
+  it('clears the timeout timer once the request settles', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockResolvedValue(jsonResponse([]));
+    const abort = new AbortController();
+
+    await request('/api/websites', { signal: abort.signal, timeoutMs: 50_000 });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('differentiates network failures from timeouts and HTTP errors', async () => {
+    vi.mocked(fetch).mockRejectedValue(new TypeError('Failed to fetch'));
+
+    const error = (await request('/api/websites').catch((e) => e)) as NetworkError;
+
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).not.toBeInstanceOf(RequestTimeoutError);
+    // The underlying network failure message is preserved.
+    expect(error.message).toBe('Failed to fetch');
   });
 });
