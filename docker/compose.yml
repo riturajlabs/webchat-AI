@@ -1,25 +1,161 @@
-# WebChat AI - local development stack
-# MongoDB + Redis + Mailpit + API + Worker + Dashboard + Widget.
-# Start everything with:  docker compose --env-file .env -f docker/compose.dev.yml up --build
+# WebChat AI - full stack (MongoDB + Redis + Mailpit + API + Worker + Dashboard + Widget).
+# Select the environment file; compose consumes it and NEVER overrides it:
+#   docker compose --env-file .env.development -f docker/compose.yml up --build
+#   docker compose --env-file .env.production  -f docker/compose.yml up --build
 # (or scripts/docker-up.sh).
 #
-# Environment configuration is fully .env-driven (api/worker resolve every
-# variable from .env via ${VAR:-default}); this file only provides local-dev
-# fallbacks for a bare `docker compose` run with no .env:
-#   ENVIRONMENT   -> development
-#   DEBUG         -> true
-#   MONGODB_URI   -> mongodb://mongo:27017   (local `mongo` service)
-#   REDIS_URL     -> redis://redis:6379      (local `redis` service)
-#   MAILPIT_API_URL -> http://mailpit:8025   (local Mailpit service)
-#   COOKIE_SECURE -> false
-# Switching modes means editing .env only (see .env.example header):
-#   ENVIRONMENT=development -> local docker services (or set your own URIs)
-#   ENVIRONMENT=production  -> external managed services (Atlas MONGODB_URI,
-#     managed REDIS_URL, Resend, HTTPS URLs, COOKIE_SECURE=true); config.py
-#     fails fast at boot on weak production values.
-#   All secrets (AI keys, JWT_SECRET, payment keys) always come from .env.
+# Interpolation uses ${VAR-default} (default only when the variable is UNSET)
+# rather than ${VAR:-default} (default when unset OR EMPTY) so an explicit
+# empty value in the selected env file is preserved. This matters for e.g.
+# .env.production, where MAILPIT_API_URL= is intentionally empty: with `:-` it
+# would silently fall back to the local Mailpit service.
+#
+# The api/worker containers receive the full backend environment. Values come
+# from the selected env file; the defaults below are ONLY for a bare
+# `docker compose up` with no env file (local development services).
+#
+# Build-time variables (baked into bundles, cannot be changed at runtime):
+#   dashboard  -> NEXT_PUBLIC_API_URL  (Next.js, see Dockerfile.dashboard)
+#   widget     -> VITE_WIDGET_API_BASE_URL (Vite, see Dockerfile.widget)
 
 name: webchat-ai
+
+# Shared backend environment (api + worker). Every variable maps to
+# backend/core/config.py or a compose runtime value; see .env.example.
+x-backend-env: &backend-env
+  # Mode / debug are .env-driven (default: development / true).
+  ENVIRONMENT: ${ENVIRONMENT-development}
+  DEBUG: ${DEBUG-true}
+  PERF_TIMING_LOG_ENABLED: ${PERF_TIMING_LOG_ENABLED-false}
+  APP_NAME: ${APP_NAME-webchat-ai}
+  # Explicit local production testing; false by default, NEVER auto-enabled.
+  LOCAL_PRODUCTION_TEST: ${LOCAL_PRODUCTION_TEST-false}
+  BACKEND_HOST: ${BACKEND_HOST-0.0.0.0}
+  BACKEND_PORT: ${BACKEND_PORT-8000}
+
+  # Database is .env-driven; falls back to the local `mongo` service.
+  MONGODB_URI: ${MONGODB_URI-mongodb://mongo:27017}
+  MONGODB_DB: ${MONGODB_DB-webchat_ai}
+  MONGODB_MIN_POOL_SIZE: ${MONGODB_MIN_POOL_SIZE-10}
+  MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE-100}
+  MONGODB_SERVER_SELECTION_TIMEOUT_MS: ${MONGODB_SERVER_SELECTION_TIMEOUT_MS-30000}
+  MONGODB_SLOW_QUERY_THRESHOLD_MS: ${MONGODB_SLOW_QUERY_THRESHOLD_MS-0}
+
+  # Redis is .env-driven; falls back to the local `redis` service.
+  REDIS_URL: ${REDIS_URL-redis://redis:6379}
+  REDIS_PREFIX: ${REDIS_PREFIX-webchat_ai}
+
+  # Auth (from .env when present; safe dev fallback otherwise).
+  JWT_SECRET: ${JWT_SECRET-dev-only-jwt-secret-change-me}
+  JWT_ALGORITHM: ${JWT_ALGORITHM-HS256}
+  JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES-15}
+  JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS-30}
+  COOKIE_SECURE: ${COOKIE_SECURE-false}
+  REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME-refresh_token}
+  CSRF_COOKIE_NAME: ${CSRF_COOKIE_NAME-csrf_token}
+  EMAIL_VERIFY_TOKEN_EXPIRE_MINUTES: ${EMAIL_VERIFY_TOKEN_EXPIRE_MINUTES-1440}
+  PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: ${PASSWORD_RESET_TOKEN_EXPIRE_MINUTES-30}
+
+  # Rate limiting.
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED-true}
+  API_KEY_RATE_LIMIT_PER_MINUTE: ${API_KEY_RATE_LIMIT_PER_MINUTE-300}
+
+  # Reverse-proxy trust + trusted hosts (production validation in config.py).
+  TRUST_PROXY: ${TRUST_PROXY-false}
+  ALLOWED_HOSTS: ${ALLOWED_HOSTS-localhost,127.0.0.1,0.0.0.0,::1}
+
+  # CORS / public URLs.
+  CORS_ORIGINS: ${CORS_ORIGINS-["http://localhost:3000","http://localhost:8000","http://127.0.0.1:5500","http://localhost:5500"]}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL-http://localhost:3000}
+  WIDGET_SCRIPT_URL: ${WIDGET_SCRIPT_URL-http://localhost:8080/webchat-widget.iife.min.js}
+  # Runtime widget API origin (rendered into the embed snippet as
+  # data-api-base-url). The build-time VITE_WIDGET_API_BASE_URL stays empty for
+  # local runs so the bundle remains loopback-free (check-assets gate).
+  WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL-http://localhost:8000}
+
+  # Public widget API limits.
+  WIDGET_SESSION_TOKEN_MINUTES: ${WIDGET_SESSION_TOKEN_MINUTES-15}
+  WIDGET_SESSION_VALIDITY_HOURS: ${WIDGET_SESSION_VALIDITY_HOURS-24}
+  WIDGET_CONFIG_CACHE_SECONDS: ${WIDGET_CONFIG_CACHE_SECONDS-300}
+  WIDGET_PER_WIDGET_LIMIT: ${WIDGET_PER_WIDGET_LIMIT-60}
+  WIDGET_PER_VISITOR_LIMIT: ${WIDGET_PER_VISITOR_LIMIT-20}
+  WIDGET_SESSION_ISSUE_LIMIT: ${WIDGET_SESSION_ISSUE_LIMIT-30}
+  WIDGET_FEEDBACK_LIMIT: ${WIDGET_FEEDBACK_LIMIT-30}
+  WIDGET_IP_LIMIT: ${WIDGET_IP_LIMIT-120}
+  WIDGET_MAX_MESSAGES_PER_SESSION: ${WIDGET_MAX_MESSAGES_PER_SESSION-50}
+  WIDGET_RATE_LIMIT_ENABLED: ${WIDGET_RATE_LIMIT_ENABLED-true}
+
+  # Email: .env-driven; falls back to the local Mailpit service. Production
+  # uses Resend (RESEND_API_KEY) and leaves MAILPIT_API_URL empty (preserved).
+  MAILPIT_API_URL: ${MAILPIT_API_URL-http://mailpit:8025}
+  RESEND_API_KEY: ${RESEND_API_KEY-}
+  EMAIL_FROM: ${EMAIL_FROM-WebChat AI <no-reply@webchatai.example>}
+
+  # AI keys / models (from .env when present).
+  GEMINI_API_KEY: ${GEMINI_API_KEY-}
+  GEMINI_MODEL: ${GEMINI_MODEL-gemini-2.5-flash}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL-gemini-embedding-001}
+  GROQ_API_KEY: ${GROQ_API_KEY-}
+  GROQ_MODEL: ${GROQ_MODEL-llama-3.3-70b-versatile}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY-}
+  OPENROUTER_MODEL: ${OPENROUTER_MODEL-meta-llama/llama-3.3-70b-instruct}
+  GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER-["gemini","groq","openrouter"]}
+  EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER-["gemini"]}
+  AI_PROVIDER_TIMEOUT_SECONDS: ${AI_PROVIDER_TIMEOUT_SECONDS-60}
+  EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS-3072}
+  OLLAMA_BASE_URL: ${OLLAMA_BASE_URL-http://localhost:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL-nomic-embed-text}
+  OLLAMA_EMBEDDING_DIMENSIONS: ${OLLAMA_EMBEDDING_DIMENSIONS-768}
+
+  # Knowledge processing.
+  KNOWLEDGE_CHUNK_SIZE_TOKENS: ${KNOWLEDGE_CHUNK_SIZE_TOKENS-700}
+  KNOWLEDGE_CHUNK_OVERLAP_TOKENS: ${KNOWLEDGE_CHUNK_OVERLAP_TOKENS-100}
+  EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE-32}
+  EMBEDDING_MAX_RETRIES: ${EMBEDDING_MAX_RETRIES-5}
+  EMBEDDING_RETRY_BASE_DELAY_MS: ${EMBEDDING_RETRY_BASE_DELAY_MS-500}
+  EMBEDDING_REQUEST_TIMEOUT_SECONDS: ${EMBEDDING_REQUEST_TIMEOUT_SECONDS-60}
+  KNOWLEDGE_MAX_DOCUMENT_RETRIES: ${KNOWLEDGE_MAX_DOCUMENT_RETRIES-3}
+  KNOWLEDGE_RETRY_BASE_DELAY_SECONDS: ${KNOWLEDGE_RETRY_BASE_DELAY_SECONDS-5}
+  KNOWLEDGE_RETRY_BACKOFF_FACTOR: ${KNOWLEDGE_RETRY_BACKOFF_FACTOR-6}
+  KNOWLEDGE_MIN_CONTENT_CHARS: ${KNOWLEDGE_MIN_CONTENT_CHARS-100}
+
+  # Analytics.
+  COST_PER_MILLION_INPUT_TOKENS: ${COST_PER_MILLION_INPUT_TOKENS-0.30}
+  COST_PER_MILLION_OUTPUT_TOKENS: ${COST_PER_MILLION_OUTPUT_TOKENS-1.50}
+
+  # RAG pipeline.
+  RAG_PROMPT_VERSION: ${RAG_PROMPT_VERSION-1}
+  CHAT_TOP_K: ${CHAT_TOP_K-5}
+  CHAT_MEMORY_TURNS: ${CHAT_MEMORY_TURNS-8}
+  CHAT_CONTEXT_CHUNK_CHARS: ${CHAT_CONTEXT_CHUNK_CHARS-4000}
+  CHAT_QUESTION_MAX_CHARS: ${CHAT_QUESTION_MAX_CHARS-2000}
+  CHAT_MAX_OUTPUT_TOKENS: ${CHAT_MAX_OUTPUT_TOKENS-1024}
+  CHAT_TEMPERATURE: ${CHAT_TEMPERATURE-0.2}
+  GENERATION_TIMEOUT_SECONDS: ${GENERATION_TIMEOUT_SECONDS-60}
+  CHAT_RETENTION_DAYS: ${CHAT_RETENTION_DAYS-90}
+  USAGE_RETENTION_DAYS: ${USAGE_RETENTION_DAYS-1095}
+
+  # Ingestion engine (crawler).
+  CRAWL_MAX_PAGES: ${CRAWL_MAX_PAGES-50}
+  CRAWL_MAX_DEPTH: ${CRAWL_MAX_DEPTH-3}
+  CRAWL_NAVIGATION_TIMEOUT_MS: ${CRAWL_NAVIGATION_TIMEOUT_MS-30000}
+  CRAWL_MAX_HTML_BYTES: ${CRAWL_MAX_HTML_BYTES-5000000}
+  CRAWL_MAX_CONTENT_BYTES: ${CRAWL_MAX_CONTENT_BYTES-200000}
+  CRAWL_MAX_CONCURRENT: ${CRAWL_MAX_CONCURRENT-2}
+  CRAWL_BROWSER_USER_AGENT: ${CRAWL_BROWSER_USER_AGENT-WebChatAI-Crawler/1.0}
+  CRAWL_NO_SANDBOX: ${CRAWL_NO_SANDBOX-true}
+
+  # Payments (from .env when present; safe dev fallbacks otherwise).
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER-mock}
+  PAYMENT_CURRENCY: ${PAYMENT_CURRENCY-USD}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET-}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID-}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET-}
+  RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET-}
+
+  # Admin.
+  SUPER_ADMIN_EMAILS: ${SUPER_ADMIN_EMAILS-[]}
 
 networks:
   webchat:
@@ -85,50 +221,7 @@ services:
     networks: [webchat]
     restart: unless-stopped
     environment:
-      # Mode/debug are .env-driven (default: development / true).
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-      DEBUG: ${DEBUG:-true}
-
-      # Database is .env-driven; falls back to the local `mongo` service.
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
-      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
-
-      # Redis is .env-driven; falls back to the local `redis` service.
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
-
-      # Auth secrets (from .env when present; safe dev fallback otherwise).
-      JWT_SECRET: ${JWT_SECRET:-dev-only-jwt-secret-change-me}
-      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-15}
-      JWT_REFRESH_TOKEN_EXPIRE_DAYS: ${JWT_REFRESH_TOKEN_EXPIRE_DAYS:-30}
-      # .env-driven; false for dev over plain HTTP, true for HTTPS-only cookies.
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-
-      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:8000","http://127.0.0.1:5500","http://localhost:5500"]}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
-
-      # Widget: runtime API origin baked into the generated embed snippet
-      # (data-api-base-url). The build-time VITE_WIDGET_API_BASE_URL stays
-      # empty so the local bundle remains loopback-free (check-assets gate).
-      WIDGET_API_BASE_URL: ${WIDGET_API_BASE_URL:-http://localhost:8000}
-      WIDGET_SCRIPT_URL: ${WIDGET_SCRIPT_URL:-http://localhost:8080/webchat-widget.iife.min.js}
-
-      # Email: .env-driven; falls back to the local Mailpit service. Production
-      # uses Resend (RESEND_API_KEY) and can leave MAILPIT_API_URL empty.
-      MAILPIT_API_URL: ${MAILPIT_API_URL:-http://mailpit:8025}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      EMAIL_FROM: ${EMAIL_FROM:-WebChat AI <no-reply@webchatai.example>}
-
-      # AI keys (from .env when present).
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER:-["gemini","groq","openrouter"]}
-      EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER:-["gemini"]}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-3072}
-
-      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      <<: *backend-env
     ports:
       - "8000:8000"
     depends_on:
@@ -152,24 +245,7 @@ services:
     networks: [webchat]
     restart: unless-stopped
     environment:
-      ENVIRONMENT: ${ENVIRONMENT:-development}
-
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}
-      MONGODB_DB: ${MONGODB_DB:-webchat_ai}
-
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      REDIS_PREFIX: ${REDIS_PREFIX:-webchat_ai}
-
-      MAILPIT_API_URL: ${MAILPIT_API_URL:-http://mailpit:8025}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER:-["gemini","groq","openrouter"]}
-      EMBEDDING_PROVIDER_ORDER: ${EMBEDDING_PROVIDER_ORDER:-["gemini"]}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-3072}
+      <<: *backend-env
     depends_on:
       mongo:
         condition: service_healthy
@@ -182,15 +258,16 @@ services:
       dockerfile: docker/Dockerfile.dashboard
       network: host
       args:
-        # Inlined into the Next.js client bundle at build time.
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        # Inlined into the Next.js client bundle at build time. The value comes
+        # from the selected env file (defaults to the local dev API).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL-http://localhost:8000}
     container_name: webchat-dashboard
     networks: [webchat]
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: 3000
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL-http://localhost:3000}
     ports:
       - "3000:3000"
     depends_on:
@@ -209,10 +286,12 @@ services:
       dockerfile: docker/Dockerfile.widget
       network: host
       args:
-        # Keep empty for local dev: the bundle must stay loopback-free
-        # (apps/widget/scripts/check-assets.mjs). The widget reaches the API
-        # at runtime via data-api-base-url from WIDGET_API_BASE_URL.
-        VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL:-}
+        # Build-time widget API base. Keep EMPTY for local dev AND local
+        # production testing: the bundle must stay loopback-free
+        # (apps/widget/scripts/check-assets.mjs). The widget reaches the API at
+        # runtime via data-api-base-url from WIDGET_API_BASE_URL. Set this to
+        # the HTTPS API origin before the production build (Railway).
+        VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL-}
     container_name: webchat-widget
     networks: [webchat]
     restart: unless-stopped

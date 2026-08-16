@@ -88,7 +88,7 @@ jobs:
 
   # Widget E2E (Playwright) - full no-mock flow via scripts/e2e-widget.sh.
   #
-  # Required services (docker/compose.dev.yml):
+  # Required services (docker/compose.yml):
   #   mongo, redis, mailpit, api, worker, widget
   # Required secrets:
   #   GEMINI_API_KEY - real embeddings for the crawl + RAG answer stream.
@@ -134,13 +134,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Provision .env for the E2E stack
+      - name: Provision .env.development for the E2E stack
         if: env.GEMINI_API_KEY != ''
         run: |
-          cp .env.example .env
+          cp .env.example .env.development
           # Real key for embeddings (never echo it).
-          sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY='"${GEMINI_API_KEY}"'|' .env
-          sed -i 's|^RATE_LIMIT_ENABLED=.*|RATE_LIMIT_ENABLED=false|' .env || true
+          sed -i 's|^GEMINI_API_KEY=.*|GEMINI_API_KEY='"${GEMINI_API_KEY}"'|' .env.development
+          sed -i 's|^RATE_LIMIT_ENABLED=.*|RATE_LIMIT_ENABLED=false|' .env.development || true
 
       - name: Run widget E2E (full no-mock flow)
         if: env.GEMINI_API_KEY != ''

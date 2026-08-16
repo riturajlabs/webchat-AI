@@ -263,3 +263,82 @@ def test_production_accepts_phase16_validation_passing_settings() -> None:
     settings = Settings(**_prod())
     assert settings.environment == "production"
     assert settings.cors_origins == ["https://app.example.com"]
+
+
+# --- Local production testing (LOCAL_PRODUCTION_TEST) ---
+
+_LOCAL_PROD_BASE = dict(
+    _env_file=None,
+    environment="production",
+    jwt_secret="a" * 32,
+    gemini_api_key="test-key",
+    local_production_test=True,
+    widget_script_url="http://localhost:8080/webchat-widget.iife.min.js",
+    widget_api_base_url="http://localhost:8000",
+    payment_provider="stripe",
+    stripe_secret_key="sk_test",
+    stripe_webhook_secret="whsec_test",
+    cors_origins=["http://localhost:3000"],
+    allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0", "::1"],
+)
+
+
+def _local_prod(**overrides: object) -> dict[str, object]:
+    base = dict(_LOCAL_PROD_BASE)
+    base.update(overrides)
+    return base
+
+
+def test_local_production_test_allows_loopback_urls() -> None:
+    """The explicit flag accepts localhost URLs so production can run locally."""
+    settings = Settings(**_local_prod())
+    assert settings.environment == "production"
+    assert settings.local_production_test is True
+    assert settings.widget_script_url.startswith("http://localhost")
+    assert settings.widget_api_base_url.startswith("http://localhost")
+
+
+def test_local_production_test_flag_defaults_to_false() -> None:
+    assert Settings(_env_file=None).local_production_test is False
+
+
+def test_production_rejects_loopback_without_local_production_test() -> None:
+    """Without the flag, production still fails fast on loopback URLs/hosts."""
+    with pytest.raises(ValueError, match="WIDGET_SCRIPT_URL"):
+        Settings(**_prod(widget_script_url="http://localhost:8080/widget.js"))
+
+
+def test_local_production_test_still_requires_strong_jwt_secret() -> None:
+    with pytest.raises(ValueError, match="JWT_SECRET"):
+        Settings(**_local_prod(jwt_secret="too-short"))
+
+
+def test_local_production_test_still_requires_generation_provider_key() -> None:
+    with pytest.raises(ValueError, match="generation provider key"):
+        Settings(**_local_prod(gemini_api_key=None, groq_api_key=None, openrouter_api_key=None))
+
+
+def test_local_production_test_still_rejects_mock_payments() -> None:
+    with pytest.raises(ValueError, match="PAYMENT_PROVIDER"):
+        Settings(**_local_prod(payment_provider="mock"))
+
+
+def test_local_production_test_still_rejects_disabled_rate_limiting() -> None:
+    with pytest.raises(ValueError, match="RATE_LIMIT_ENABLED"):
+        Settings(**_local_prod(rate_limit_enabled=False))
+
+
+def test_local_production_test_still_rejects_wildcard_cors() -> None:
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_local_prod(cors_origins=["*", "http://localhost:3000"]))
+
+
+def test_local_production_test_still_rejects_http_public_cors_origin() -> None:
+    """Only loopback origins may be plain HTTP; a public http:// origin stays banned."""
+    with pytest.raises(ValueError, match="CORS_ORIGINS"):
+        Settings(**_local_prod(cors_origins=["http://app.example.com"]))
+
+
+def test_local_production_test_still_rejects_wildcard_allowed_hosts() -> None:
+    with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
+        Settings(**_local_prod(allowed_hosts=["*"]))

@@ -3,12 +3,13 @@
 #
 #  1. Builds the widget bundle (must match HEAD).
 #  2. Brings up mongo, redis, mailpit, api, worker, widget via compose
-#     (GEMINI_API_KEY passes through from .env; see docker/compose.dev.yml).
+#     (GEMINI_API_KEY passes through from .env.development; see
+#     docker/compose.yml).
 #  3. Waits for the API readiness probe.
 #  4. Runs tests/e2e with the live environment wired up.
 #
-# Requirements: docker compose, a GEMINI_API_KEY in .env, and the venv with
-# playwright (backend dependency).
+# Requirements: docker compose, a GEMINI_API_KEY in .env.development, and the
+# venv with playwright (backend dependency).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,8 +20,9 @@ echo "==> Starting stack (mongo, redis, mailpit, api, worker, widget)"
 # RATE_LIMIT_ENABLED=false: the E2E exercises the full functional flow; auth/
 # widget rate limits have their own unit tests and would otherwise make the
 # no-mock E2E flaky across repeated runs (register is 10 req/hour/IP).
+# The shell override wins over the env file value (compose interpolation).
 RATE_LIMIT_ENABLED="${RATE_LIMIT_ENABLED:-false}" \
-  docker compose -f docker/compose.dev.yml --env-file .env up -d --build widget api worker
+  docker compose -f docker/compose.yml --env-file .env.development up -d --build widget api worker
 
 echo "==> Waiting for API readiness"
 ready=""

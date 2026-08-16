@@ -16,5 +16,5 @@ echo "==> Installing backend dependencies (uv, Python 3.13)"
 uv sync
 
 echo "==> Done. Start infra with:"
-echo "    docker compose -f docker/compose.dev.yml up --build"
+echo "    docker compose --env-file .env.development -f docker/compose.yml up --build"
 echo "    Then run: scripts/dev-api.sh"

@@ -1,5 +1,5 @@
 # WebChat AI widget SDK (framework-independent IIFE/ESM/UMD bundles)
-# Build context: repo root (see docker/compose.dev.yml)
+# Build context: repo root (see docker/compose.yml)
 # Serves the built dist so the embed script can be hosted and smoke-tested.
 
 FROM node:22-alpine AS base
@@ -13,8 +13,11 @@ FROM base AS builder
 WORKDIR /app
 # The widget bundle bakes the API origin at build time so the SaaS host can
 # ship one bundle that talks to the right backend from any customer domain.
-# Production must build with `--build-arg VITE_WIDGET_API_BASE_URL=https://...`
-# (see .env.example); the check-assets gate rejects loopback hosts on purpose.
+# docker compose passes VITE_WIDGET_API_BASE_URL from the selected env file
+# (see .env.example). Keep it EMPTY for local dev AND local production testing
+# so the bundle stays loopback-free; the check-assets gate rejects loopback
+# hosts on purpose. For a real production build (e.g. Railway) set it to the
+# HTTPS API origin before building - it cannot be changed at runtime.
 ARG VITE_WIDGET_API_BASE_URL=""
 ENV VITE_WIDGET_API_BASE_URL="${VITE_WIDGET_API_BASE_URL}"
 # All workspace manifests must be present for `pnpm install` to resolve.

@@ -22,21 +22,22 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
 
 ## Quick start
 
-1. Copy environment variables:
+1. Copy environment variables (a ready-made development file ships with the
+   repo; copy it for local development):
 
    ```bash
-   cp .env.example .env
+   cp .env.development .env
    ```
 
 2. Start the full development stack (MongoDB, Redis, Mailpit, API, Worker,
    Dashboard, Widget):
 
    ```bash
-   docker compose --env-file .env -f docker/compose.dev.yml up --build
+   docker compose --env-file .env.development -f docker/compose.yml up --build
    ```
 
-   (or `scripts/docker-up.sh`). The `--env-file .env` flag loads your local
-   secrets (AI keys, JWT secret) into the api/worker containers.
+   (or `scripts/docker-up.sh`). The `--env-file` flag loads the selected
+   environment file and compose passes it straight into the containers.
 
 3. Install frontend dependencies and run the dashboard:
 
@@ -49,18 +50,23 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
 
 > MongoDB Atlas and managed Redis are used for production (Phase 13/14). Local
 > development uses the Docker `mongo`/`redis` services or a native local
-> instance; the service URIs come from `.env`.
+> instance; the service URIs come from the selected env file.
 >
 > **Environment configuration**: see `.env.example` for the full variable
-> reference. `docker/compose.dev.yml` is fully `.env`-driven - it passes every
-> variable straight through to the api/worker containers via `${VAR:-default}`
-> and only supplies local-dev fallbacks (`ENVIRONMENT=development`,
-> `MONGODB_URI=mongodb://mongo:27017`, `REDIS_URL=redis://redis:6379`,
-> `MAILPIT_API_URL=http://mailpit:8025`) when `.env` does not set them. All
-> secrets come from `.env`. For production, set `ENVIRONMENT=production` in
-> `.env` with external managed services; `backend/core/config.py` fails fast at
-> boot on weak production values (loopback CORS/hosts, short JWT secret, missing
-> AI keys, mock payments).
+> reference. Two env files ship with the repo:
+>
+> - `.env.development` — local docker services (`ENVIRONMENT=development`,
+>   `MONGODB_URI=mongodb://mongo:27017`, `REDIS_URL=redis://redis:6379`,
+>   `MAILPIT_API_URL=http://mailpit:8025`, `DEBUG=true`, `COOKIE_SECURE=false`,
+>   `PAYMENT_PROVIDER=mock`).
+> - `.env.production` — `ENVIRONMENT=production` for **local production
+>   testing**: external managed services (Atlas MongoDB, managed Redis, Resend,
+>   real AI keys) but localhost app URLs, gated by `LOCAL_PRODUCTION_TEST=true`.
+>   `backend/core/config.py` fails fast at boot on weak production values
+>   (loopback CORS/hosts, short JWT secret, missing AI keys, mock payments)
+>   unless the explicit local-production-test flag is set. Before deploying to
+>   Railway, only URL/domain and provider-credential values change (see
+>   `.env.example` "RAILWAY DEPLOYMENT").
 
 ## Development scripts
 

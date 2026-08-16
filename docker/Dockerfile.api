@@ -1,5 +1,5 @@
 # WebChat AI API server
-# Build context: repo root (see docker/compose.dev.yml)
+# Build context: repo root (see docker/compose.yml)
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS api
 

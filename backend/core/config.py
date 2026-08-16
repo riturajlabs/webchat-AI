@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = False
 
+    # Explicit local-production-testing mode. When True, `environment` stays
+    # "production" (so all production code paths - JSON logs, Resend mail, real
+    # payment gateways, rate limiting - are exercised) but loopback
+    # (localhost / 127.0.0.1 / 0.0.0.0 / ::1) URLs and HTTP CORS origins are
+    # accepted so the stack can run on a local machine over plain HTTP.
+    #
+    # This flag is STRICTLY opt-in and must NEVER be set in a real deployment
+    # (Railway etc.): a deployed production install must use public HTTPS URLs,
+    # secure cookies and a trusted proxy. It only relaxes the URL/host
+    # validators; every other production security check still applies.
+    # See .env.example ("LOCAL_PRODUCTION_TEST").
+    local_production_test: bool = False
+
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
 
@@ -278,9 +291,33 @@ class Settings(BaseSettings):
         hosts.update({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
         return sorted(hosts)
 
+    @staticmethod
+    def _loopback_markers() -> tuple[str, ...]:
+        return ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+    def _has_loopback_host(self, value: str) -> bool:
+        """True when a URL/string contains a loopback host marker."""
+        lowered = value.lower()
+        return any(marker in lowered for marker in self._loopback_markers())
+
+    def _is_loopback_host(self, host: str) -> bool:
+        return host.strip().lower() in {
+            "localhost",
+            "127.0.0.1",
+            "0.0.0.0",
+            "::1",
+            "testserver",
+        }
+
     @model_validator(mode="after")
     def _validate_production_security(self) -> "Settings":
-        """Fail fast on weak production secrets (00-AI-Development-Rules §20)."""
+        """Fail fast on weak production secrets (00-AI-Development-Rules §20).
+
+        `LOCAL_PRODUCTION_TEST=true` relaxes ONLY the URL/host validators so
+        the production code paths can run on a local machine over plain HTTP.
+        All other production checks (JWT length, provider keys, real payment
+        gateway, rate limiting, wildcard rejection) always apply.
+        """
         if self.environment.lower() == "production":
             if len(self.jwt_secret.encode("utf-8")) < 32:
                 raise ValueError("JWT_SECRET must be at least 32 bytes in production.")
@@ -299,19 +336,19 @@ class Settings(BaseSettings):
                 raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer in production.")
             # The embed script URL is baked into the dashboard embed code and
             # into customer pages; a localhost default would break every embed.
-            if any(
-                marker in self.widget_script_url.lower()
-                for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-            ):
+            # Allowed only under the explicit local-production-test flag.
+            if self._has_loopback_host(self.widget_script_url) and not self.local_production_test:
                 raise ValueError(
                     "WIDGET_SCRIPT_URL must point at a real CDN/host in production "
                     "(got a localhost value)."
                 )
             # The widget API base is embedded into customer pages via
             # `data-api-base-url`; a localhost value would break every embed.
-            if self.widget_api_base_url and any(
-                marker in self.widget_api_base_url.lower()
-                for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+            # Allowed only under the explicit local-production-test flag.
+            if (
+                self.widget_api_base_url
+                and self._has_loopback_host(self.widget_api_base_url)
+                and not self.local_production_test
             ):
                 raise ValueError(
                     "WIDGET_API_BASE_URL must point at a real API origin in production "
@@ -349,31 +386,32 @@ class Settings(BaseSettings):
                     raise ValueError(
                         f"CORS_ORIGINS must not contain wildcard origins in production ({origin})."
                     )
-                if any(
-                    marker in lowered
-                    for marker in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-                ):
-                    raise ValueError(
-                        f"CORS_ORIGINS must not contain loopback origins in production ({origin})."
-                    )
+                if self._has_loopback_host(lowered):
+                    # Loopback (plain-HTTP) origins are allowed only under the
+                    # explicit local-production-test flag; they never are in a
+                    # real deployment.
+                    if not self.local_production_test:
+                        raise ValueError(
+                            "CORS_ORIGINS must not contain loopback origins in "
+                            f"production ({origin})."
+                        )
+                    continue
                 if not lowered.startswith("https://"):
                     raise ValueError(
                         f"CORS_ORIGINS entries must be HTTPS origins in production ({origin})."
                     )
             # Trusted hosts (Phase 16): without an explicit allowlist, host-header
             # poisoning could route requests anywhere. Require at least one real
-            # public hostname (loopback-only lists are a misconfiguration).
+            # public hostname (loopback-only lists are a misconfiguration),
+            # except under the explicit local-production-test flag.
             if not self.allowed_hosts:
                 raise ValueError("ALLOWED_HOSTS must not be empty in production.")
             if "*" in self.allowed_hosts:
-                raise ValueError(
-                    "ALLOWED_HOSTS must not contain wildcard entries in production."
-                )
-            loopback_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "testserver"}
-            if not any(host not in loopback_hosts for host in self.allowed_hosts):
-                raise ValueError(
-                    "ALLOWED_HOSTS must include the public hostname(s) in production."
-                )
+                raise ValueError("ALLOWED_HOSTS must not contain wildcard entries in production.")
+            if not self.local_production_test and not any(
+                not self._is_loopback_host(host) for host in self.allowed_hosts
+            ):
+                raise ValueError("ALLOWED_HOSTS must include the public hostname(s) in production.")
             # Rate limiting (Phase 16): every route-level limiter gates on
             # `rate_limit_enabled`; silently disabling it in production would
             # expose the API to abuse.
