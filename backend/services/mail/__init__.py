@@ -28,14 +28,34 @@ def build_email(to: str, subject: str, template: str, **context: object) -> Emai
     return EmailMessage(to=to, subject=subject, text=text, html=html)
 
 
+_RESEND_SANDBOX_SENDERS = frozenset({
+    "onboarding@resend.dev",
+    "no-reply@resend.dev",
+    "notifications@resend.dev",
+})
+
+
 @lru_cache
 def get_mail_service() -> MailService:
     """Return the provider for the current environment (ADR-001)."""
+    import logging
+
+    _log = logging.getLogger(__name__)
     settings = get_settings()
     if settings.environment == "development":
+        _log.info("Mail service: Mailpit (development mode)")
         return MailpitProvider(settings.mailpit_api_url)
     if not settings.resend_api_key:
         raise RuntimeError("RESEND_API_KEY is required in non-development environments.")
+    sender_email = settings.email_from.split("<")[-1].strip().rstrip(">").strip().lower()
+    if sender_email in _RESEND_SANDBOX_SENDERS:
+        _log.warning(
+            "Using Resend sandbox sender (%s). Emails will ONLY be delivered to "
+            "the Resend account owner. Configure a verified custom domain sender "
+            "for production use.",
+            sender_email,
+        )
+    _log.info("Mail service: Resend (sender=%s)", settings.email_from)
     return ResendProvider(settings.resend_api_key)
 
 

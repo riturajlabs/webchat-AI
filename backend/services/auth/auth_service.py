@@ -152,7 +152,7 @@ class AuthService:
             )
         )
         await self._send_verification_email(user)
-        return await self._issue_tokens(user, member.role)
+        return await self._issue_tokens(user, await self._resolve_role(user))
 
     async def verify_email(
         self, *, token: str, ip_address: str | None, user_agent: str | None
@@ -311,15 +311,28 @@ class AuthService:
             return  # do not reveal whether the account exists
         token = create_password_reset_token(user.id, user.pwd_token_version)
         reset_url = f"{self._settings.public_base_url}/reset-password?token={token}"
-        await self._mail(
-            build_email(
-                user.email,
-                "Reset your password",
-                "reset_password",
-                name=user.name,
-                reset_url=reset_url,
+        try:
+            await self._mail(
+                build_email(
+                    user.email,
+                    "Reset your password",
+                    "reset_password",
+                    name=user.name,
+                    reset_url=reset_url,
+                )
             )
-        )
+            logger.info(
+                "Password reset email dispatched for user %s (to=%s)",
+                user.id,
+                user.email,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to send password reset email for user %s (to=%s): %s",
+                user.id,
+                user.email,
+                exc,
+            )
         await self._audit.create(
             AuditLog.new(
                 action=AUDIT_FORGOT_PASSWORD,
@@ -391,13 +404,28 @@ class AuthService:
         tenant membership. Everyone else resolves through the tenant member
         role (falling back to `user.role`, the signup default).
         """
-        if user.email.casefold() in self._super_admin_emails():
+        admin_emails = self._super_admin_emails()
+        normalized = user.email.strip().casefold()
+        if normalized in admin_emails:
+            logger.info(
+                "Role resolved as super_admin for user %s (email=%s)",
+                user.id,
+                user.email,
+            )
             return ROLE_SUPER_ADMIN
         member = await self._members.find_by_user_id(user.id)
-        return member.role if member is not None else user.role
+        role = member.role if member is not None else user.role
+        logger.debug(
+            "Role resolved as %s for user %s (email=%s, super_admin_emails=%s)",
+            role,
+            user.id,
+            user.email,
+            sorted(admin_emails),
+        )
+        return role
 
     def _super_admin_emails(self) -> set[str]:
-        return {email.casefold() for email in self._settings.super_admin_emails}
+        return {email.strip().casefold() for email in self._settings.super_admin_emails}
 
     async def _issue_tokens(self, user: User, role: str) -> AuthResult:
         access_token, expires_in = create_access_token(user.id, user.tenant_id, role)
@@ -419,6 +447,12 @@ class AuthService:
     async def _send_verification_email(self, user: User) -> None:
         token = create_email_verification_token(user.id)
         verify_url = f"{self._settings.public_base_url}/verify-email?token={token}"
+        logger.info(
+            "Sending verification email: recipient=%s, sender=%s, url=%s",
+            user.email,
+            self._settings.email_from,
+            verify_url,
+        )
         try:
             await self._mail(
                 build_email(
@@ -429,14 +463,20 @@ class AuthService:
                     verification_url=verify_url,
                 )
             )
-        except Exception:
+            logger.info(
+                "Verification email dispatched successfully: recipient=%s, user_id=%s",
+                user.email,
+                user.id,
+            )
+        except Exception as exc:
             # Verification is no longer required for access, so a mail-infra
             # outage must not block signup/login. Log the provider error so it
             # is visible in API logs; the user can resend from the dashboard.
             logger.exception(
-                "Failed to enqueue verification email for user %s",
+                "Verification email FAILED: recipient=%s, user_id=%s, error=%s",
+                user.email,
                 user.id,
-                extra={"user_id": user.id},
+                exc,
             )
 
     async def _on_reuse_detected(

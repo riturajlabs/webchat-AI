@@ -8,6 +8,15 @@ import { BillingPage } from './billing-page';
 import { useCreateCheckout, useSubscriptionReport } from './hooks';
 import type { PaymentOut, SubscriptionOut } from './types';
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+
 vi.mock('./hooks', () => ({
   useSubscriptionReport: vi.fn(),
   useCreateCheckout: vi.fn(),

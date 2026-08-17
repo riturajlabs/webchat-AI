@@ -19,7 +19,7 @@ WIDGET_THEME_PRESETS = {
     "emerald-support",
     "purple-ai",
     "minimal-white",
-    "corporate-gray",
+    "sunset",
     "modern-gradient",
 }
 

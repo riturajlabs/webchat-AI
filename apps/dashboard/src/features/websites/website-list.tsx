@@ -9,7 +9,14 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { AddWebsiteDialog } from './add-website-dialog';
-import { useCrawlJob, useDeleteWebsite, useStartCrawl, useWebsites, websitesKeys } from './hooks';
+import {
+  useCrawlJob,
+  useCrawlProgress,
+  useDeleteWebsite,
+  useStartCrawl,
+  useWebsites,
+  websitesKeys,
+} from './hooks';
 import { WebsiteCard } from './website-card';
 import type { Website } from './types';
 
@@ -28,6 +35,7 @@ export function WebsiteList() {
   const [crawlError, setCrawlError] = useState<string | null>(null);
 
   const crawlJob = useCrawlJob(activeJobId);
+  const crawlProgress = useCrawlProgress(activeJobId);
 
   const websites = data ?? [];
 
@@ -166,6 +174,12 @@ export function WebsiteList() {
               <WebsiteCard
                 website={website}
                 crawlJob={crawlJob.data?.website_id === website.id ? crawlJob.data : null}
+                crawlProgress={
+                  crawlJob.data?.website_id === website.id ? crawlProgress.progress : null
+                }
+                sseConnected={
+                  crawlJob.data?.website_id === website.id ? crawlProgress.connected : false
+                }
                 crawlPending={pendingWebsiteId === website.id}
                 onCrawl={(site) => void handleCrawl(site)}
                 onEdit={openEdit}

@@ -152,17 +152,23 @@ async def test_billing_plans_lists_all_tiers_with_prices(client) -> None:
 
     assert response.status_code == 200
     plans = response.json()
-    assert [plan["id"] for plan in plans] == ["free", "pro", "enterprise"]
+    assert [plan["id"] for plan in plans] == ["free", "plus", "pro", "enterprise"]
     free = plans[0]
     assert free["name"] == "Free"
     assert free["limits"]["max_websites"] == 1
     assert free["limits"]["max_monthly_messages"] == 1_000
     assert free["price_cents"] == 0
     assert free["currency"] == "USD"
-    pro = plans[1]
-    assert pro["price_cents"] == 2_900
+    plus = plans[1]
+    assert plus["name"] == "Plus"
+    assert plus["limits"]["max_websites"] == 3
+    assert plus["limits"]["max_monthly_messages"] == 5_000
+    assert plus["price_cents"] == 1_900
+    assert plus["currency"] == "USD"
+    pro = plans[2]
+    assert pro["price_cents"] == 4_900
     assert pro["currency"] == "USD"
-    enterprise = plans[2]
+    enterprise = plans[3]
     assert enterprise["limits"]["max_websites"] is None
     assert enterprise["limits"]["max_crawl_pages"] is None
     assert enterprise["price_cents"] is None
@@ -198,7 +204,7 @@ async def test_checkout_creates_provider_checkout_for_purchasable_plan(client) -
     checkout = payment_env.provider.checkouts[0]
     assert checkout["tenant_id"] == tenant_id
     assert checkout["plan_id"] == "pro"
-    assert checkout["amount_cents"] == 2_900
+    assert checkout["amount_cents"] == 4_900
     assert checkout["currency"] == "USD"
 
 
@@ -270,7 +276,7 @@ async def test_subscription_reflects_activation_and_payment_history(client) -> N
     assert len(body["payments"]) == 1
     payment = body["payments"][0]
     assert payment["plan_id"] == "pro"
-    assert payment["amount_cents"] == 2_900
+    assert payment["amount_cents"] == 4_900
     assert payment["currency"] == "USD"
 
 
@@ -291,7 +297,7 @@ async def test_payment_history_keeps_charged_amount_after_plan_price_change(
     body = response.json()
     assert body["subscription"]["plan_id"] == "pro"
     assert len(body["payments"]) == 1
-    assert body["payments"][0]["amount_cents"] == 2_900
+    assert body["payments"][0]["amount_cents"] == 4_900
 
     plans_response = test_client.get("/api/billing/plans", headers=headers)
     pro = next(plan for plan in plans_response.json() if plan["id"] == "pro")

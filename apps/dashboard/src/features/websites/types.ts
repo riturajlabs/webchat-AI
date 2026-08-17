@@ -90,3 +90,15 @@ export interface StartCrawlResponse {
   status: CrawlJobStatus;
   created_at: string;
 }
+
+/** Real-time crawl progress event from SSE stream. */
+export interface CrawlProgressEvent {
+  status: CrawlJobStatus | 'started' | 'fetching' | 'extracting' | 'embedding';
+  message?: string;
+  current_url?: string;
+  pages_completed?: number;
+  pages_total?: number;
+  pages?: number;
+  chunks?: number;
+  error?: string;
+}

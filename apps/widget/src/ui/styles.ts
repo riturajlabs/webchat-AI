@@ -39,6 +39,7 @@ export const WIDGET_STYLES = `
     --wc-height: 600px;
     --wc-launcher-size: 58px;
     --wc-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+    --wc-error: #ef4444;
     all: initial;
   }
 
@@ -331,14 +332,14 @@ export const WIDGET_STYLES = `
     height: auto;
     clip: auto;
     padding: 8px 16px;
-    background: #fef2f2;
-    color: #991b1b;
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 12%, transparent);
+    color: var(--wc-error, #ef4444);
     font-size: 0.9em;
   }
 
   :host([data-dark='1']) .wc-banner {
-    background: #451a03;
-    color: #fecaca;
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 18%, transparent);
+    color: color-mix(in srgb, var(--wc-error, #ef4444) 85%, #ffffff);
   }
 
   /* ---- Messages + bubbles ------------------------------------------------ */
@@ -458,73 +459,53 @@ export const WIDGET_STYLES = `
     opacity: 0.92;
   }
 
-  .wc-streaming::after {
-    content: '▍';
-    margin-left: 1px;
-    color: var(--wc-muted);
-    animation: wc-caret 1s steps(2, start) infinite;
-  }
-
-  @keyframes wc-caret {
-    from {
-      opacity: 1;
-    }
-    to {
-      opacity: 0.2;
-    }
-  }
-
-  /* Animated "AI is typing" indicator while the turn has no content yet. */
+  /* Animated typing indicator — three dots only (no text label). */
   .wc-typing {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 3px 0;
-    color: var(--wc-muted);
-  }
-
-  .wc-typing-label {
-    font-size: 0.82em;
-    font-style: italic;
+    gap: 4px;
+    padding: 8px 12px;
+    border-radius: 16px;
+    background: var(--wc-bubble-bg, var(--wc-surface-elevated));
   }
 
   .wc-typing-dots {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
   }
 
   .wc-typing-dots i {
-    width: 6px;
-    height: 6px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--wc-muted);
-    animation: wc-typing-dot 1.2s ease-in-out infinite;
+    animation: wc-typing-dot 1.4s ease-in-out infinite;
   }
 
   .wc-typing-dots i:nth-child(2) {
-    animation-delay: 0.15s;
+    animation-delay: 0.2s;
   }
 
   .wc-typing-dots i:nth-child(3) {
-    animation-delay: 0.3s;
+    animation-delay: 0.4s;
   }
 
   @keyframes wc-typing-dot {
     0%,
     60%,
     100% {
-      opacity: 0.25;
+      opacity: 0.3;
       transform: translateY(0);
     }
     30% {
       opacity: 1;
-      transform: translateY(-3px);
+      transform: translateY(-4px);
     }
   }
 
   .wc-bubble-error {
-    border: 1px solid #fca5a5;
+    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 50%, transparent);
   }
 
   /* Partial answer kept after the user pressed Stop (Phase 10). */
@@ -577,8 +558,7 @@ export const WIDGET_STYLES = `
     min-height: 24px;
   }
 
-  /* "Learn more" citation cards (Phase 12.7): favicon + title + derived
-     description + truncated URL + Read more, first 3 visible then expandable. */
+  /* "Learn more" citation cards: compact, clean layout with external link. */
   .wc-sources {
     margin-top: 10px;
     padding-top: 8px;
@@ -593,8 +573,7 @@ export const WIDGET_STYLES = `
     margin-bottom: 6px;
     color: var(--wc-text);
     font-size: 0.85em;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.02em;
   }
 
   .wc-sources-list {
@@ -643,13 +622,13 @@ export const WIDGET_STYLES = `
 
   .wc-source-link {
     display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 8px;
-    align-items: start;
+    align-items: center;
     color: var(--wc-text);
     text-decoration: none;
     border: 1px solid var(--wc-border);
-    border-radius: 8px;
+    border-radius: 10px;
     padding: 8px 10px;
     background: var(--wc-surface-elevated);
     transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease,
@@ -685,10 +664,9 @@ export const WIDGET_STYLES = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    margin-top: 1px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
     border-radius: 999px;
     border: 1px solid var(--wc-border);
     background: var(--wc-surface);
@@ -699,35 +677,25 @@ export const WIDGET_STYLES = `
   }
 
   .wc-source-favicon {
-    grid-column: 2;
-    width: 18px;
-    height: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 1px;
-    color: var(--wc-muted);
+    display: none;
   }
 
   .wc-source-favicon img {
-    width: 16px;
-    height: 16px;
-    display: block;
-    border-radius: 3px;
+    display: none;
   }
 
   .wc-source-body {
-    grid-column: 3;
+    grid-column: 1;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     min-width: 0;
   }
 
   .wc-source-title {
     font-weight: 600;
     color: var(--wc-text);
-    font-size: 0.9em;
+    font-size: 0.92em;
     line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -751,8 +719,8 @@ export const WIDGET_STYLES = `
   .wc-source-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-top: 2px;
+    gap: 6px;
+    margin-top: 1px;
     min-width: 0;
   }
 
@@ -770,10 +738,10 @@ export const WIDGET_STYLES = `
     flex: none;
     display: inline-flex;
     align-items: center;
-    gap: 3px;
+    gap: 2px;
     color: var(--wc-primary);
     font-weight: 600;
-    font-size: 0.8em;
+    font-size: 0.78em;
     white-space: nowrap;
   }
 
@@ -1029,22 +997,21 @@ export const WIDGET_STYLES = `
   /* ---- Composer ------------------------------------------------------------ */
 
   .wc-composer {
-    padding: 8px 14px 10px;
+    padding: 8px 12px 10px;
     border-top: 1px solid var(--wc-border);
     background: var(--wc-surface);
   }
 
-  /* Compact pill: the input and the send/stop actions live inside one rounded
-     container (Phase 12). Focus is reflected on the pill via :focus-within. */
+  /* Compact pill: input + send/stop in one rounded container. */
   .wc-composer-pill {
     display: flex;
     align-items: flex-end;
-    gap: 6px;
-    padding: 3px 4px 3px 16px;
+    gap: 4px;
+    padding: 3px 4px 3px 14px;
     border: 1px solid var(--wc-border);
-    border-radius: 999px;
+    border-radius: 22px;
     background: var(--wc-input-bg, var(--wc-surface-elevated));
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
@@ -1058,25 +1025,26 @@ export const WIDGET_STYLES = `
     resize: none;
     border: none;
     background: transparent;
-    padding: 9px 0;
-    font-size: 0.95em;
+    padding: 5px 0;
+    font-size: 0.93em;
     font-family: inherit;
     color: var(--wc-text);
-    min-height: 26px;
+    min-height: 20px;
     max-height: 88px;
     box-shadow: none;
     outline: none;
+    line-height: 1.45;
   }
 
   .wc-composer-input::placeholder {
     color: var(--wc-muted);
-    opacity: 0.85;
+    opacity: 0.8;
   }
 
   .wc-send {
     flex: none;
-    width: 42px;
-    height: 42px;
+    width: 32px;
+    height: 32px;
     border: none;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
@@ -1085,16 +1053,22 @@ export const WIDGET_STYLES = `
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 24px;
-    transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
+    min-height: 20px;
+    transition: background 0.15s ease, transform 0.15s ease, opacity 0.15s ease,
+      box-shadow 0.15s ease;
   }
 
   .wc-send:hover:not(:disabled) {
-    transform: translateY(-1px) scale(1.04);
+    transform: translateY(-1px) scale(1.06);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--wc-primary) 30%, transparent);
+  }
+
+  .wc-send:active:not(:disabled) {
+    transform: scale(0.94);
   }
 
   .wc-send:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
     transform: none;
   }
@@ -1102,8 +1076,8 @@ export const WIDGET_STYLES = `
   /* Loading spinner replaces the send icon while a reply is pending. */
   .wc-send-spinner {
     display: none;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     border: 2px solid color-mix(in srgb, var(--wc-on-primary, #ffffff) 35%, transparent);
     border-top-color: var(--wc-on-primary, #ffffff);
@@ -1124,25 +1098,51 @@ export const WIDGET_STYLES = `
     }
   }
 
-  /* Stop-generation button, swaps in while a turn streams (Phase 10). */
+  /* Stop-generation button — filled circle with square icon, animated pulse. */
   .wc-stop {
     flex: none;
-    width: 42px;
-    height: 42px;
-    border: 1px solid #fca5a5;
-    background: #fee2e2;
-    color: #991b1b;
+    width: 32px;
+    height: 32px;
+    border: 2px solid var(--wc-primary);
+    background: transparent;
+    color: var(--wc-primary);
     border-radius: 50%;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 24px;
+    min-height: 20px;
+    position: relative;
+    transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+    animation: wc-stop-pulse 2s ease-in-out infinite;
+  }
+
+  .wc-stop:hover {
+    background: color-mix(in srgb, var(--wc-primary) 12%, transparent);
+    transform: scale(1.05);
+  }
+
+  .wc-stop:active {
+    transform: scale(0.94);
+  }
+
+  @keyframes wc-stop-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-primary) 30%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--wc-primary) 0%, transparent);
+    }
   }
 
   :host([data-dark='1']) .wc-stop {
-    background: #451a03;
-    color: #fecaca;
+    border-color: var(--wc-primary);
+    color: var(--wc-primary);
+  }
+
+  :host([data-dark='1']) .wc-stop:hover {
+    background: color-mix(in srgb, var(--wc-primary) 18%, transparent);
   }
 
   /* ---- Footer --------------------------------------------------------------- */
@@ -1182,7 +1182,6 @@ export const WIDGET_STYLES = `
     .wc-launcher::before,
     .wc-window,
     .wc-bubble,
-    .wc-streaming::after,
     .wc-typing-dots i,
     .wc-status-dot,
     .wc-send-spinner,

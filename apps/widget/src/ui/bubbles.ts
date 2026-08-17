@@ -25,7 +25,7 @@ import {
   type FeedbackControl,
   type FeedbackSubmitPayload,
 } from './feedback';
-import { botGlyph, documentGlyph, externalLinkGlyph } from './icons';
+import { botGlyph, externalLinkGlyph } from './icons';
 
 /** Assistant messages longer than this are collapsed behind "Show more". */
 export const LONG_MESSAGE_CHARS = 1200;
@@ -82,34 +82,6 @@ function hostOf(url: string): string | null {
   return null;
 }
 
-/** Favicon URL for a host (DuckDuckGo's icon service; fails quietly off-grid). */
-function faviconUrl(host: string): string {
-  return `https://icons.duckduckgo.com/ip3/${host}.ico`;
-}
-
-/** Truncate long text with an ellipsis. */
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text;
-}
-
-/**
- * Short human-readable description derived from the URL path
- * (e.g. `/courses/admission` -> "courses admission"). Falls back to the host
- * when the path carries no meaningful words.
- */
-function describeUrl(url: string, host: string | null): string {
-  try {
-    const path = new URL(url).pathname.replace(/[_-]+/g, ' ').replace(/\/+/g, ' ').trim();
-    const text = path.split(/\s+/).filter(Boolean).join(' ');
-    if (text) {
-      return truncate(text, 90);
-    }
-  } catch {
-    /* unparsable URL */
-  }
-  return host ? truncate(host, 90) : '';
-}
-
 /** Compact display URL: no protocol, no www, trailing slash stripped. */
 function displayUrl(url: string): string {
   try {
@@ -125,31 +97,10 @@ function displayUrl(url: string): string {
   }
 }
 
-/** Favicon cell: provider icon when a host exists, else a document glyph. */
-function createFavicon(host: string | null): HTMLElement {
-  const cell = document.createElement('span');
-  cell.className = 'wc-source-favicon';
-  cell.setAttribute('aria-hidden', 'true');
-  if (host) {
-    const img = document.createElement('img');
-    img.src = faviconUrl(host);
-    img.alt = '';
-    img.referrerPolicy = 'no-referrer';
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    img.addEventListener('error', () => img.remove());
-    cell.appendChild(img);
-  } else {
-    cell.appendChild(documentGlyph());
-  }
-  return cell;
-}
-
 /**
- * One "Learn more" card: citation badge + favicon + title + derived
- * description + truncated URL + "Read more" affordance. The whole card is the
- * link when the URL is safe; unsafe schemes render a non-interactive card
- * (title only) so nothing dangerous ever becomes clickable.
+ * One "Learn more" card: title + domain/path + "Open" external link.
+ * The whole card is the link when the URL is safe; unsafe schemes render a
+ * non-interactive card (title only) so nothing dangerous ever becomes clickable.
  */
 function createSourceCard(source: ChatSource, index: number): HTMLElement {
   const item = document.createElement('li');
@@ -161,15 +112,7 @@ function createSourceCard(source: ChatSource, index: number): HTMLElement {
   const url = source.url ?? '';
   const safeUrl = Boolean(url) && isSafeSourceUrl(url);
   const host = safeUrl ? hostOf(url) : null;
-  const citation = String(source.citation ?? index + 1);
   const title = source.title || host || url || 'Source';
-  const description = safeUrl ? describeUrl(url, host) : '';
-
-  const badge = document.createElement('span');
-  badge.className = 'wc-source-citation';
-  badge.textContent = citation;
-
-  const favicon = createFavicon(host);
 
   const body = document.createElement('span');
   body.className = 'wc-source-body';
@@ -178,13 +121,6 @@ function createSourceCard(source: ChatSource, index: number): HTMLElement {
   titleEl.className = 'wc-source-title';
   titleEl.textContent = title;
   body.appendChild(titleEl);
-
-  if (description && description !== title) {
-    const descEl = document.createElement('span');
-    descEl.className = 'wc-source-desc';
-    descEl.textContent = description;
-    body.appendChild(descEl);
-  }
 
   if (safeUrl) {
     const meta = document.createElement('span');
@@ -196,7 +132,7 @@ function createSourceCard(source: ChatSource, index: number): HTMLElement {
 
     const read = document.createElement('span');
     read.className = 'wc-source-read';
-    read.textContent = 'Read more';
+    read.textContent = 'Open';
     read.appendChild(externalLinkGlyph());
 
     meta.appendChild(urlEl);
@@ -210,15 +146,11 @@ function createSourceCard(source: ChatSource, index: number): HTMLElement {
     link.href = url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
-    link.appendChild(badge);
-    link.appendChild(favicon);
     link.appendChild(body);
     item.appendChild(link);
   } else {
     const card = document.createElement('div');
     card.className = 'wc-source-link wc-source-link-plain';
-    card.appendChild(badge);
-    card.appendChild(favicon);
     card.appendChild(body);
     item.appendChild(card);
   }
@@ -240,6 +172,22 @@ function createSourcesToggle(block: HTMLElement, list: HTMLElement, total: numbe
     button.setAttribute('aria-expanded', String(open));
   });
   block.appendChild(button);
+}
+
+/** Deduplicate sources by URL (keeps first occurrence). */
+function deduplicateSources(sources: ChatSource[]): ChatSource[] {
+  const seen = new Set<string>();
+  const result: ChatSource[] = [];
+  for (const source of sources) {
+    const url = source.url?.trim().toLowerCase();
+    if (!url || !seen.has(url)) {
+      if (url) {
+        seen.add(url);
+      }
+      result.push(source);
+    }
+  }
+  return result;
 }
 
 /** Render the "Learn more" citation cards (untrusted input -> text). */
@@ -361,17 +309,12 @@ function syncTypingIndicator(bubble: HTMLElement, message: ChatMessage): void {
       typing.className = 'wc-typing';
       typing.setAttribute('aria-hidden', 'true');
 
-      const label = document.createElement('span');
-      label.className = 'wc-typing-label';
-      label.textContent = 'AI is thinking';
-
       const dots = document.createElement('span');
       dots.className = 'wc-typing-dots';
       for (let i = 0; i < 3; i += 1) {
         dots.appendChild(document.createElement('i'));
       }
 
-      typing.appendChild(label);
       typing.appendChild(dots);
       bubble.appendChild(typing);
     }
@@ -405,22 +348,25 @@ function syncCollapse(bubble: HTMLElement, message: ChatMessage): void {
   }
 }
 
-function sourcesSignature(sources: ChatSource[] | undefined): string {
-  return (sources ?? [])
-    .map((s) => `${s.citation ?? ''}|${s.url ?? ''}|${s.title ?? ''}`)
-    .join('\n');
-}
-
 function syncSources(bubble: HTMLElement, message: ChatMessage): void {
-  const signature = sourcesSignature(message.sources);
+  const signature =
+    (message.streaming ? 's' : 'd') +
+    (message.sources ?? [])
+      .map((s) => `${s.citation ?? ''}|${s.url ?? ''}|${s.title ?? ''}`)
+      .join('\n');
   if (renderedSources.get(bubble) === signature) {
     return;
   }
-  renderedSources.set(bubble, signature);
   bubble.querySelector('.wc-sources')?.remove();
-  if (message.sources && message.sources.length > 0) {
-    bubble.appendChild(renderSources(message.sources));
+  // Sources are only rendered after the streaming turn completes (not during).
+  // Duplicates are deduped by URL before rendering.
+  if (message.sources && message.sources.length > 0 && !message.streaming) {
+    const deduped = deduplicateSources(message.sources);
+    if (deduped.length > 0) {
+      bubble.appendChild(renderSources(deduped));
+    }
   }
+  renderedSources.set(bubble, signature);
 }
 
 function syncRetry(bubble: HTMLElement, message: ChatMessage): void {

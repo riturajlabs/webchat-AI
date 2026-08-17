@@ -40,6 +40,46 @@ from backend.core.redis import close_redis
 logger = logging.getLogger("webchat_ai")
 
 
+async def _validate_vector_dimensions() -> None:
+    """Check existing vector dimensions in knowledge_chunks match configured EMBEDDING_DIMENSIONS.
+
+    If existing vectors have a different dimension than configured, log a clear
+    warning so operators know they must re-index before the system can work correctly.
+    """
+    settings = get_settings()
+    expected_dim = settings.embedding_dimensions
+    db = MongoDB.db()
+    collection = db["knowledge_chunks"]
+
+    # Sample a few chunks to detect existing dimensions
+    sample = await collection.find(
+        {"embedding": {"$exists": True, "$ne": None}},
+        {"embedding": 1},
+    ).limit(5).to_list(length=5)
+
+    if not sample:
+        return
+
+    detected_dims: dict[int, int] = {}
+    for doc in sample:
+        emb = doc.get("embedding")
+        if emb and isinstance(emb, list):
+            dim = len(emb)
+            detected_dims[dim] = detected_dims.get(dim, 0) + 1
+
+    for dim, count in detected_dims.items():
+        if dim != expected_dim:
+            logger.critical(
+                "VECTOR DIMENSION MISMATCH: existing knowledge_chunks have dimension %d "
+                "(detected from %d sample(s)), but EMBEDDING_DIMENSIONS is configured as %d. "
+                "The existing knowledge base MUST be re-indexed before vector search will work "
+                "correctly. Delete the knowledge_chunks collection and re-crawl all websites.",
+                dim,
+                count,
+                expected_dim,
+            )
+
+
 def _cors_headers_for(request: Request) -> dict[str, str]:
     """Mirror the dashboard CORS policy for a response built outside CORSMiddleware.
 
@@ -67,6 +107,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await MongoDB.init_indexes()
     except Exception:
         logger.warning("MongoDB unavailable at startup; skipping index creation.")
+    # Validate existing vector dimensions against configured embedding_dimensions
+    # to prevent silent corruption of $vectorSearch results.
+    try:
+        await _validate_vector_dimensions()
+    except Exception:
+        logger.warning("Vector dimension validation skipped (MongoDB unavailable).")
     yield
     await MongoDB.close()
     await close_redis()

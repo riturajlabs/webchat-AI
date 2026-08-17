@@ -36,6 +36,13 @@ class MailpitProvider:
         await asyncio.to_thread(self._post, payload)
 
     def _post(self, payload: Mapping[str, object]) -> None:
+        to_addr = payload.get("To")
+        to_str = to_addr[0].get("Email", "?") if isinstance(to_addr, list) and to_addr else "?"
+        logger.info(
+            "Mailpit dispatching: provider=mailpit, to=%s, api_url=%s",
+            to_str,
+            self._api_url,
+        )
         request = urllib.request.Request(
             f"{self._api_url}/api/v1/send",
             data=json.dumps(payload).encode("utf-8"),
@@ -46,8 +53,17 @@ class MailpitProvider:
             with urllib.request.urlopen(request, timeout=10) as response:
                 if response.status >= 400:
                     raise RuntimeError(f"Mailpit rejected email with status {response.status}")
+                logger.info(
+                    "Mailpit email sent successfully: to=%s, status=%d",
+                    to_str,
+                    response.status,
+                )
         except Exception:
-            logger.exception("Mailpit email delivery failed (api_url=%s)", self._api_url)
+            logger.exception(
+                "Mailpit email delivery FAILED: to=%s, api_url=%s",
+                to_str,
+                self._api_url,
+            )
             raise
 
 
@@ -64,23 +80,35 @@ class ResendProvider:
         import resend  # imported lazily; only required in production
 
         resend.api_key = self._api_key
+        settings = get_settings()
+        sender = settings.email_from
+        logger.info(
+            "Resend dispatching: provider=resend, to=%s, from=%s, subject=%s",
+            message.to,
+            sender,
+            message.subject[:80],
+        )
         try:
-            resend.Emails.send(
+            result = resend.Emails.send(
                 {
-                    "from": get_settings().email_from,
+                    "from": sender,
                     "to": message.to,
                     "subject": message.subject,
                     "text": message.text,
                     "html": message.html,
                 }
             )
-        except Exception:
-            # Provider errors (invalid key, unverified sending domain, etc.) are
-            # logged with the relevant context and re-raised so the worker job
-            # records the failure and retries.
-            logger.exception(
-                "Resend email delivery failed (to=%s, from=%s)",
+            email_id = result.get("id") if isinstance(result, dict) else None
+            logger.info(
+                "Resend email sent successfully: message_id=%s, to=%s, status=delivered",
+                email_id,
                 message.to,
-                get_settings().email_from,
+            )
+        except Exception:
+            logger.exception(
+                "Resend email delivery FAILED: to=%s, from=%s, subject=%s, provider=resend",
+                message.to,
+                sender,
+                message.subject[:80],
             )
             raise

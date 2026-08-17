@@ -233,3 +233,17 @@ def test_razorpay_webhook_maps_failed_payment() -> None:
 
     assert event.status == PAYMENT_STATUS_FAILED
     assert event.payment_id == "pay_10"
+
+
+def test_razorpay_webhook_warns_on_url_secret(caplog) -> None:
+    """RAZORPAY_WEBHOOK_SECRET containing a URL is detected and logged."""
+    import logging
+
+    logger_name = "backend.services.billing.payments.razorpay_provider"
+    with caplog.at_level(logging.WARNING, logger=logger_name):
+        RazorpayPaymentProvider(
+            key_id="rzp_test",
+            key_secret="secret",
+            webhook_secret="https://dashboard.razorpay.com/whsec_test123",
+        )
+    assert "RAZORPAY_WEBHOOK_SECRET appears to contain a URL" in caplog.text

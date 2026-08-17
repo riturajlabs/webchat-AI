@@ -20,7 +20,7 @@ describe('theme presets', () => {
       'emerald-support',
       'purple-ai',
       'minimal-white',
-      'corporate-gray',
+      'sunset',
       'modern-gradient',
     ]);
   });
@@ -94,7 +94,7 @@ describe('resolveTheme', () => {
       { theme_preset: 'ocean-blue', primary_color: DEFAULT_PRIMARY_COLOR },
       false,
     );
-    expect(resolved.primary).toBe('#2563eb');
+    expect(resolved.primary).toBe('#0284c7');
   });
 
   it('lets explicitly customized colors override the preset palette', () => {

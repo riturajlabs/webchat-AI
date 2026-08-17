@@ -23,10 +23,11 @@ Limit fields (all optional, `None` = unlimited):
 from dataclasses import dataclass
 
 PLAN_FREE = "free"
+PLAN_PLUS = "plus"
 PLAN_PRO = "pro"
 PLAN_ENTERPRISE = "enterprise"
 
-VALID_PLAN_IDS = frozenset({PLAN_FREE, PLAN_PRO, PLAN_ENTERPRISE})
+VALID_PLAN_IDS = frozenset({PLAN_FREE, PLAN_PLUS, PLAN_PRO, PLAN_ENTERPRISE})
 
 
 @dataclass(frozen=True)
@@ -60,16 +61,28 @@ PLANS: dict[str, Plan] = {
         max_crawl_pages=500,
         price_cents=0,
     ),
+    PLAN_PLUS: Plan(
+        id=PLAN_PLUS,
+        name="Plus",
+        description="For small teams with growing needs.",
+        max_websites=3,
+        max_monthly_messages=5_000,
+        max_monthly_tokens=500_000,
+        max_documents=50,
+        max_crawl_pages=2_000,
+        price_cents=1_900,
+        billing_period_days=30,
+    ),
     PLAN_PRO: Plan(
         id=PLAN_PRO,
         name="Pro",
         description="For growing teams with higher usage.",
-        max_websites=5,
+        max_websites=10,
         max_monthly_messages=50_000,
         max_monthly_tokens=2_000_000,
-        max_documents=100,
-        max_crawl_pages=5_000,
-        price_cents=2_900,
+        max_documents=200,
+        max_crawl_pages=10_000,
+        price_cents=4_900,
         billing_period_days=30,
     ),
     PLAN_ENTERPRISE: Plan(
@@ -90,6 +103,7 @@ __all__ = [
     "PLANS",
     "PLAN_ENTERPRISE",
     "PLAN_FREE",
+    "PLAN_PLUS",
     "PLAN_PRO",
     "VALID_PLAN_IDS",
     "Plan",

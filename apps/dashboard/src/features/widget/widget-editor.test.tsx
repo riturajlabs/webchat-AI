@@ -185,7 +185,7 @@ describe('WidgetEditor', () => {
     expect(ocean).toHaveAttribute('aria-checked', 'true');
 
     const header = screen.getByLabelText('Close preview').closest('div');
-    expect(header?.getAttribute('style')).toContain('rgb(30, 58, 138)');
+    expect(header?.getAttribute('style')).toContain('rgb(12, 74, 110)');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(mutation).toHaveBeenCalledWith({

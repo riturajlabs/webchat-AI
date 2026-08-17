@@ -16,8 +16,11 @@ const FONT_SIZES: Record<string, string> = {
 };
 
 function effectiveDark(config: WidgetConfig): boolean {
-  if (config.dark_mode) return true;
   if (config.theme === 'dark') return true;
+  if (config.theme === 'auto' && typeof window !== 'undefined') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  if (config.dark_mode) return true;
   return false;
 }
 

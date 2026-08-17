@@ -6,6 +6,7 @@ patched so no real DNS/network is touched.
 """
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 from backend.models.audit_log import AUDIT_CRAWL_COMPLETED, AUDIT_CRAWL_FAILED
@@ -468,3 +469,161 @@ async def test_zero_page_crawl_does_not_increment(patch_dns) -> None:
         count=0,
     )
     assert len(recording.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Crawl event emission tests (Phase 16, real-time progress)
+# ---------------------------------------------------------------------------
+
+
+async def test_worker_publishes_started_event(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.started when the job begins."""
+    publish_started = AsyncMock()
+    monkeypatch.setattr("backend.workers.jobs.crawl.crawl_events.publish_started", publish_started)
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    publish_started.assert_awaited_once_with(job.id)
+
+
+async def test_worker_publishes_progress_events(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.progress during page fetching."""
+    publish_progress = AsyncMock()
+    monkeypatch.setattr(
+        "backend.workers.jobs.crawl.crawl_events.publish_progress", publish_progress
+    )
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    # on_progress is called at least once (initial + per page)
+    assert publish_progress.await_count >= 1
+
+
+async def test_worker_publishes_completed_event(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.completed with page/chunk counts on success."""
+    publish_completed = AsyncMock()
+    monkeypatch.setattr(
+        "backend.workers.jobs.crawl.crawl_events.publish_completed",
+        publish_completed,
+    )
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    publish_completed.assert_awaited_once()
+    call_kwargs = publish_completed.call_args[1]
+    assert call_kwargs["pages"] == 2
+
+
+async def test_worker_publishes_failed_event_on_final_retry(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.failed when all retries exhausted."""
+    publish_failed = AsyncMock()
+    monkeypatch.setattr("backend.workers.jobs.crawl.crawl_events.publish_failed", publish_failed)
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    ctx["crawler_fetcher"].fail(SEED, RuntimeError("browser crashed"))
+    ctx["job_try"] = 3
+
+    with pytest.raises(RuntimeError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+    publish_failed.assert_awaited_once()
+    call_kwargs = publish_failed.call_args[1]
+    assert "browser crashed" in call_kwargs["error"]
+
+
+async def test_worker_publishes_fetching_events(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.fetching for each page URL."""
+    publish_fetching = AsyncMock()
+    monkeypatch.setattr(
+        "backend.workers.jobs.crawl.crawl_events.publish_fetching",
+        publish_fetching,
+    )
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    # Should be called for each page URL fetched
+    assert publish_fetching.await_count >= 2
+
+
+async def test_worker_publishes_extracting_events(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.extracting for each page after fetch."""
+    publish_extracting = AsyncMock()
+    monkeypatch.setattr(
+        "backend.workers.jobs.crawl.crawl_events.publish_extracting",
+        publish_extracting,
+    )
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    # Should be called for each page after extraction
+    assert publish_extracting.await_count >= 2
+
+
+async def test_worker_publishes_failed_on_ssrf_blocked(patch_dns, monkeypatch) -> None:
+    """Worker emits crawl.failed for SSRF-blocked seeds."""
+    publish_failed = AsyncMock()
+    monkeypatch.setattr("backend.workers.jobs.crawl.crawl_events.publish_failed", publish_failed)
+
+    async def private_resolve(self, host: str) -> list[str]:
+        return ["127.0.0.1"]
+
+    monkeypatch.setattr(SsrFGuard, "resolve_async", private_resolve)
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    publish_failed.assert_awaited_once()

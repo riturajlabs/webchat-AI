@@ -3,11 +3,13 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState, useCallback } from 'react';
 
 import { api } from '@/lib/api';
 
 import type {
   CrawlJob,
+  CrawlProgressEvent,
   CreateWebsiteResponse,
   StartCrawlResponse,
   UpdateWebsiteInput,
@@ -84,6 +86,110 @@ export function useCrawlJob(jobId: string | null) {
     refetchInterval: (query) =>
       TERMINAL_CRAWL_STATUSES.has(query.state.data?.status ?? '') ? false : 3000,
   });
+}
+
+/**
+ * SSE-based real-time crawl progress hook.
+ *
+ * Connects to `GET /api/crawl-jobs/{jobId}/stream` for live events.
+ * Falls back gracefully: if SSE fails, the caller still has the polling
+ * `useCrawlJob` hook as a safety net.
+ */
+export function useCrawlProgress(jobId: string | null) {
+  const [progress, setProgress] = useState<CrawlProgressEvent | null>(null);
+  const [connected, setConnected] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+
+  const disconnect = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setConnected(false);
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) {
+      disconnect();
+      return;
+    }
+
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const url = `${baseUrl}/api/crawl-jobs/${jobId}/stream`;
+
+    // EventSource only supports GET with cookies; we need the auth cookie.
+    // Use fetch + ReadableStream for POST-style SSE, but since this is GET,
+    // EventSource works with cookies (same-origin or with credentials).
+    const es = new EventSource(url, { withCredentials: true });
+    eventSourceRef.current = es;
+
+    es.onopen = () => setConnected(true);
+
+    es.addEventListener('crawl.snapshot', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore parse errors */
+      }
+    }) as EventListener);
+
+    es.addEventListener('crawl.started', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore */
+      }
+    }) as EventListener);
+
+    es.addEventListener('crawl.progress', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore */
+      }
+    }) as EventListener);
+
+    es.addEventListener('crawl.fetching', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore */
+      }
+    }) as EventListener);
+
+    es.addEventListener('crawl.completed', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore */
+      }
+      disconnect();
+    }) as EventListener);
+
+    es.addEventListener('crawl.failed', ((e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as CrawlProgressEvent;
+        setProgress(data);
+      } catch {
+        /* ignore */
+      }
+      disconnect();
+    }) as EventListener);
+
+    es.onerror = () => {
+      setConnected(false);
+      // EventSource auto-reconnects; let it do so
+    };
+
+    return disconnect;
+  }, [jobId, disconnect]);
+
+  return { progress, connected };
 }
 
 export function useWebsiteWidget(websiteId: string | null) {

@@ -525,6 +525,23 @@ async def test_super_admin_emails_are_case_insensitive() -> None:
     assert result.role == "super_admin"
 
 
+async def test_super_admin_emails_are_trimmed() -> None:
+    env = build_auth_env(settings=Settings(super_admin_emails=["  ops@Example.com  "]))
+    await env.service.register(
+        name="Ops",
+        email="ops@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+
+    result = await env.service.login(
+        email="ops@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    assert result.role == "super_admin"
+
+
 async def test_super_admin_email_without_membership_still_gets_role() -> None:
     """The config grant applies to any account, even without a member record."""
     env = build_auth_env(settings=Settings(super_admin_emails=["ops@webchat.example"]))

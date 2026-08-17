@@ -8,6 +8,18 @@ from urllib.parse import urlparse
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+_RESEND_SANDBOX_SENDERS = frozenset({
+    "onboarding@resend.dev",
+    "no-reply@resend.dev",
+    "notifications@resend.dev",
+})
+
+_RAZORPAY_WEBHOOK_URL_MARKERS = frozenset({
+    "https://",
+    "http://",
+    "dashboard.razorpay.com",
+})
+
 
 class Settings(BaseSettings):
     """Central settings object. Values come from environment variables or a
@@ -177,6 +189,13 @@ class Settings(BaseSettings):
     cohere_api_key: str | None = None
     cohere_embedding_model: str = "embed-multilingual-v3.0"
     cohere_embedding_dimensions: int = 1024
+    # Gemini-specific embedding dimensions. gemini-embedding-001 supports
+    # 1..3072; the native default is 3072. When Gemini is the primary provider,
+    # this value is sent as `outputDimensionality` to truncate/extend the
+    # output. Must match `EMBEDDING_DIMENSIONS` when Gemini is in the fallback
+    # chain (validated at boot). Separated so Gemini can run at full 3072 when
+    # Jina/Cohere are not in the chain.
+    gemini_embedding_dimensions: int = 1024
 
     # Knowledge processing (Phase 5, docs/06 implementation plan).
     # Approximate-token chunk sizing (docs/02-TRD.md §6: 500-800 tokens/chunk,
@@ -379,20 +398,30 @@ class Settings(BaseSettings):
     def _validate_embedding_config(self) -> "Settings":
         """Fail fast on an incoherent embedding configuration (ADR-009).
 
-        Every provider listed in `EMBEDDING_PROVIDER_ORDER` must agree on a
-        single vector dimension: the MongoDB index is built for
+        Every fallback provider listed in `EMBEDDING_PROVIDER_ORDER` must agree
+        on a single vector dimension: the MongoDB index is built for
         `EMBEDDING_DIMENSIONS`, so a fallback provider returning a different
         length would silently corrupt `$vectorSearch`. Missing API keys are NOT
         an error here - the registry skips a keyless provider gracefully and
         the next one is tried. Only the dimension contract is enforced.
+
+        Gemini's `outputDimensionality` is set from `GEMINI_EMBEDDING_DIMENSIONS`
+        and the runtime `ensure_vector_dimensions` gate in
+        `GoogleEmbeddingClient._parse_response` catches any mismatch.
         """
         if self.embedding_dimensions <= 0:
             raise ValueError("EMBEDDING_DIMENSIONS must be a positive integer.")
+        if self.gemini_embedding_dimensions <= 0:
+            raise ValueError("GEMINI_EMBEDDING_DIMENSIONS must be a positive integer.")
         for provider in self.embedding_provider_order:
-            if provider == "jina" and self.jina_embedding_dimensions != self.embedding_dimensions:
+            if (
+                provider == "jina"
+                and self.jina_embedding_dimensions != self.embedding_dimensions
+            ):
                 raise ValueError(
                     "JINA_EMBEDDING_DIMENSIONS must match EMBEDDING_DIMENSIONS "
-                    f"({self.embedding_dimensions}); got {self.jina_embedding_dimensions}. "
+                    f"({self.embedding_dimensions}); "
+                    f"got {self.jina_embedding_dimensions}. "
                     "A mismatched fallback provider corrupts $vectorSearch."
                 )
             if (
@@ -401,7 +430,8 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(
                     "COHERE_EMBEDDING_DIMENSIONS must match EMBEDDING_DIMENSIONS "
-                    f"({self.embedding_dimensions}); got {self.cohere_embedding_dimensions}. "
+                    f"({self.embedding_dimensions}); "
+                    f"got {self.cohere_embedding_dimensions}. "
                     "A mismatched fallback provider corrupts $vectorSearch."
                 )
         return self
@@ -474,6 +504,23 @@ class Settings(BaseSettings):
                     "RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET and RAZORPAY_WEBHOOK_SECRET "
                     "are required in production."
                 )
+            if self.payment_provider.lower() == "razorpay" and self.razorpay_webhook_secret:
+                secret_lower = self.razorpay_webhook_secret.strip().lower()
+                if any(marker in secret_lower for marker in _RAZORPAY_WEBHOOK_URL_MARKERS):
+                    if not self.local_production_test:
+                        raise ValueError(
+                            "RAZORPAY_WEBHOOK_SECRET appears to contain a URL "
+                            "instead of the actual webhook secret string. "
+                            "Use the secret from the Razorpay Dashboard."
+                        )
+            sender_email = self.email_from.split("<")[-1].strip().rstrip(">").strip().lower()
+            if sender_email in _RESEND_SANDBOX_SENDERS:
+                if not self.local_production_test:
+                    raise ValueError(
+                        "EMAIL_FROM must not use a Resend sandbox sender "
+                        "(onboarding@resend.dev) in production. "
+                        "Configure a verified custom domain sender."
+                    )
             # CORS (Phase 16): the dashboard surface sends credentials, so a
             # wildcard/loopback origin would either leak cookies to any site or
             # silently break every browser request. Fail fast at boot.

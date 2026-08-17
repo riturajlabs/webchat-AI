@@ -489,3 +489,76 @@ def test_local_production_test_still_rejects_http_public_cors_origin() -> None:
 def test_local_production_test_still_rejects_wildcard_allowed_hosts() -> None:
     with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
         Settings(**_local_prod(allowed_hosts=["*"]))
+
+
+# --- Phase 17: Resend sender + Razorpay webhook secret validation ---
+
+
+def test_production_rejects_resend_sandbox_sender() -> None:
+    with pytest.raises(ValueError, match="EMAIL_FROM.*Resend sandbox"):
+        Settings(
+            **_prod(email_from="WebChat AI <onboarding@resend.dev>")
+        )
+
+
+def test_production_rejects_resend_sandbox_no_reply_sender() -> None:
+    with pytest.raises(ValueError, match="EMAIL_FROM.*Resend sandbox"):
+        Settings(
+            **_prod(email_from="WebChat AI <no-reply@resend.dev>")
+        )
+
+
+def test_production_accepts_verified_custom_domain_sender() -> None:
+    settings = Settings(
+        **_prod(email_from="WebChat AI <no-reply@webchatai.example>")
+    )
+    assert "webchatai.example" in settings.email_from
+
+
+def test_production_rejects_razorpay_webhook_secret_url() -> None:
+    with pytest.raises(ValueError, match="RAZORPAY_WEBHOOK_SECRET.*URL"):
+        Settings(
+            **_prod(
+                payment_provider="razorpay",
+                razorpay_key_id="rzp_test",
+                razorpay_key_secret="secret",
+                stripe_secret_key=None,
+                stripe_webhook_secret=None,
+                razorpay_webhook_secret="https://dashboard.razorpay.com/whsec_test",
+            )
+        )
+
+
+def test_production_accepts_valid_razorpay_webhook_secret() -> None:
+    settings = Settings(
+        **_prod(
+            payment_provider="razorpay",
+            razorpay_key_id="rzp_test",
+            razorpay_key_secret="secret",
+            stripe_secret_key=None,
+            stripe_webhook_secret=None,
+            razorpay_webhook_secret="whsec_abc123def456",
+        )
+    )
+    assert settings.razorpay_webhook_secret == "whsec_abc123def456"
+
+
+def test_local_production_test_allows_resend_sandbox_sender() -> None:
+    settings = Settings(
+        **_local_prod(email_from="WebChat AI <onboarding@resend.dev>")
+    )
+    assert "onboarding@resend.dev" in settings.email_from
+
+
+def test_local_production_test_allows_razorpay_webhook_url() -> None:
+    settings = Settings(
+        **_local_prod(
+            payment_provider="razorpay",
+            razorpay_key_id="rzp_test",
+            razorpay_key_secret="secret",
+            stripe_secret_key=None,
+            stripe_webhook_secret=None,
+            razorpay_webhook_secret="http://localhost:8000/api/webhooks/razorpay",
+        )
+    )
+    assert "localhost" in settings.razorpay_webhook_secret

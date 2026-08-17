@@ -182,6 +182,7 @@ describe('mount integration', () => {
 
     await vi.waitFor(() => {
       expect(host.shadowRoot?.querySelector('.wc-bubble-content')?.textContent).toBe('Hello');
+      expect(host.shadowRoot?.querySelector('.wc-sources')?.textContent).toContain('Docs X');
     });
 
     const shadow = host.shadowRoot as ShadowRoot;

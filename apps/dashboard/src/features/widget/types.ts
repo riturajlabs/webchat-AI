@@ -16,7 +16,7 @@ export type WidgetThemePreset =
   | 'emerald-support'
   | 'purple-ai'
   | 'minimal-white'
-  | 'corporate-gray'
+  | 'sunset'
   | 'modern-gradient';
 
 export type WidgetFontSize = 'sm' | 'md' | 'lg';

@@ -57,6 +57,7 @@ class PageFetcher(Protocol):
 
 
 ProgressCallback = Callable[[int, int], Awaitable[None]]
+PhaseCallback = Callable[[str], Awaitable[None]]
 
 
 class CrawlSession:
@@ -73,6 +74,8 @@ class CrawlSession:
         guard: SsrFGuard | None = None,
         robots: RobotsTxt | None = None,
         on_progress: ProgressCallback | None = None,
+        on_fetching: PhaseCallback | None = None,
+        on_extracting: PhaseCallback | None = None,
         settings: Settings | None = None,
     ) -> None:
         self._tenant_id = tenant_id
@@ -83,6 +86,8 @@ class CrawlSession:
         self._guard = guard or SsrFGuard()
         self._robots = robots
         self._on_progress = on_progress
+        self._on_fetching = on_fetching
+        self._on_extracting = on_extracting
         self._settings = settings or get_settings()
         self.errors: list[CrawlJobError] = []
 
@@ -113,6 +118,8 @@ class CrawlSession:
             if not self._robots.is_allowed(urlparse(normalized).path or "/"):
                 continue
             try:
+                if self._on_fetching is not None:
+                    await self._on_fetching(normalized)
                 page = await self._fetcher.fetch(normalized)
             except (FetchError, InvalidUrlError) as exc:
                 self._record_error(normalized, str(exc))
@@ -126,6 +133,8 @@ class CrawlSession:
 
             extracted = extract_page(page.html, page.url)
             final_url = normalize_crawl_url(page.url, page.url) or page.url
+            if self._on_extracting is not None:
+                await self._on_extracting(final_url)
             content = clean_html(page.html, max_chars=self._settings.crawl_max_content_bytes)
             checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
             document = Document.new(

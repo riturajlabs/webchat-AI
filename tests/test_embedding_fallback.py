@@ -157,3 +157,95 @@ async def test_dimension_gate_blocks_incoherent_fallback(monkeypatch) -> None:
 
     with pytest.raises(EmbeddingError, match="dimension mismatch.*jina.*512.*1024"):
         await fallback.embed(["q"])
+
+
+# ---- provider-aware dimension validation ----
+
+
+def test_gemini_dimension_accepted() -> None:
+    """Gemini with any dimension is accepted at config (validated at runtime)."""
+    settings = Settings(
+        _env_file=None,
+        embedding_dimensions=1024,
+        gemini_embedding_dimensions=1024,
+        embedding_provider_order=["gemini"],
+    )
+    assert settings.gemini_embedding_dimensions == 1024
+
+
+def test_jina_1024_accepted(monkeypatch) -> None:
+    """Jina with 1024 dimensions is accepted."""
+    settings = Settings(
+        _env_file=None,
+        embedding_dimensions=1024,
+        jina_embedding_dimensions=1024,
+        embedding_provider_order=["jina"],
+    )
+    assert settings.jina_embedding_dimensions == 1024
+
+
+def test_cohere_1024_accepted(monkeypatch) -> None:
+    """Cohere with 1024 dimensions is accepted."""
+    settings = Settings(
+        _env_file=None,
+        embedding_dimensions=1024,
+        cohere_embedding_dimensions=1024,
+        embedding_provider_order=["cohere"],
+    )
+    assert settings.cohere_embedding_dimensions == 1024
+
+
+def test_wrong_gemini_dimension_rejected() -> None:
+    """Gemini with mismatched dimensions is validated at runtime, not boot.
+
+    The boot validator only enforces Jina/Cohere fallback providers.
+    Gemini self-validates via ensure_vector_dimensions in the embedding client.
+    """
+    # Gemini with different embedding_dimensions is accepted at boot
+    settings = Settings(
+        _env_file=None,
+        embedding_dimensions=1024,
+        gemini_embedding_dimensions=3072,
+        embedding_provider_order=["gemini"],
+    )
+    assert settings.gemini_embedding_dimensions == 3072
+
+
+def test_wrong_jina_dimension_rejected() -> None:
+    """Jina with mismatched dimensions is rejected at config validation."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="JINA_EMBEDDING_DIMENSIONS must match"):
+        Settings(
+            _env_file=None,
+            embedding_dimensions=1024,
+            jina_embedding_dimensions=512,
+            embedding_provider_order=["jina"],
+        )
+
+
+def test_wrong_cohere_dimension_rejected() -> None:
+    """Cohere with mismatched dimensions is rejected at config validation."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="COHERE_EMBEDDING_DIMENSIONS must match"):
+        Settings(
+            _env_file=None,
+            embedding_dimensions=1024,
+            cohere_embedding_dimensions=768,
+            embedding_provider_order=["cohere"],
+        )
+
+
+def test_mixed_dimension_prevented() -> None:
+    """Multiple providers with different dimensions are all rejected."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            embedding_dimensions=1024,
+            gemini_embedding_dimensions=1024,
+            jina_embedding_dimensions=512,
+            embedding_provider_order=["gemini", "jina"],
+        )

@@ -1,7 +1,9 @@
 'use client';
 
 import { Receipt } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -290,6 +292,19 @@ export function BillingPage() {
   const createCheckout = useCreateCheckout();
   const [pendingPlan, setPendingPlan] = useState<string | null>(null);
   const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  useEffect(() => {
+    const status = searchParams.get('status');
+    if (status === 'success') {
+      toast.success('Payment successful! Your plan has been updated.');
+      router.replace('/billing');
+    } else if (status === 'cancelled') {
+      toast.error('Payment was cancelled.');
+      router.replace('/billing');
+    }
+  }, [searchParams, router]);
 
   const subscription = report?.subscription ?? null;
   const planName = subscription?.plan_name ?? usage?.plan.name ?? '—';

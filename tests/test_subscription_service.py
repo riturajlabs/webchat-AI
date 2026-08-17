@@ -73,7 +73,7 @@ async def test_create_checkout_delegates_to_provider(env) -> None:
         {
             "tenant_id": "tenant-a",
             "plan_id": "pro",
-            "amount_cents": 2_900,
+            "amount_cents": 4_900,
             "currency": "USD",
             "success_url": "http://localhost:3000/billing?status=success",
             "cancel_url": "http://localhost:3000/billing?status=cancelled",

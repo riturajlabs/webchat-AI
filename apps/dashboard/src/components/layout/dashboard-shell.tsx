@@ -63,8 +63,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-        <header className="flex shrink-0 items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav />
             <p className="truncate text-sm text-muted-foreground">
@@ -86,7 +86,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <VerificationReminder />
-        <div className="flex-1 px-4 py-8 md:px-10">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 py-8 md:px-10">{children}</div>
       </main>
     </div>
   );

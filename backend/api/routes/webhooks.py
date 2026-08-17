@@ -44,7 +44,7 @@ async def payment_webhook(
     event = provider.parse_webhook(payload, request.headers)
     if event.status == PAYMENT_STATUS_PAID:
         await service.activate_payment(event)
-    return {"ok": "true", "event": event.event_type}
+    return {"ok": True, "event": event.event_type}
 
 
 __all__ = ["router"]

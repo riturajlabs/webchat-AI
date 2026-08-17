@@ -98,7 +98,7 @@ async def test_get_plan_uses_active_subscription_over_tenant_plan(env) -> None:
     plan = await env.service.get_plan("tenant-a")
 
     assert plan.id == PLAN_PRO
-    assert plan.max_websites == 5
+    assert plan.max_websites == 10
 
 
 async def test_get_plan_falls_back_to_tenant_plan_without_subscription(env) -> None:

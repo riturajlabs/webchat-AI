@@ -96,7 +96,11 @@ class GoogleEmbeddingClient:
             if timeout_seconds is not None
             else settings.embedding_request_timeout_seconds
         )
-        self._dimensions = dimensions if dimensions is not None else settings.embedding_dimensions
+        self._dimensions = (
+            dimensions
+            if dimensions is not None
+            else settings.gemini_embedding_dimensions
+        )
         self._on_usage = on_usage
         self._genai_client = genai_client
         self._usage = EmbeddingUsage()

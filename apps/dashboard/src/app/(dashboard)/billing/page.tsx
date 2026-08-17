@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Suspense } from 'react';
 
 import { BillingPage } from '@/features/billing/billing-page';
 
@@ -7,5 +8,9 @@ export const metadata: Metadata = {
 };
 
 export default function BillingPageRoute() {
-  return <BillingPage />;
+  return (
+    <Suspense>
+      <BillingPage />
+    </Suspense>
+  );
 }

@@ -152,7 +152,7 @@ describe('applyTheme with theme presets', () => {
     expect(host.style.getPropertyValue('--wc-header-text')).toBe('#ffffff');
     applyTheme(host, { ...defaultConfig('w'), theme_preset: 'ocean-blue', header_color: null });
     expect(host.style.getPropertyValue('--wc-header-color')).toBe('');
-    expect(host.style.getPropertyValue('--wc-header-bg')).toBe('#1e3a8a');
+    expect(host.style.getPropertyValue('--wc-header-bg')).toBe('#0c4a6e');
   });
 });
 

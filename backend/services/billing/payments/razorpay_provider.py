@@ -20,6 +20,7 @@ signature before the payload is trusted.
 import hashlib
 import hmac
 import json
+import logging
 from collections.abc import Mapping
 
 import httpx
@@ -41,6 +42,10 @@ _RAZORPAY_API = "https://api.razorpay.com/v1"
 _RAZORPAY_PAY_PAGE = "https://pay.razorpay.com/order"
 _TIMEOUT = httpx.Timeout(30.0)
 
+logger = logging.getLogger(__name__)
+
+_WEBHOOK_URL_MARKERS = ("https://", "http://", "dashboard.razorpay.com")
+
 
 class RazorpayPaymentProvider:
     """Razorpay order + webhook implementation."""
@@ -57,8 +62,13 @@ class RazorpayPaymentProvider:
     ) -> None:
         self._key_id = key_id
         self._key_secret = key_secret
-        self._webhook_secret = webhook_secret
         self._client = client
+        if webhook_secret and any(m in webhook_secret.lower() for m in _WEBHOOK_URL_MARKERS):
+            logger.warning(
+                "RAZORPAY_WEBHOOK_SECRET appears to contain a URL instead of the "
+                "actual secret. Webhook signature verification will fail."
+            )
+        self._webhook_secret = webhook_secret
 
     async def create_checkout(
         self,
@@ -79,6 +89,13 @@ class RazorpayPaymentProvider:
             "currency": currency.upper(),
             "notes": {"tenant_id": tenant_id, "plan_id": plan_id},
         }
+        logger.info(
+            "Razorpay checkout: tenant=%s plan=%s amount=%s %s",
+            tenant_id,
+            plan_id,
+            amount_cents,
+            currency.upper(),
+        )
         async with self._client or httpx.AsyncClient(timeout=_TIMEOUT) as client:
             response = await client.post(
                 f"{_RAZORPAY_API}/orders",
@@ -86,11 +103,20 @@ class RazorpayPaymentProvider:
                 json=body,
             )
         if response.status_code >= 400:
-            raise PaymentProviderError(f"Razorpay checkout failed: {_razorpay_error(response)}")
+            error_msg = _razorpay_error(response)
+            logger.error(
+                "Razorpay checkout failed (tenant=%s, plan=%s, status=%s): %s",
+                tenant_id,
+                plan_id,
+                response.status_code,
+                error_msg,
+            )
+            raise PaymentProviderError(f"Razorpay checkout failed: {error_msg}")
         order = response.json()
         order_id = order.get("id")
         if not order_id:
             raise PaymentProviderError("Razorpay order created without an id.")
+        logger.info("Razorpay order created: id=%s tenant=%s", order_id, tenant_id)
         return PaymentCheckout(
             checkout_id=str(order_id),
             url=f"{_RAZORPAY_PAY_PAGE}/{order_id}",

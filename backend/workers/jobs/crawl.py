@@ -15,6 +15,7 @@ from typing import Any
 from arq.connections import ArqRedis
 from redis.asyncio import ConnectionPool
 
+from backend.core import crawl_events
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import InvalidUrlError
@@ -108,15 +109,31 @@ async def _run_crawl_job(
     job.started_at = job.started_at or utcnow()
     job.updated_at = utcnow()
     await crawl_jobs.update(job)
+    await crawl_events.publish_started(job.id)
 
     async def on_progress(completed: int, total: int) -> None:
         job.pages_completed = completed
         job.pages_total = total
         job.updated_at = utcnow()
         await crawl_jobs.update(job)
+        await crawl_events.publish_progress(
+            job.id, pages_completed=completed, pages_total=total,
+        )
 
     guard = SsrFGuard()
     fetcher = ctx.get("crawler_fetcher") or BrowserPageFetcher(guard=guard)
+
+    async def on_fetching(url: str) -> None:
+        await crawl_events.publish_fetching(
+            job.id,
+            current_url=url,
+            pages_processed=job.pages_completed,
+            total_pages=job.pages_total,
+        )
+
+    async def on_extracting(url: str) -> None:
+        await crawl_events.publish_extracting(job.id, url=url)
+
     session = CrawlSession(
         tenant_id=job.tenant_id,
         website_id=job.website_id,
@@ -125,6 +142,8 @@ async def _run_crawl_job(
         documents=documents,
         guard=guard,
         on_progress=on_progress,
+        on_fetching=on_fetching,
+        on_extracting=on_extracting,
     )
 
     try:
@@ -145,6 +164,7 @@ async def _run_crawl_job(
         job.error_message = None
         job.updated_at = utcnow()
         await crawl_jobs.update(job)
+        await crawl_events.publish_completed(job.id, pages=stored, chunks=0)
 
         website.status = WEBSITE_STATUS_READY
         website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
@@ -177,6 +197,7 @@ async def _run_crawl_job(
         job.error_message = f"{type(exc).__name__}: {exc}"
         job.updated_at = utcnow()
         await crawl_jobs.update(job)
+        await crawl_events.publish_failed(job.id, error=str(exc))
         website.status = WEBSITE_STATUS_FAILED
         website.updated_at = utcnow()
         await websites.update(website)
@@ -192,6 +213,7 @@ async def _run_crawl_job(
             job.error_message = f"{type(exc).__name__}: {exc}"
             job.updated_at = utcnow()
             await crawl_jobs.update(job)
+            await crawl_events.publish_failed(job.id, error=str(exc))
             website.status = WEBSITE_STATUS_FAILED
             website.updated_at = utcnow()
             await websites.update(website)

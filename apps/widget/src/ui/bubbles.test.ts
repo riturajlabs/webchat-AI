@@ -137,30 +137,26 @@ describe('createBubble', () => {
     const links = bubble.querySelectorAll<HTMLAnchorElement>('.wc-sources-list a');
     expect(links.length).toBe(3);
     expect(links[0]?.querySelector('.wc-source-title')?.textContent).toBe('Homepage');
-    expect(links[0]?.querySelector('.wc-source-citation')?.textContent).toBe('1');
     expect(links[0]?.getAttribute('target')).toBe('_blank');
     expect(links[0]?.getAttribute('rel')).toBe('noopener noreferrer');
     expect(links[1]?.querySelector('.wc-source-title')?.textContent).toBe('Pricing');
-    // No citation field -> falls back to the list position.
-    expect(links[2]?.querySelector('.wc-source-citation')?.textContent).toBe('3');
+    expect(links[2]?.querySelector('.wc-source-title')?.textContent).toBe('About');
   });
 
-  it('renders a favicon, derived description, truncated URL and Read-more per card', () => {
+  it('renders a source card with title, domain and Open link', () => {
     const bubble = createBubble(
       message('assistant', 'answer', {
         sources: [{ url: 'https://www.example.com/courses/admission', title: 'Admission' }],
       }),
     );
     const card = bubble.querySelector<HTMLAnchorElement>('.wc-sources-list a');
-    const favicon = card?.querySelector<HTMLImageElement>('.wc-source-favicon img');
-    expect(favicon?.src).toContain('icons.duckduckgo.com');
-    expect(favicon?.src).toContain('example.com');
-    expect(card?.querySelector('.wc-source-desc')?.textContent).toBe('courses admission');
-    // URL is protocol-stripped, www-stripped, and present as truncated text.
+    expect(card?.querySelector('.wc-source-title')?.textContent).toBe('Admission');
     expect(card?.querySelector('.wc-source-url')?.textContent).toBe(
       'example.com/courses/admission',
     );
-    expect(card?.querySelector('.wc-source-read')?.textContent).toContain('Read more');
+    expect(card?.querySelector('.wc-source-read')?.textContent).toContain('Open');
+    expect(card?.getAttribute('target')).toBe('_blank');
+    expect(card?.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('exposes a friendly "Learn more" label above the citation cards (a11y landmark)', () => {

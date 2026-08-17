@@ -3,7 +3,10 @@
 import {
   AlertTriangle,
   ExternalLink,
+  FileText,
+  Globe,
   Loader2,
+  Brain,
   Pencil,
   Play,
   RefreshCw,
@@ -13,7 +16,7 @@ import {
 import { Button } from '@/components/ui/button';
 
 import { StatusBadge } from './status-badge';
-import type { CrawlJob, Website } from './types';
+import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 function formatDate(value: string | null): string {
   if (!value) {
@@ -33,6 +36,8 @@ function isActive(job: CrawlJob): boolean {
 export function WebsiteCard({
   website,
   crawlJob,
+  crawlProgress,
+  sseConnected,
   crawlPending,
   onCrawl,
   onEdit,
@@ -40,6 +45,8 @@ export function WebsiteCard({
 }: {
   website: Website;
   crawlJob: CrawlJob | null;
+  crawlProgress: CrawlProgressEvent | null;
+  sseConnected: boolean;
   crawlPending: boolean;
   onCrawl: (website: Website) => void;
   onEdit: (website: Website) => void;
@@ -47,6 +54,12 @@ export function WebsiteCard({
 }) {
   const crawling = crawlJob !== null && isActive(crawlJob);
   const crawlFailed = crawlJob?.status === 'failed';
+
+  // Merge SSE progress with polling data: SSE takes priority when connected
+  const progress = sseConnected ? crawlProgress : null;
+  const pagesCompleted = progress?.pages_completed ?? crawlJob?.pages_completed ?? 0;
+  const pagesTotal = progress?.pages_total ?? crawlJob?.pages_total ?? 0;
+  const progressStatus = progress?.status ?? crawlJob?.status ?? null;
 
   return (
     <article className="flex h-full flex-col gap-4 rounded-lg border bg-card p-4 shadow-sm">
@@ -94,14 +107,60 @@ export function WebsiteCard({
       </dl>
 
       {crawling && crawlJob ? (
-        <div role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-          <span>
-            Crawling…{' '}
-            {crawlJob.pages_total > 0
-              ? `${crawlJob.pages_completed}/${crawlJob.pages_total} pages`
-              : `${crawlJob.pages_completed} pages found`}
-          </span>
+        <div role="status" className="flex flex-col gap-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+            <span className="font-medium">
+              {progressStatus === 'fetching' && 'Fetching pages\u2026'}
+              {progressStatus === 'extracting' && 'Extracting content\u2026'}
+              {progressStatus === 'embedding' && 'Generating embeddings\u2026'}
+              {progressStatus === 'processing' && 'Processing\u2026'}
+              {progressStatus === 'running' && 'Crawling\u2026'}
+              {!progressStatus && 'Crawling\u2026'}
+            </span>
+          </div>
+
+          {progressStatus === 'fetching' && pagesTotal > 0 ? (
+            <div className="flex items-center gap-2">
+              <Globe className="size-3 shrink-0" aria-hidden="true" />
+              <span>
+                {pagesCompleted} / {pagesTotal} pages
+              </span>
+            </div>
+          ) : progressStatus === 'extracting' ? (
+            <div className="flex items-center gap-2">
+              <FileText className="size-3 shrink-0" aria-hidden="true" />
+              <span>Extracting page content</span>
+            </div>
+          ) : progressStatus === 'embedding' ? (
+            <div className="flex items-center gap-2">
+              <Brain className="size-3 shrink-0" aria-hidden="true" />
+              <span>Generating embeddings</span>
+            </div>
+          ) : pagesTotal > 0 ? (
+            <div className="flex items-center gap-2">
+              <Globe className="size-3 shrink-0" aria-hidden="true" />
+              <span>
+                {pagesCompleted} / {pagesTotal} pages
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Globe className="size-3 shrink-0" aria-hidden="true" />
+              <span>{pagesCompleted} pages found</span>
+            </div>
+          )}
+
+          {pagesTotal > 0 ? (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all duration-300"
+                style={{
+                  width: `${Math.min(100, Math.round((pagesCompleted / pagesTotal) * 100))}%`,
+                }}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 
