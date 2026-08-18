@@ -20,16 +20,18 @@ the streaming endpoint stays uniform.
 """
 
 import asyncio
+import json
 import logging
 import time
-from collections import OrderedDict
 from collections.abc import AsyncGenerator
-from dataclasses import dataclass
 from typing import Any
 
 from backend.ai.gemini import GenerationClient
+from backend.core.cache import CacheStore
 from backend.core.config import get_settings
 from backend.core.errors import AppError, SessionNotFoundError
+from backend.core.privacy import content_hash
+from backend.core.prompt_guard import validate_response
 from backend.core.security import new_id
 from backend.models.chat_message import (
     CHAT_ROLE_ASSISTANT,
@@ -37,6 +39,7 @@ from backend.models.chat_message import (
     ChatMessage,
 )
 from backend.models.chat_session import ChatSession
+from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.models.usage_record import usage_date_key
 from backend.prompts.rag import (
     UNKNOWN_ANSWER_FALLBACK,
@@ -65,15 +68,6 @@ def _now() -> float:
     return time.monotonic()
 
 
-@dataclass
-class _RetrievalCacheEntry:
-    """Cached embedding + search results for one (website, question) pair."""
-
-    vector: list[float]
-    results: list[VectorSearchResult]
-    cached_at: float
-
-
 def _round_ms(value: float | None) -> float | None:
     """Round a millisecond duration for persistence (None passes through)."""
     return round(value, 2) if value is not None else None
@@ -99,6 +93,7 @@ class RagService:
         sessions: ChatSessionRepository,
         messages: ChatMessageRepository,
         usage: UsageRecordRepository,
+        cache: CacheStore | None = None,
         top_k: int | None = None,
         prompt_version: int | None = None,
         memory_turns: int | None = None,
@@ -111,6 +106,7 @@ class RagService:
         self._sessions = sessions
         self._messages = messages
         self._usage = usage
+        self._cache = cache
         self._top_k = top_k if top_k is not None else settings.chat_top_k
         self._prompt_version = (
             prompt_version if prompt_version is not None else settings.rag_prompt_version
@@ -122,15 +118,8 @@ class RagService:
         self._max_context_chars = settings.chat_context_max_chars
         self._min_score = settings.chat_context_min_score
         self._timing_enabled = settings.perf_timing_log_enabled
-        # Bounded in-process LRU: repeated questions skip the embedding API
-        # call entirely (biggest single source of chat latency after the LLM).
-        self._embedding_cache: OrderedDict[str, list[float]] = OrderedDict()
         self._embedding_cache_size = settings.embedding_cache_size
-        # Retrieval cache: same website + same normalized question reuses the
-        # embedding AND the vector-search results within the TTL, skipping both
-        # the provider call and the search query. Answers are never cached -
-        # generation always runs, so every turn is a fresh answer.
-        self._retrieval_cache: OrderedDict[tuple[str, str], _RetrievalCacheEntry] = OrderedDict()
+        self._embedding_cache_ttl = settings.embedding_cache_ttl_seconds
         self._retrieval_cache_size = settings.chat_retrieval_cache_size
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
 
@@ -144,17 +133,18 @@ class RagService:
         never go stale.
         """
         key = question.strip().lower()
-        cached = self._embedding_cache.get(key)
-        if cached is not None:
-            self._embedding_cache.move_to_end(key)
-            return cached, True
+        if self._cache is not None and self._embedding_cache_size > 0:
+            raw = await self._cache.get("embed", key)
+            if raw is not None:
+                try:
+                    return json.loads(raw), True
+                except (json.JSONDecodeError, TypeError):
+                    pass
         vectors = await self._embedder.embed([question])
         vector = vectors[0]
-        if self._embedding_cache_size > 0:
-            self._embedding_cache[key] = vector
-            self._embedding_cache.move_to_end(key)
-            while len(self._embedding_cache) > self._embedding_cache_size:
-                self._embedding_cache.popitem(last=False)
+        if self._cache is not None and self._embedding_cache_size > 0:
+            ttl = self._embedding_cache_ttl if self._embedding_cache_ttl > 0 else None
+            await self._cache.set("embed", key, json.dumps(vector), ttl=ttl)
         return vector, False
 
     async def _retrieve(
@@ -171,12 +161,32 @@ class RagService:
         reports zero stage latency (the work was already done) and skips both
         the embedding provider and the vector query.
         """
-        key = (website_id, question.strip().lower())
+        cache = self._cache
+        cache_key = f"{website_id}:{question.strip().lower()}"
         now = _now()
-        entry = self._retrieval_cache.get(key)
-        if entry is not None and now - entry.cached_at < self._retrieval_cache_ttl:
-            self._retrieval_cache.move_to_end(key)
-            return entry.vector, entry.results, 0.0, 0.0, True, True
+        retrieval_enabled = (
+            cache is not None
+            and self._retrieval_cache_size > 0
+            and self._retrieval_cache_ttl > 0
+        )
+        if retrieval_enabled:
+            assert cache is not None  # guaranteed by retrieval_enabled
+            raw = await cache.get("retrieval", cache_key)
+            if raw is not None:
+                try:
+                    entry = json.loads(raw)
+                    if now - entry["cached_at"] < self._retrieval_cache_ttl:
+                        vector = entry["vector"]
+                        results = [
+                            VectorSearchResult(
+                                chunk=KnowledgeChunk(**r["chunk"]),
+                                score=r["score"],
+                            )
+                            for r in entry["results"]
+                        ]
+                        return vector, results, 0.0, 0.0, True, True
+                except (json.JSONDecodeError, TypeError, KeyError):
+                    pass
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
             query_vector, embedding_cache_hit = await self._embed_question(question)
@@ -187,15 +197,19 @@ class RagService:
                 tenant_id, website_id, query_vector, top_k=self._top_k
             )
         retrieval_ms = (time.perf_counter() - t1) * 1000.0
-        if self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0:
-            self._retrieval_cache[key] = _RetrievalCacheEntry(
-                vector=query_vector,
-                results=results,
-                cached_at=_now(),
+        if retrieval_enabled:
+            assert cache is not None  # guaranteed by retrieval_enabled
+            entry = {
+                "vector": query_vector,
+                "results": [
+                    {"chunk": r.chunk.model_dump(mode="json"), "score": r.score}
+                    for r in results
+                ],
+                "cached_at": _now(),
+            }
+            await cache.set(
+                "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
             )
-            self._retrieval_cache.move_to_end(key)
-            while len(self._retrieval_cache) > self._retrieval_cache_size:
-                self._retrieval_cache.popitem(last=False)
         return query_vector, results, embedding_ms, retrieval_ms, embedding_cache_hit, False
 
     async def stream_answer(
@@ -224,12 +238,14 @@ class RagService:
                 return
             question = sanitize_question(question)
             logger.info(
-                "chat_request tenant=%s website=%s session=%s knowledge_chunks=%s query=%r",
+                "chat_request tenant=%s website=%s session=%s knowledge_chunks=%s "
+                "query_hash=%s query_length=%d",
                 tenant_id,
                 website_id,
                 session_id,
                 website.knowledge_chunks,
-                question,
+                content_hash(question),
+                len(question),
             )
             async with chat_stage("session.resolve"):
                 session = await self._ensure_session(
@@ -371,11 +387,13 @@ class RagService:
             len(user_prompt),
         )
         logger.debug(
-            "chat_prompt_full tenant=%s website=%s system=%r user=%r",
+            "chat_prompt_full tenant=%s website=%s system_chars=%d "
+            "user_hash=%s user_length=%d",
             tenant_id,
             website_id,
-            system_prompt,
-            user_prompt,
+            len(system_prompt),
+            content_hash(user_prompt),
+            len(user_prompt),
         )
 
         deltas: list[str] = []
@@ -398,6 +416,15 @@ class RagService:
             return
 
         answer = "".join(deltas)
+        output_issues = validate_response(answer)
+        if output_issues:
+            logger.warning(
+                "prompt_guard output_issue issues=%s tenant=%s website=%s session=%s",
+                output_issues,
+                tenant_id,
+                website_id,
+                session.session_id,
+            )
         response_time = time.monotonic() - started
         usage = self._generation.usage
 
@@ -581,7 +608,7 @@ class RagService:
         """Emit the no-context fallback without ever calling the model."""
         logger.warning(
             "rag_retrieval_zero_context tenant=%s website=%s session=%s reason=%s "
-            "vector_queries=%s top_k=%s scores=%s query=%r",
+            "vector_queries=%s top_k=%s scores=%s query_hash=%s query_length=%d",
             tenant_id,
             website_id,
             session.session_id,
@@ -589,7 +616,8 @@ class RagService:
             vector_queries,
             self._top_k,
             scores or [],
-            query,
+            content_hash(query),
+            len(query),
         )
         response_time = time.monotonic() - started
         assistant = ChatMessage.new(

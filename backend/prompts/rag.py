@@ -14,12 +14,20 @@ Security properties (docs/02-TRD.md §8 + rules §20):
   length, and rejects blank input before anything reaches the model.
 """
 
+import logging
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from backend.core.config import get_settings
 from backend.core.errors import InvalidQuestionError
+from backend.core.privacy import content_hash
+from backend.core.prompt_guard import (
+    detect_injection,
+    sanitize_context_chunk,
+)
+
+logger = logging.getLogger("webchat_ai")
 
 RAG_PROMPT_VERSION = 1
 
@@ -80,6 +88,16 @@ def sanitize_question(question: str, *, max_length: int | None = None) -> str:
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         raise InvalidQuestionError("The question cannot be empty.")
+    verdict = detect_injection(cleaned)
+    if verdict.detected:
+        logger.warning(
+            "prompt_guard injection_detected severity=%s patterns=%s "
+            "query_hash=%s query_length=%d",
+            verdict.severity,
+            verdict.patterns,
+            content_hash(cleaned),
+            len(cleaned),
+        )
     return cleaned[:limit]
 
 
@@ -103,6 +121,7 @@ def render_context(
     for index, item in enumerate(items, start=1):
         heading = f" - {item.heading}" if item.heading else ""
         text = item.text[:limit] if len(item.text) > limit else item.text
+        text = sanitize_context_chunk(text)
         blocks.append(f"[{index}] {item.title}{heading} ({item.url})\n{text}")
     rendered = "\n\n".join(blocks)
     return (

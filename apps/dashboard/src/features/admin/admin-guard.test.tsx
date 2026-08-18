@@ -20,11 +20,12 @@ describe('AdminGuard', () => {
     vi.clearAllMocks();
   });
 
-  it('renders nothing while the session is being restored', () => {
+  it('shows a loading skeleton while the session is being restored', () => {
     mockedUseAuth.mockReturnValue({ status: 'loading', user: null } as never);
 
     render(<AdminGuard>admin content</AdminGuard>);
 
+    expect(screen.getByRole('status', { name: 'Loading page' })).toBeInTheDocument();
     expect(screen.queryByText('admin content')).not.toBeInTheDocument();
     expect(screen.queryByText('Admin access required')).not.toBeInTheDocument();
   });

@@ -1,5 +1,6 @@
 """Unit tests for AuthService business logic (register/login/tokens/reset/RBAC)."""
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -30,6 +31,7 @@ from backend.models.audit_log import (
     AUDIT_VERIFICATION_RESENT,
 )
 from backend.models.user import User
+from backend.services.auth.auth_service import AuthResult
 
 from tests.auth_helpers import (
     VALID_PASSWORD,
@@ -37,7 +39,7 @@ from tests.auth_helpers import (
     token_from_url,
     verify_registered_user,
 )
-from tests.fakes import FakeUserRepository
+from tests.fakes import FakeBrokenCacheStore, FakeCacheStore, FakeUserRepository
 
 
 async def test_register_creates_tenant_user_member_audit_and_email() -> None:
@@ -315,6 +317,52 @@ async def test_refresh_reuse_detection_revokes_all_and_alerts() -> None:
     assert any(m.subject.startswith("Security alert") for m in env.mail.sent)
 
 
+async def test_concurrent_refresh_only_one_succeeds() -> None:
+    """Two simultaneous refresh requests for the same token: one must win, one must lose.
+
+    Regression test for the token-rotation race condition (AUDIT-REPORT §CRITICAL-1).
+    The old flow was: find → check → create → revoke (non-atomic).  Two concurrent
+    requests could both pass the ``is_revoked`` check.  The new flow uses
+    ``find_and_consume`` (``findOneAndUpdate`` with ``revoked_at: None`` guard) so
+    that exactly one request wins the atomic consumption.
+    """
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    login = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    raw_token = login.refresh_token
+
+    # Fire two concurrent refresh requests for the *same* raw token.
+    results = await asyncio.gather(
+        env.service.refresh(raw_refresh_token=raw_token, ip_address=None, user_agent=None),
+        env.service.refresh(raw_refresh_token=raw_token, ip_address=None, user_agent=None),
+        return_exceptions=True,
+    )
+
+    successes = [r for r in results if isinstance(r, AuthResult)]
+    failures = [r for r in results if isinstance(r, Exception)]
+
+    # Exactly one must succeed; the other must fail.
+    assert len(successes) == 1, f"Expected exactly 1 success, got {len(successes)}"
+    assert len(failures) == 1, f"Expected exactly 1 failure, got {len(failures)}"
+    assert isinstance(failures[0], TokenReuseError)
+
+    # The successful rotation must have produced a new token different from the original.
+    replacement_raw = successes[0].refresh_token
+    assert replacement_raw != raw_token
+
+    # The old token is now revoked (consumed by winner + reused by loser).
+    assert all(t.is_revoked for t in env.refresh_tokens.tokens.values())
+
+
 async def test_refresh_unknown_token_rejected() -> None:
     env = build_auth_env()
     with pytest.raises(InvalidCredentialsError):
@@ -349,7 +397,7 @@ async def test_refresh_expired_token_rejected() -> None:
         )
 
 
-async def test_logout_revokes_all_and_audits() -> None:
+async def test_logout_revokes_current_session_and_audits() -> None:
     env = build_auth_env()
     await env.service.register(
         name="Alice",
@@ -367,13 +415,99 @@ async def test_logout_revokes_all_and_audits() -> None:
         raw_refresh_token=login.refresh_token, ip_address=None, user_agent=None
     )
 
-    assert all(t.is_revoked for t in env.refresh_tokens.tokens.values())
+    # Only the presented token is revoked; registration token is still valid.
+    token_hash = hash_refresh_token(login.refresh_token)
+    revoked = [t for t in env.refresh_tokens.tokens.values() if t.is_revoked]
+    active = [t for t in env.refresh_tokens.tokens.values() if not t.is_revoked]
+    assert len(revoked) == 1
+    assert revoked[0].token_hash == token_hash
+    assert len(active) == 1  # the registration session token is untouched
     assert env.audit.logs[-1].action == AUDIT_LOGOUT
     # A token revoked by logout triggers reuse detection if presented again.
     with pytest.raises(TokenReuseError):
         await env.service.refresh(
             raw_refresh_token=login.refresh_token, ip_address=None, user_agent=None
         )
+
+
+async def test_logout_current_device_keeps_other_sessions_active() -> None:
+    """Logging out from one device must not invalidate another device's session."""
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    # Simulate two independent login sessions (two devices).
+    device_a = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent="device-a"
+    )
+    device_b = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent="device-b"
+    )
+
+    # Logout from device A only.
+    await env.service.logout(
+        raw_refresh_token=device_a.refresh_token, ip_address=None, user_agent="device-a"
+    )
+
+    # Device A's token is revoked.
+    assert hash_refresh_token(device_a.refresh_token) in {
+        t.token_hash for t in env.refresh_tokens.tokens.values() if t.is_revoked
+    }
+    # Device B's token is still valid — can refresh without error.
+    refreshed = await env.service.refresh(
+        raw_refresh_token=device_b.refresh_token, ip_address=None, user_agent="device-b"
+    )
+    assert refreshed.access_token
+    assert refreshed.user.email == "alice@example.com"
+
+
+async def test_logout_all_revokes_every_session() -> None:
+    """logout_all must revoke every active session for the user."""
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    device_a = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent="device-a"
+    )
+    device_b = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent="device-b"
+    )
+
+    await env.service.logout_all(
+        raw_refresh_token=device_a.refresh_token, ip_address=None, user_agent="device-a"
+    )
+
+    assert all(t.is_revoked for t in env.refresh_tokens.tokens.values())
+    # Both devices' tokens are now unusable.
+    with pytest.raises(TokenReuseError):
+        await env.service.refresh(
+            raw_refresh_token=device_a.refresh_token, ip_address=None, user_agent="device-a"
+        )
+    with pytest.raises(TokenReuseError):
+        await env.service.refresh(
+            raw_refresh_token=device_b.refresh_token, ip_address=None, user_agent="device-b"
+        )
+
+
+async def test_logout_invalid_token_is_silent() -> None:
+    """Logout with a non-existent token must succeed silently (no error, no-op)."""
+    env = build_auth_env()
+    await env.service.logout(
+        raw_refresh_token="not-a-real-token", ip_address=None, user_agent=None
+    )
+    # No audit log should be created for a non-existent token.
+    assert env.audit.logs == []
 
 
 async def test_forgot_password_unknown_email_is_silent() -> None:
@@ -688,3 +822,305 @@ async def test_resend_verification_is_silent_for_verified_account() -> None:
 
     assert len(env.mail.sent) == 1
     assert env.audit.logs[-1].action == AUDIT_EMAIL_VERIFIED  # unchanged
+
+
+# ---------------------------------------------------------------- lockout tests
+
+
+async def test_login_failed_increments_attempts() -> None:
+    """Failed login increments failed_login_attempts on the user record."""
+    env = build_auth_env(settings=Settings(login_max_attempts=5))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+    assert user.failed_login_attempts == 0
+
+    with pytest.raises(InvalidCredentialsError):
+        await env.service.login(
+            email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+        )
+    assert user.failed_login_attempts == 1
+
+    with pytest.raises(InvalidCredentialsError):
+        await env.service.login(
+            email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+        )
+    assert user.failed_login_attempts == 2
+
+
+async def test_login_locks_account_after_max_attempts() -> None:
+    """Account is locked after login_max_attempts consecutive failures."""
+    env = build_auth_env(settings=Settings(login_max_attempts=3, login_lockout_minutes=15))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+
+    for _ in range(3):
+        with pytest.raises(InvalidCredentialsError):
+            await env.service.login(
+                email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+            )
+
+    assert user.locked_until is not None
+    assert user.failed_login_attempts == 3
+
+
+async def test_login_blocked_during_lockout() -> None:
+    """Even correct password is rejected while account is locked."""
+    from backend.core.errors import AccountLockedError
+
+    env = build_auth_env(settings=Settings(login_max_attempts=3, login_lockout_minutes=15))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+
+    # Exhaust attempts.
+    for _ in range(3):
+        with pytest.raises(InvalidCredentialsError):
+            await env.service.login(
+                email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+            )
+
+    assert user.locked_until is not None
+
+    # Correct password still fails during lockout.
+    with pytest.raises(AccountLockedError):
+        await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )
+
+
+async def test_successful_login_resets_failed_attempts() -> None:
+    """A successful login resets the failed_login_attempts counter."""
+    env = build_auth_env(settings=Settings(login_max_attempts=5))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+
+    # Two failures.
+    for _ in range(2):
+        with pytest.raises(InvalidCredentialsError):
+            await env.service.login(
+                email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+            )
+    assert user.failed_login_attempts == 2
+
+    # Successful login resets counter.
+    await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    assert user.failed_login_attempts == 0
+
+
+async def test_lockout_resets_after_expiry() -> None:
+    """Lockout is cleared when the lockout window expires."""
+    from backend.core.security import utcnow
+
+    env = build_auth_env(settings=Settings(login_max_attempts=2, login_lockout_minutes=15))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+
+    # Lock the account.
+    for _ in range(2):
+        with pytest.raises(InvalidCredentialsError):
+            await env.service.login(
+                email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+            )
+    assert user.locked_until is not None
+
+    # Simulate lockout expiry by manually setting locked_until to the past.
+    user.locked_until = utcnow() - timedelta(minutes=1)
+
+    # Next login (even with wrong password) should clear the lockout.
+    with pytest.raises(InvalidCredentialsError):
+        await env.service.login(
+            email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+        )
+
+    assert user.locked_until is None
+    assert user.failed_login_attempts == 1  # only the current failed attempt
+
+
+async def test_unknown_email_does_not_leak_lockout_info() -> None:
+    """Login with unknown email always returns InvalidCredentialsError (no lockout)."""
+    env = build_auth_env(settings=Settings(login_max_attempts=3))
+    with pytest.raises(InvalidCredentialsError):
+        await env.service.login(
+            email="ghost@example.com", password="Whatever1!", ip_address=None, user_agent=None
+        )
+
+
+async def test_lockout_is_configurable() -> None:
+    """Different login_max_attempts settings produce different thresholds."""
+    env = build_auth_env(settings=Settings(login_max_attempts=10, login_lockout_minutes=30))
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    user = env.users.users[next(iter(env.users.users))]
+
+    # 5 failures should NOT lock with threshold=10.
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError):
+            await env.service.login(
+                email="alice@example.com", password="WrongPass1!", ip_address=None, user_agent=None
+            )
+    assert user.locked_until is None
+    assert user.failed_login_attempts == 5
+
+
+# ------------------------------------------------------------------ PERF-1 cache
+
+
+async def test_role_cache_hit_avoids_database_query() -> None:
+    """A warm cache serves the role without touching the members repository."""
+    cache = FakeCacheStore()
+    env = build_auth_env(role_cache=cache)
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    user = env.users.users[next(iter(env.users.users))]
+    # Seed the cache directly.
+    await cache.set("auth:role", user.id, "owner", ttl=60)
+
+    login_result = await env.service.login(
+        email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+    )
+    # Reset counter: login called _resolve_role once (cache hit, no DB).
+    env.members.find_by_user_id_calls = 0
+
+    principal = await env.service.authenticate(login_result.access_token)
+
+    assert principal.role == "owner"
+    # find_by_user_id was never called — cache served the role.
+    assert env.members.find_by_user_id_calls == 0
+
+
+async def test_role_cache_miss_queries_database_and_populates() -> None:
+    """On cache miss the DB is queried and the result is cached for next time."""
+    cache = FakeCacheStore()
+    env = build_auth_env(role_cache=cache)
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    user = env.users.users[next(iter(env.users.users))]
+    member = env.members.members[next(iter(env.members.members))]
+    member.role = "viewer"
+    # Clear any role cached during register/login so the next resolve is a miss.
+    await cache.delete("auth:role", user.id)
+
+    principal = await env.service.authenticate(
+        (await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )).access_token
+    )
+
+    assert principal.role == "viewer"
+    # Cache was populated with the DB result.
+    cached_role = await cache.get("auth:role", user.id)
+    assert cached_role == "viewer"
+
+
+async def test_role_cache_expiry_triggers_fresh_db_query() -> None:
+    """After a cache entry expires (simulated by deletion) the DB is re-queried."""
+    cache = FakeCacheStore()
+    env = build_auth_env(role_cache=cache)
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    user = env.users.users[next(iter(env.users.users))]
+    member = env.members.members[next(iter(env.members.members))]
+    member.role = "viewer"
+    # Clear any role cached during register so first resolve is a clean miss.
+    await cache.delete("auth:role", user.id)
+
+    # First call: populates cache with "viewer".
+    principal1 = await env.service.authenticate(
+        (await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )).access_token
+    )
+    assert principal1.role == "viewer"
+    assert await cache.get("auth:role", user.id) == "viewer"
+
+    # Admin changes the role in the DB.
+    member.role = "admin"
+    # Simulate TTL expiry by clearing the cache entry.
+    await cache.delete("auth:role", user.id)
+
+    # Second call: cache miss → re-queries DB → gets new role.
+    principal2 = await env.service.authenticate(
+        (await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )).access_token
+    )
+    assert principal2.role == "admin"
+
+
+async def test_role_cache_unavailable_falls_back_to_database() -> None:
+    """When the cache raises, role resolution falls through to the DB."""
+    broken = FakeBrokenCacheStore()
+    env = build_auth_env(role_cache=broken)
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await verify_registered_user(env)
+    member = env.members.members[next(iter(env.members.members))]
+    member.role = "admin"
+
+    principal = await env.service.authenticate(
+        (await env.service.login(
+            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+        )).access_token
+    )
+
+    # Falls through to DB despite broken cache.
+    assert principal.role == "admin"

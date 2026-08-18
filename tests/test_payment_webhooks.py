@@ -45,7 +45,7 @@ async def test_paid_webhook_activates_subscription(client) -> None:
     response = test_client.post("/api/webhooks/payment", content=b'{"event": "payment.captured"}')
 
     assert response.status_code == 200
-    assert response.json() == {"ok": "true", "event": "payment.captured"}
+    assert response.json() == {"ok": True, "event": "payment.captured"}
     subscriptions = payment_env.subscriptions.subscriptions
     assert len(subscriptions) == 1
     assert subscriptions[0].tenant_id == "tenant-web-1"

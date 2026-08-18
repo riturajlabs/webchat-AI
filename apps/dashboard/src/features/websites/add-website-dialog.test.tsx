@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AddWebsiteDialog } from './add-website-dialog';
@@ -173,5 +174,46 @@ describe('AddWebsiteDialog', () => {
       });
     });
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // --- Accessibility tests ---
+
+  it('closes the dialog on Escape key', () => {
+    const onOpenChange = vi.fn();
+    render(<AddWebsiteDialog open onOpenChange={onOpenChange} />);
+
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it('has aria-modal="true" on the dialog', () => {
+    render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('sets inert on background overlay', () => {
+    render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
+    const overlay = document.querySelector('[data-dialog-overlay]');
+    expect(overlay).toHaveAttribute('inert');
+  });
+
+  it('traps Tab within the dialog', () => {
+    render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
+
+    // Focus the last element in the dialog (Add website submit button).
+    const submitButton = screen.getByRole('button', { name: 'Add website' });
+    submitButton.focus();
+
+    // Tab should wrap to the first focusable element (Close dialog button).
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Tab' });
+    });
+
+    const closeButton = screen.getByRole('button', { name: 'Close dialog' });
+    expect(document.activeElement).toBe(closeButton);
   });
 });

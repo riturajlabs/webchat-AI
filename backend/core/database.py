@@ -177,7 +177,8 @@ class MongoDB:
 
         Unique: users.email, refresh_tokens.token_hash, members(tenant,user),
         websites(tenant,url), widgets.widget_id, widgets(tenant,website),
-        chat_sessions.session_id, usage_records(tenant,website,date).
+        chat_sessions.session_id, usage_records(tenant,website,date),
+        api_keys.hashed_secret.
         TTL: refresh_tokens.expires_at (40 days, ADR-005 §5.4),
         audit_logs.created_at (1 year, ADR-005 §5.7),
         crawl_jobs.created_at (30 days, ADR-005 §5.7),
@@ -299,6 +300,7 @@ class MongoDB:
         await db["subscriptions"].create_index([("tenant_id", 1), ("status", 1), ("end_date", 1)])
         await db["subscriptions"].create_index("payment_id", unique=True)
         # API key management (docs/05 §12).
+        await db["api_keys"].create_index("hashed_secret", unique=True)
         await db["api_keys"].create_index("tenant_id")
         await db["api_keys"].create_index([("tenant_id", 1), ("created_at", -1)])
         # Phase 12.4 visitor feedback (docs/05 §19, ADR-005 §5.6): tenant reads,

@@ -4,6 +4,7 @@ import { ShieldX } from 'lucide-react';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageSkeleton } from '@/components/ui/page-skeleton';
 
 /**
  * Admin-only gate for the admin routes (Phase 15).
@@ -14,7 +15,13 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { user, status } = useAuth();
 
   if (status === 'loading') {
-    return null;
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="w-full max-w-4xl">
+          <PageSkeleton />
+        </div>
+      </div>
+    );
   }
 
   if (user?.role !== 'super_admin') {

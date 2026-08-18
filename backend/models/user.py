@@ -25,6 +25,8 @@ class User(BaseModel):
     onboarding_step: str = "welcome"
     pwd_token_version: int = 0
     last_login: datetime | None = None
+    failed_login_attempts: int = 0
+    locked_until: datetime | None = None
     created_at: datetime
     updated_at: datetime
     schema_version: int = 1

@@ -10,7 +10,7 @@ are immune to CSRF by design.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from backend.api.deps import (
     client_ip,
@@ -18,6 +18,7 @@ from backend.api.deps import (
     forgot_password_limiter,
     get_auth_service,
     login_limiter,
+    refresh_limiter,
     register_limiter,
     resend_verification_limiter,
     reset_password_limiter,
@@ -166,7 +167,8 @@ async def refresh(
     request: Request,
     response: Response,
     auth: Annotated[AuthService, Depends(get_auth_service)],
-    _: Annotated[None, Depends(verify_csrf)],
+    _: Annotated[None, Depends(refresh_limiter)],
+    __: Annotated[None, Depends(verify_csrf)],
 ) -> RefreshResponse:
     settings = get_settings()
     raw_refresh = request.cookies.get(settings.refresh_cookie_name, "")
@@ -188,15 +190,23 @@ async def logout(
     response: Response,
     auth: Annotated[AuthService, Depends(get_auth_service)],
     _: Annotated[None, Depends(verify_csrf)],
+    all_sessions: bool = Query(default=False),
 ) -> MessageResponse:
     settings = get_settings()
     raw_refresh = request.cookies.get(settings.refresh_cookie_name, "")
     if raw_refresh:
-        await auth.logout(
-            raw_refresh_token=raw_refresh,
-            ip_address=client_ip(request),
-            user_agent=request.headers.get("user-agent"),
-        )
+        if all_sessions:
+            await auth.logout_all(
+                raw_refresh_token=raw_refresh,
+                ip_address=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
+        else:
+            await auth.logout(
+                raw_refresh_token=raw_refresh,
+                ip_address=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
     _clear_session_cookies(response)
     return MessageResponse(message="Logged out.")
 

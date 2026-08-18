@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   api,
-  ApiError,
   DEFAULT_TIMEOUT_MS,
   NetworkError,
   request,
@@ -144,11 +143,15 @@ describe('api client', () => {
       .mockResolvedValueOnce(jsonResponse({ error: { code: 'token_expired' } }, 401))
       .mockResolvedValueOnce(jsonResponse({}, 401));
 
-    await expect(api.get('/api/websites')).rejects.toThrow(ApiError);
+    // After refresh failure, the client redirects and returns without throwing.
+    const result = await api.get('/api/websites');
+    expect(result).toBeUndefined();
 
     expect(getAccessToken()).toBeNull();
     expect(getCsrfToken()).toBeNull();
     expect(assign).toHaveBeenCalledWith('/login?redirect=%2Fwebsites');
+    // Only the original request + refresh were made; no retry after redirect.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('sends the CSRF header from memory for protected endpoints', async () => {

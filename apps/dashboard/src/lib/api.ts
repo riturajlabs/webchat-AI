@@ -230,6 +230,7 @@ export async function request<T>(
     }
     clearSession();
     redirectToLogin();
+    return undefined as T;
   }
 
   if (response.status === 204) {

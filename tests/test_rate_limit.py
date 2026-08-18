@@ -125,3 +125,123 @@ async def test_widget_ip_limiter_disabled_by_switch(monkeypatch) -> None:
     for _ in range(3):
         await deps.widget_ip_limiter(request)  # never raises
     get_settings.cache_clear()
+
+
+# -----------------------------------------------------------------------
+# SEC-7: refresh_limiter (per-session-token sliding window)
+# -----------------------------------------------------------------------
+
+
+def _fake_refresh_request(token: str = "test-token") -> SimpleNamespace:
+    """Build a minimal request-like object with a refresh_token cookie."""
+    return SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/auth/refresh"),
+        headers={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        cookies={"refresh_token": token},
+    )
+
+
+async def test_refresh_limiter_allows_normal_use(monkeypatch) -> None:
+    """A handful of refresh calls with a valid token succeed."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("REFRESH_RATE_LIMIT_PER_MINUTE", "5")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_refresh_request("my-session-token")
+    for _ in range(5):
+        await deps.refresh_limiter(req)
+    get_settings.cache_clear()
+
+
+async def test_refresh_limiter_rejects_over_limit(monkeypatch) -> None:
+    """Exceeding the per-token refresh budget raises RateLimitExceededError."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("REFRESH_RATE_LIMIT_PER_MINUTE", "3")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_refresh_request("stolen-token")
+    for _ in range(3):
+        await deps.refresh_limiter(req)
+    with pytest.raises(RateLimitExceededError):
+        await deps.refresh_limiter(req)
+    get_settings.cache_clear()
+
+
+async def test_refresh_limiter_different_tokens_are_isolated(monkeypatch) -> None:
+    """Two different refresh tokens have independent budgets."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("REFRESH_RATE_LIMIT_PER_MINUTE", "2")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+
+    req_a = _fake_refresh_request("token-for-user-a")
+    req_b = _fake_refresh_request("token-for-user-b")
+
+    # Exhaust token A's budget.
+    await deps.refresh_limiter(req_a)
+    await deps.refresh_limiter(req_a)
+    with pytest.raises(RateLimitExceededError):
+        await deps.refresh_limiter(req_a)
+
+    # Token B still has its own budget.
+    await deps.refresh_limiter(req_b)
+    await deps.refresh_limiter(req_b)
+    with pytest.raises(RateLimitExceededError):
+        await deps.refresh_limiter(req_b)
+    get_settings.cache_clear()
+
+
+async def test_refresh_limiter_noop_when_token_cookie_missing(monkeypatch) -> None:
+    """If no refresh_token cookie is set, the limiter is a no-op (endpoint
+    rejects with 401 anyway)."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("REFRESH_RATE_LIMIT_PER_MINUTE", "1")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_refresh_request("")
+    req.cookies = {}  # no cookie at all
+    for _ in range(10):
+        await deps.refresh_limiter(req)  # never raises
+    get_settings.cache_clear()
+
+
+async def test_refresh_limiter_fails_closed_on_store_error(monkeypatch) -> None:
+    """Redis outage raises ServiceUnavailableError (fail closed)."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    store = FakeRateLimitStore()
+    store.fail = True
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    with pytest.raises(ServiceUnavailableError):
+        await deps.refresh_limiter(_fake_refresh_request("any-token"))
+    get_settings.cache_clear()
+
+
+async def test_refresh_limiter_disabled_by_switch(monkeypatch) -> None:
+    """When rate_limit_enabled=false, the limiter is a no-op."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_refresh_request("any-token")
+    for _ in range(100):
+        await deps.refresh_limiter(req)  # never raises
+    get_settings.cache_clear()

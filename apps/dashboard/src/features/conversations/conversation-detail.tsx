@@ -157,8 +157,10 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
       </div>
 
       <ol className="flex flex-col gap-3">
-        {data.messages.map((message, index) => (
-          <li key={`${message.created_at}-${index}`}>
+        {data.messages.map((message) => (
+          <li
+            key={`${message.role}-${message.created_at}-${message.output_tokens}-${message.content.length}`}
+          >
             <MessageBubble message={message} />
           </li>
         ))}

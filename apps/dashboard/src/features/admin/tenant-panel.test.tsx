@@ -258,4 +258,41 @@ describe('TenantPanel', () => {
     const lastCall = mockedUseAdminTenants.mock.calls[mockedUseAdminTenants.mock.calls.length - 1];
     expect(lastCall[0]).toBe(2);
   });
+
+  // --- Accessibility tests ---
+
+  it('closes the confirm dialog on Escape key', () => {
+    renderPanel();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend' }));
+    expect(screen.getByText('Suspend Acme Inc?')).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+
+    expect(screen.queryByText('Suspend Acme Inc?')).not.toBeInTheDocument();
+  });
+
+  it('closes the tenant detail dialog on Escape key', () => {
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/ })[0]);
+    expect(screen.getByRole('dialog', { name: 'Acme Inc' })).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.keyDown(document, { key: 'Escape' });
+    });
+
+    expect(screen.queryByRole('dialog', { name: 'Acme Inc' })).not.toBeInTheDocument();
+  });
+
+  it('sets inert on background when tenant detail dialog is open', () => {
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/ })[0]);
+
+    const inertElements = document.querySelectorAll('[inert]');
+    expect(inertElements.length).toBeGreaterThan(0);
+  });
 });

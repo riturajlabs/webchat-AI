@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Building2, Eye, Search, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 
 import { ConfirmDialog } from './confirm-dialog';
 import { formatDate, statusLabel } from './format';
@@ -58,6 +59,13 @@ function TenantDetailDialog({
   const { data, isPending, isError, refetch } = useAdminTenantDetail(tenantId);
   const changePlan = useAdminChangeTenantPlan();
   const [planInput, setPlanInput] = useState('');
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useAccessibleDialog({
+    open: Boolean(tenantId),
+    onClose,
+    contentRef,
+  });
 
   useEffect(() => {
     setPlanInput(data?.plan ?? '');
@@ -86,8 +94,16 @@ function TenantDetailDialog({
       aria-modal="true"
       aria-labelledby="tenant-detail-title"
     >
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
-      <div className="relative z-10 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border bg-background p-6 shadow-lg">
+      <div
+        className="absolute inset-0 bg-black/50"
+        data-dialog-overlay
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <div
+        ref={contentRef}
+        className="relative z-10 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border bg-background p-6 shadow-lg"
+      >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="tenant-detail-title" className="font-sans text-lg font-semibold">

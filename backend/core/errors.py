@@ -30,6 +30,13 @@ class AccountSuspendedError(AppError):
     code = "ACCOUNT_SUSPENDED"
 
 
+class AccountLockedError(AppError):
+    """Too many failed login attempts; the account is temporarily locked."""
+
+    status_code = 429
+    code = "ACCOUNT_LOCKED"
+
+
 class EmailNotVerifiedError(AppError):
     """The account exists but its email has not been verified yet.
 

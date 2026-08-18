@@ -1,8 +1,14 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useCrawlJob, useDeleteWebsite, useStartCrawl, useWebsites } from './hooks';
+import {
+  useCrawlJob,
+  useCrawlProgress,
+  useDeleteWebsite,
+  useStartCrawl,
+  useWebsites,
+} from './hooks';
 import { WebsiteList } from './website-list';
 import type { CrawlJob, Website } from './types';
 
@@ -11,6 +17,7 @@ vi.mock('./hooks', () => ({
   useDeleteWebsite: vi.fn(),
   useStartCrawl: vi.fn(),
   useCrawlJob: vi.fn(),
+  useCrawlProgress: vi.fn(),
   websitesKeys: { all: ['websites'] as const },
 }));
 
@@ -31,6 +38,7 @@ const mockedUseWebsites = vi.mocked(useWebsites);
 const mockedUseDeleteWebsite = vi.mocked(useDeleteWebsite);
 const mockedUseStartCrawl = vi.mocked(useStartCrawl);
 const mockedUseCrawlJob = vi.mocked(useCrawlJob);
+const mockedUseCrawlProgress = vi.mocked(useCrawlProgress);
 
 const SITE: Website = {
   id: 'site-1',
@@ -48,6 +56,14 @@ const SITE: Website = {
   knowledge_documents: 3,
   knowledge_chunks: 27,
   last_knowledge_at: '2026-08-02T00:00:00Z',
+};
+
+const SITE2: Website = {
+  ...SITE,
+  id: 'site-2',
+  name: 'Other Site',
+  url: 'https://other.example.com',
+  widget_id: 'widget-2',
 };
 
 const COMPLETED_JOB: CrawlJob = {
@@ -104,6 +120,11 @@ beforeEach(() => {
     mutateAsync: vi.fn().mockResolvedValue({ crawl_job_id: 'job-1' }),
   } as unknown as ReturnType<typeof useStartCrawl>);
   mockCrawlJob(null);
+  mockedUseCrawlProgress.mockReturnValue({
+    progress: null,
+    connected: false,
+    reconnecting: false,
+  } as unknown as ReturnType<typeof useCrawlProgress>);
 });
 
 afterEach(() => {
@@ -184,7 +205,7 @@ describe('WebsiteList', () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
-  it('starts a crawl and tracks the active job', () => {
+  it('starts a crawl and tracks the active job', async () => {
     const mutateAsync = vi.fn().mockResolvedValue({ crawl_job_id: 'job-1', status: 'pending' });
     mockedUseStartCrawl.mockReturnValue({ mutateAsync } as unknown as ReturnType<
       typeof useStartCrawl
@@ -193,7 +214,9 @@ describe('WebsiteList', () => {
     renderList();
     fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
 
-    expect(mutateAsync).toHaveBeenCalledWith('site-1');
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith('site-1');
+    });
   });
 
   it('disables the crawl button while starting', () => {
@@ -222,30 +245,335 @@ describe('WebsiteList', () => {
     expect(screen.getByRole('button', { name: 'Crawl now' })).toBeEnabled();
   });
 
-  it('renders live crawl progress for the matching website', () => {
+  it('clears the error banner when a crawl completes successfully', async () => {
+    const completed: CrawlJob = { ...COMPLETED_JOB };
+
+    mockedUseCrawlJob.mockReturnValue({
+      data: completed,
+      isPending: false,
+    } as unknown as ReturnType<typeof useCrawlJob>);
+
+    // First call fails, second call succeeds
+    const mutateAsync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Rate limited'))
+      .mockResolvedValue({ crawl_job_id: 'job-1' });
+    mockedUseStartCrawl.mockReturnValue({ mutateAsync } as unknown as ReturnType<
+      typeof useStartCrawl
+    >);
+
+    renderList();
+
+    // Trigger a failed crawl to show the error banner
+    fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Rate limited');
+
+    // Now start a new crawl that succeeds
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    });
+
+    // The error banner should be gone (handleCrawl clears on start + CrawlJobTracker clears on completed)
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('does not hide a new error when a previous error was cleared', async () => {
+    // First call fails with "First error", second call fails with "Second error"
+    const mutateAsync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('First error'))
+      .mockRejectedValueOnce(new Error('Second error'));
+    mockedUseStartCrawl.mockReturnValue({ mutateAsync } as unknown as ReturnType<
+      typeof useStartCrawl
+    >);
+
+    renderList();
+
+    // First crawl fails
+    fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('First error');
+
+    // Second crawl also fails with a different error — new error replaces old
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Second error');
+    expect(screen.queryByText('First error')).not.toBeInTheDocument();
+  });
+
+  it('renders live crawl progress for the matching website after starting a crawl', async () => {
     const running: CrawlJob = {
       ...COMPLETED_JOB,
       status: 'running',
       pages_total: 5,
       pages_completed: 2,
     };
-    mockCrawlJob(running);
+
+    mockedUseCrawlJob.mockReturnValue({ data: running, isPending: false } as unknown as ReturnType<
+      typeof useCrawlJob
+    >);
 
     renderList();
-    expect(screen.getByRole('status')).toHaveTextContent('Crawling… 2/5 pages');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent(/Crawling…/);
+      expect(screen.getByRole('status')).toHaveTextContent(/2 \/ 5 pages/);
+    });
   });
 
-  it('shows the failed alert from the crawl job with a retry action', () => {
+  it('shows the failed alert from the crawl job with a retry action after starting a crawl', async () => {
     const failed: CrawlJob = {
       ...COMPLETED_JOB,
       status: 'failed',
       error_message: 'Browser crashed',
       errors: [],
     };
-    mockCrawlJob(failed);
+
+    mockedUseCrawlJob.mockReturnValue({ data: failed, isPending: false } as unknown as ReturnType<
+      typeof useCrawlJob
+    >);
 
     renderList();
-    expect(screen.getByRole('alert')).toHaveTextContent('Browser crashed');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Browser crashed');
+    });
     expect(screen.getByRole('button', { name: 'Retry crawl' })).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Multi-job tracking tests                                           */
+/* ------------------------------------------------------------------ */
+
+describe('WebsiteList — multi-job tracking', () => {
+  const RUNNING_JOB_1: CrawlJob = {
+    ...COMPLETED_JOB,
+    id: 'job-1',
+    website_id: 'site-1',
+    status: 'running',
+    pages_total: 10,
+    pages_completed: 3,
+  };
+
+  const RUNNING_JOB_2: CrawlJob = {
+    ...COMPLETED_JOB,
+    id: 'job-2',
+    website_id: 'site-2',
+    status: 'running',
+    pages_total: 8,
+    pages_completed: 1,
+  };
+
+  const FAILED_JOB_2: CrawlJob = {
+    ...RUNNING_JOB_2,
+    status: 'failed',
+    error_message: 'Timeout',
+  };
+
+  it('tracks multiple simultaneous crawls independently', async () => {
+    mockWebsites({ data: [SITE, SITE2] });
+
+    const mutateAsync = vi
+      .fn()
+      .mockResolvedValueOnce({ crawl_job_id: 'job-1' })
+      .mockResolvedValueOnce({ crawl_job_id: 'job-2' });
+    mockedUseStartCrawl.mockReturnValue({
+      mutateAsync,
+    } as unknown as ReturnType<typeof useStartCrawl>);
+
+    mockedUseCrawlJob.mockImplementation(
+      (jobId) =>
+        ({
+          data: jobId === 'job-1' ? RUNNING_JOB_1 : jobId === 'job-2' ? RUNNING_JOB_2 : null,
+          isPending: false,
+        }) as unknown as ReturnType<typeof useCrawlJob>,
+    );
+
+    renderList();
+
+    const buttons = screen.getAllByRole('button', { name: 'Crawl now' });
+
+    // Start crawl on site 1
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+    await waitFor(() => {
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.some((el) => el.textContent?.includes('3 / 10'))).toBe(true);
+    });
+
+    // Start crawl on site 2
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Crawl now' })[1]);
+    });
+    await waitFor(() => {
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.some((el) => el.textContent?.includes('1 / 8'))).toBe(true);
+    });
+
+    // Both should be visible simultaneously
+    const allStatuses = screen.getAllByRole('status');
+    expect(allStatuses.some((el) => el.textContent?.includes('3 / 10'))).toBe(true);
+    expect(allStatuses.some((el) => el.textContent?.includes('1 / 8'))).toBe(true);
+  });
+
+  it('shows independent progress updates per website', async () => {
+    mockWebsites({ data: [SITE, SITE2] });
+
+    const mutateAsync = vi
+      .fn()
+      .mockResolvedValueOnce({ crawl_job_id: 'job-1' })
+      .mockResolvedValueOnce({ crawl_job_id: 'job-2' });
+    mockedUseStartCrawl.mockReturnValue({
+      mutateAsync,
+    } as unknown as ReturnType<typeof useStartCrawl>);
+
+    // Job 1 at 7/10, job 2 at 1/8 — simulates mid-progress snapshot
+    const updatedJob1: CrawlJob = { ...RUNNING_JOB_1, pages_completed: 7 };
+    mockedUseCrawlJob.mockImplementation(
+      (jobId) =>
+        ({
+          data: jobId === 'job-1' ? updatedJob1 : jobId === 'job-2' ? RUNNING_JOB_2 : null,
+          isPending: false,
+        }) as unknown as ReturnType<typeof useCrawlJob>,
+    );
+
+    renderList();
+
+    const buttons = screen.getAllByRole('button', { name: 'Crawl now' });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+      fireEvent.click(buttons[1]);
+    });
+
+    await waitFor(() => {
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.some((el) => el.textContent?.includes('7 / 10'))).toBe(true);
+      expect(statuses.some((el) => el.textContent?.includes('1 / 8'))).toBe(true);
+    });
+  });
+
+  it('does not show progress for completed jobs while showing running jobs', async () => {
+    mockWebsites({ data: [SITE, SITE2] });
+
+    const mutateAsync = vi
+      .fn()
+      .mockResolvedValueOnce({ crawl_job_id: 'job-1' })
+      .mockResolvedValueOnce({ crawl_job_id: 'job-2' });
+    mockedUseStartCrawl.mockReturnValue({
+      mutateAsync,
+    } as unknown as ReturnType<typeof useStartCrawl>);
+
+    const completedJob1: CrawlJob = { ...RUNNING_JOB_1, status: 'completed' };
+    mockedUseCrawlJob.mockImplementation(
+      (jobId) =>
+        ({
+          data: jobId === 'job-1' ? completedJob1 : jobId === 'job-2' ? RUNNING_JOB_2 : null,
+          isPending: false,
+        }) as unknown as ReturnType<typeof useCrawlJob>,
+    );
+
+    renderList();
+
+    const buttons = screen.getAllByRole('button', { name: 'Crawl now' });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+      fireEvent.click(buttons[1]);
+    });
+
+    await waitFor(() => {
+      // Job 1 is completed — should NOT show running progress
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.every((el) => !el.textContent?.includes('3 / 10'))).toBe(true);
+      // Job 2 is still running — shows progress
+      expect(statuses.some((el) => el.textContent?.includes('1 / 8'))).toBe(true);
+    });
+  });
+
+  it('shows error on one failed job while other job still runs', async () => {
+    mockWebsites({ data: [SITE, SITE2] });
+
+    const mutateAsync = vi
+      .fn()
+      .mockResolvedValueOnce({ crawl_job_id: 'job-1' })
+      .mockResolvedValueOnce({ crawl_job_id: 'job-2' });
+    mockedUseStartCrawl.mockReturnValue({
+      mutateAsync,
+    } as unknown as ReturnType<typeof useStartCrawl>);
+
+    mockedUseCrawlJob.mockImplementation(
+      (jobId) =>
+        ({
+          data: jobId === 'job-1' ? RUNNING_JOB_1 : jobId === 'job-2' ? FAILED_JOB_2 : null,
+          isPending: false,
+        }) as unknown as ReturnType<typeof useCrawlJob>,
+    );
+
+    renderList();
+
+    const buttons = screen.getAllByRole('button', { name: 'Crawl now' });
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+      fireEvent.click(buttons[1]);
+    });
+
+    await waitFor(() => {
+      // Job 1 still shows progress
+      const statuses = screen.getAllByRole('status');
+      expect(statuses.some((el) => el.textContent?.includes('3 / 10'))).toBe(true);
+    });
+    // Job 2 shows failure
+    expect(screen.getByText('Timeout')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry crawl' })).toBeInTheDocument();
+  });
+
+  it('does not create unnecessary SSE connections for websites without active jobs', () => {
+    mockWebsites({ data: [SITE, SITE2] });
+    renderList();
+
+    // useCrawlProgress should not be called with any job ID
+    // (no crawls started → no trackers rendered → no SSE connections)
+    expect(mockedUseCrawlProgress).not.toHaveBeenCalled();
+  });
+
+  it('creates SSE connections only for active crawl jobs', async () => {
+    mockWebsites({ data: [SITE, SITE2] });
+
+    const mutateAsync = vi.fn().mockResolvedValue({ crawl_job_id: 'job-1' });
+    mockedUseStartCrawl.mockReturnValue({
+      mutateAsync,
+    } as unknown as ReturnType<typeof useStartCrawl>);
+
+    mockedUseCrawlJob.mockReturnValue({
+      data: RUNNING_JOB_1,
+      isPending: false,
+    } as unknown as ReturnType<typeof useCrawlJob>);
+
+    renderList();
+
+    mockedUseCrawlProgress.mockClear();
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Crawl now' })[0]);
+    });
+
+    await waitFor(() => {
+      expect(mockedUseCrawlProgress).toHaveBeenCalledWith('job-1');
+    });
+
+    // Only one SSE connection for one active job
+    expect(mockedUseCrawlProgress).toHaveBeenCalledTimes(1);
   });
 });

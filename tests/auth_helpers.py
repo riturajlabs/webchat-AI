@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 
+from backend.core.cache import CacheStore
 from backend.core.config import Settings
 from backend.models.user import User
 from backend.services.auth import AuthService
@@ -33,7 +34,11 @@ class AuthEnv:
     service: AuthService
 
 
-def build_auth_env(settings: Settings | None = None) -> AuthEnv:
+def build_auth_env(
+    settings: Settings | None = None,
+    *,
+    role_cache: CacheStore | None = None,
+) -> AuthEnv:
     users = FakeUserRepository()
     tenants = FakeTenantRepository()
     members = FakeMemberRepository()
@@ -48,6 +53,7 @@ def build_auth_env(settings: Settings | None = None) -> AuthEnv:
         audit=audit,
         mail_dispatcher=mail,
         settings=settings,
+        role_cache=role_cache,
     )
     return AuthEnv(
         users=users,

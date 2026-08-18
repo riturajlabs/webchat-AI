@@ -5,7 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-import { api } from '@/lib/api';
+import { API_BASE_URL, api } from '@/lib/api';
 
 import type {
   CrawlJob,
@@ -88,108 +88,140 @@ export function useCrawlJob(jobId: string | null) {
   });
 }
 
+const SSE_BASE_DELAY_MS = 2_000;
+const SSE_MAX_RETRIES = 3;
+
 /**
  * SSE-based real-time crawl progress hook.
  *
  * Connects to `GET /api/crawl-jobs/{jobId}/stream` for live events.
  * Falls back gracefully: if SSE fails, the caller still has the polling
  * `useCrawlJob` hook as a safety net.
+ *
+ * Reconnection uses controlled exponential backoff instead of relying on
+ * EventSource's built-in auto-reconnect.  After `SSE_MAX_RETRIES`
+ * consecutive failures the connection is permanently closed for this
+ * crawl job and the UI falls back to polling.
  */
 export function useCrawlProgress(jobId: string | null) {
   const [progress, setProgress] = useState<CrawlProgressEvent | null>(null);
   const [connected, setConnected] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const mountedRef = useRef(true);
 
-  const disconnect = useCallback(() => {
+  const cleanup = useCallback(() => {
+    if (retryTimerRef.current !== null) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
     setConnected(false);
+    setReconnecting(false);
   }, []);
 
+  const connect = useCallback(
+    (url: string) => {
+      const es = new EventSource(url, { withCredentials: true });
+      eventSourceRef.current = es;
+
+      es.onopen = () => {
+        if (!mountedRef.current) return;
+        retryCountRef.current = 0;
+        setConnected(true);
+        setReconnecting(false);
+      };
+
+      const handleProgressEvent = ((e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data) as CrawlProgressEvent;
+          setProgress(data);
+        } catch {
+          /* ignore parse errors */
+        }
+      }) as EventListener;
+
+      for (const eventType of [
+        'crawl.snapshot',
+        'crawl.started',
+        'crawl.progress',
+        'crawl.fetching',
+      ]) {
+        es.addEventListener(eventType, handleProgressEvent);
+      }
+
+      es.addEventListener('crawl.completed', ((e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data) as CrawlProgressEvent;
+          setProgress(data);
+        } catch {
+          /* ignore */
+        }
+        cleanup();
+      }) as EventListener);
+
+      es.addEventListener('crawl.failed', ((e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data) as CrawlProgressEvent;
+          setProgress(data);
+        } catch {
+          /* ignore */
+        }
+        cleanup();
+      }) as EventListener);
+
+      es.onerror = () => {
+        if (!mountedRef.current) return;
+        setConnected(false);
+
+        es.close();
+        eventSourceRef.current = null;
+
+        const attempt = retryCountRef.current;
+        if (attempt >= SSE_MAX_RETRIES) {
+          setReconnecting(false);
+          return;
+        }
+
+        retryCountRef.current = attempt + 1;
+        setReconnecting(true);
+
+        const delay = SSE_BASE_DELAY_MS * 2 ** attempt;
+        retryTimerRef.current = setTimeout(() => {
+          retryTimerRef.current = null;
+          if (!mountedRef.current) return;
+          connect(url);
+        }, delay);
+      };
+    },
+    [cleanup],
+  );
+
   useEffect(() => {
+    mountedRef.current = true;
+
     if (!jobId) {
-      disconnect();
+      cleanup();
       return;
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    const url = `${baseUrl}/api/crawl-jobs/${jobId}/stream`;
+    const url = `${API_BASE_URL}/api/crawl-jobs/${jobId}/stream`;
 
-    // EventSource only supports GET with cookies; we need the auth cookie.
-    // Use fetch + ReadableStream for POST-style SSE, but since this is GET,
-    // EventSource works with cookies (same-origin or with credentials).
-    const es = new EventSource(url, { withCredentials: true });
-    eventSourceRef.current = es;
+    retryCountRef.current = 0;
+    connect(url);
 
-    es.onopen = () => setConnected(true);
-
-    es.addEventListener('crawl.snapshot', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore parse errors */
-      }
-    }) as EventListener);
-
-    es.addEventListener('crawl.started', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore */
-      }
-    }) as EventListener);
-
-    es.addEventListener('crawl.progress', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore */
-      }
-    }) as EventListener);
-
-    es.addEventListener('crawl.fetching', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore */
-      }
-    }) as EventListener);
-
-    es.addEventListener('crawl.completed', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore */
-      }
-      disconnect();
-    }) as EventListener);
-
-    es.addEventListener('crawl.failed', ((e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as CrawlProgressEvent;
-        setProgress(data);
-      } catch {
-        /* ignore */
-      }
-      disconnect();
-    }) as EventListener);
-
-    es.onerror = () => {
-      setConnected(false);
-      // EventSource auto-reconnects; let it do so
+    return () => {
+      mountedRef.current = false;
+      cleanup();
     };
+  }, [jobId, connect, cleanup]);
 
-    return disconnect;
-  }, [jobId, disconnect]);
-
-  return { progress, connected };
+  return { progress, connected, reconnecting };
 }
 
 export function useWebsiteWidget(websiteId: string | null) {

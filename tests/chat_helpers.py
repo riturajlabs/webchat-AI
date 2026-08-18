@@ -14,6 +14,7 @@ from backend.services.website import WebsiteService
 
 from tests.fakes import (
     FakeAuditLogRepository,
+    FakeCacheStore,
     FakeChatMessageRepository,
     FakeChatSessionRepository,
     FakeEmbeddingClient,
@@ -36,6 +37,7 @@ class ChatEnv:
     sessions: FakeChatSessionRepository
     messages: FakeChatMessageRepository
     usage: FakeUsageRecordRepository
+    cache: FakeCacheStore
     rag: RagService
     websites_service: WebsiteService
 
@@ -45,6 +47,7 @@ def build_chat_env(
     top_k: int = 5,
     memory_turns: int = 8,
     deltas: list[str] | None = None,
+    cache: FakeCacheStore | None = None,
 ) -> ChatEnv:
     websites = FakeWebsiteRepository()
     widgets = FakeWidgetRepository()
@@ -55,6 +58,7 @@ def build_chat_env(
     sessions = FakeChatSessionRepository()
     messages = FakeChatMessageRepository()
     usage = FakeUsageRecordRepository()
+    cache_store = cache if cache is not None else FakeCacheStore()
     rag = RagService(
         websites=websites,
         vector=vector,
@@ -63,6 +67,7 @@ def build_chat_env(
         sessions=sessions,
         messages=messages,
         usage=usage,
+        cache=cache_store,
         top_k=top_k,
         memory_turns=memory_turns,
     )
@@ -81,6 +86,7 @@ def build_chat_env(
         sessions=sessions,
         messages=messages,
         usage=usage,
+        cache=cache_store,
         rag=rag,
         websites_service=websites_service,
     )

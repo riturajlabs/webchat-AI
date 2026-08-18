@@ -1,13 +1,21 @@
 'use client';
 
+import { useRef } from 'react';
 import { X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 
 /**
  * Accessible confirmation dialog for admin mutations (suspend/activate,
  * user suspend, force logout). Mirrors the existing dialog pattern used by
  * the websites feature (no shadcn dialog primitive in this repo).
+ *
+ * Keyboard behavior (WCAG 2.1):
+ * - Escape closes the dialog.
+ * - Tab / Shift+Tab cycles within the dialog.
+ * - Focus returns to the trigger element on close.
+ * - Background content is marked inert while open.
  */
 export function ConfirmDialog({
   open,
@@ -30,6 +38,15 @@ export function ConfirmDialog({
   isPending?: boolean;
   variant?: 'default' | 'destructive';
 }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const close = () => onOpenChange(false);
+
+  useAccessibleDialog({
+    open,
+    onClose: close,
+    contentRef,
+  });
+
   if (!open) {
     return null;
   }
@@ -43,10 +60,14 @@ export function ConfirmDialog({
     >
       <div
         className="absolute inset-0 bg-black/50"
-        onClick={() => onOpenChange(false)}
+        data-dialog-overlay
+        onClick={close}
         aria-hidden="true"
       />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
+      <div
+        ref={contentRef}
+        className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg"
+      >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="confirm-dialog-title" className="font-sans text-lg font-semibold">
@@ -54,17 +75,12 @@ export function ConfirmDialog({
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">{description}</p>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => onOpenChange(false)}
-            aria-label="Close dialog"
-          >
+          <Button variant="ghost" size="icon" onClick={close} aria-label="Close dialog">
             <X aria-hidden="true" />
           </Button>
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
+          <Button variant="outline" onClick={close} disabled={isPending}>
             {cancelLabel}
           </Button>
           <Button

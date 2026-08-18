@@ -18,32 +18,59 @@ import {
   websitesKeys,
 } from './hooks';
 import { WebsiteCard } from './website-card';
-import type { Website } from './types';
+import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 const TERMINAL_CRAWL_STATUSES = new Set(['completed', 'failed']);
+
+/* ------------------------------------------------------------------ */
+/*  CrawlJobTracker — calls hooks for a single job, passes state down  */
+/* ------------------------------------------------------------------ */
+
+function CrawlJobTracker({
+  jobId,
+  onJobCompleted,
+  children,
+}: {
+  jobId: string;
+  onJobCompleted?: () => void;
+  children: (state: {
+    crawlJob: CrawlJob;
+    crawlProgress: CrawlProgressEvent | null;
+    sseConnected: boolean;
+  }) => React.ReactNode;
+}) {
+  const { data } = useCrawlJob(jobId);
+  const { progress, connected } = useCrawlProgress(jobId);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (data && data.status === 'completed') {
+      void queryClient.invalidateQueries({ queryKey: websitesKeys.all });
+      onJobCompleted?.();
+    }
+  }, [data, queryClient, onJobCompleted]);
+
+  if (!data) return null;
+
+  return <>{children({ crawlJob: data, crawlProgress: progress, sseConnected: connected })}</>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  WebsiteList                                                         */
+/* ------------------------------------------------------------------ */
 
 export function WebsiteList() {
   const { data, isPending, isError, error, refetch } = useWebsites();
   const deleteWebsite = useDeleteWebsite();
   const startCrawl = useStartCrawl();
-  const queryClient = useQueryClient();
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Website | null>(null);
-  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeJobs, setActiveJobs] = useState<Map<string, string>>(new Map());
   const [pendingWebsiteId, setPendingWebsiteId] = useState<string | null>(null);
   const [crawlError, setCrawlError] = useState<string | null>(null);
 
-  const crawlJob = useCrawlJob(activeJobId);
-  const crawlProgress = useCrawlProgress(activeJobId);
-
   const websites = data ?? [];
-
-  useEffect(() => {
-    if (crawlJob.data && TERMINAL_CRAWL_STATUSES.has(crawlJob.data.status)) {
-      void queryClient.invalidateQueries({ queryKey: websitesKeys.all });
-    }
-  }, [crawlJob.data, queryClient]);
 
   function openCreate() {
     setEditing(null);
@@ -76,7 +103,11 @@ export function WebsiteList() {
     setPendingWebsiteId(website.id);
     try {
       const result = await startCrawl.mutateAsync(website.id);
-      setActiveJobId(result.crawl_job_id);
+      setActiveJobs((prev) => {
+        const next = new Map(prev);
+        next.set(website.id, result.crawl_job_id);
+        return next;
+      });
       toast.success(`Crawl started for "${website.name}"`);
     } catch (e) {
       setCrawlError(e instanceof Error ? e.message : 'Failed to start crawl.');
@@ -84,6 +115,42 @@ export function WebsiteList() {
     } finally {
       setPendingWebsiteId(null);
     }
+  }
+
+  function renderWebsiteCard(website: Website) {
+    const jobId = activeJobs.get(website.id);
+
+    const card = (
+      <WebsiteCard
+        website={website}
+        crawlJob={null}
+        crawlProgress={null}
+        sseConnected={false}
+        crawlPending={pendingWebsiteId === website.id}
+        onCrawl={(site) => void handleCrawl(site)}
+        onEdit={openEdit}
+        onDelete={(site) => void handleDelete(site)}
+      />
+    );
+
+    if (!jobId) return card;
+
+    return (
+      <CrawlJobTracker key={jobId} jobId={jobId} onJobCompleted={() => setCrawlError(null)}>
+        {({ crawlJob, crawlProgress, sseConnected }) => (
+          <WebsiteCard
+            website={website}
+            crawlJob={crawlJob}
+            crawlProgress={crawlProgress}
+            sseConnected={sseConnected}
+            crawlPending={pendingWebsiteId === website.id}
+            onCrawl={(site) => void handleCrawl(site)}
+            onEdit={openEdit}
+            onDelete={(site) => void handleDelete(site)}
+          />
+        )}
+      </CrawlJobTracker>
+    );
   }
 
   return (
@@ -170,22 +237,7 @@ export function WebsiteList() {
       {!isPending && !isError && websites.length > 0 ? (
         <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {websites.map((website) => (
-            <li key={website.id}>
-              <WebsiteCard
-                website={website}
-                crawlJob={crawlJob.data?.website_id === website.id ? crawlJob.data : null}
-                crawlProgress={
-                  crawlJob.data?.website_id === website.id ? crawlProgress.progress : null
-                }
-                sseConnected={
-                  crawlJob.data?.website_id === website.id ? crawlProgress.connected : false
-                }
-                crawlPending={pendingWebsiteId === website.id}
-                onCrawl={(site) => void handleCrawl(site)}
-                onEdit={openEdit}
-                onDelete={(site) => void handleDelete(site)}
-              />
-            </li>
+            <li key={website.id}>{renderWebsiteCard(website)}</li>
           ))}
         </ul>
       ) : null}

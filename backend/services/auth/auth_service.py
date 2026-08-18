@@ -7,10 +7,12 @@ Business logic only - routes validate and translate. Implements ADR-003
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from backend.core.cache import CacheStore
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
+    AccountLockedError,
     AccountSuspendedError,
     DuplicateEmailError,
     InvalidCredentialsError,
@@ -101,6 +103,7 @@ class AuthService:
         audit: AuditLogRepository,
         mail_dispatcher: EmailDispatcher,
         settings: Settings | None = None,
+        role_cache: CacheStore | None = None,
     ) -> None:
         self._users = users
         self._tenants = tenants
@@ -109,6 +112,7 @@ class AuthService:
         self._audit = audit
         self._mail = mail_dispatcher
         self._settings = settings or get_settings()
+        self._role_cache = role_cache
 
     # ------------------------------------------------------------------ flows
 
@@ -207,7 +211,28 @@ class AuthService:
     ) -> AuthResult:
         email = email.lower().strip()
         user = await self._users.find_by_email(email)
+
+        # Check account lockout before verifying credentials.
+        if user is not None and user.locked_until is not None:
+            now = utcnow()
+            if user.locked_until > now:
+                raise AccountLockedError(
+                    "Account is temporarily locked due to too many failed login attempts."
+                )
+            # Lockout expired — reset counters.
+            await self._users.reset_failed_login(user.id, now)
+            user = await self._users.find_by_id(user.id)
+
         if user is None or not verify_password(password, user.password_hash):
+            now = utcnow()
+            if user is not None:
+                await self._users.increment_failed_login(user.id, now)
+                user = await self._users.find_by_id(user.id)
+                max_attempts = self._settings.login_max_attempts
+                if user is not None and user.failed_login_attempts >= max_attempts:
+                    lockout_minutes = self._settings.login_lockout_minutes
+                    locked_until = now + timedelta(minutes=lockout_minutes)
+                    await self._users.lock_account(user.id, locked_until, now)
             await self._audit.create(
                 AuditLog.new(
                     action=AUDIT_LOGIN_FAILED,
@@ -226,7 +251,11 @@ class AuthService:
             raise AccountSuspendedError("This account's workspace is suspended.")
 
         role = await self._resolve_role(user)
-        await self._users.update_last_login(user.id, utcnow())
+        now = utcnow()
+        # Reset failed login attempts on successful authentication.
+        if user.failed_login_attempts > 0:
+            await self._users.reset_failed_login(user.id, now)
+        await self._users.update_last_login(user.id, now)
         await self._audit.create(
             AuditLog.new(
                 action=AUDIT_LOGIN,
@@ -241,17 +270,15 @@ class AuthService:
     async def refresh(
         self, *, raw_refresh_token: str, ip_address: str | None, user_agent: str | None
     ) -> AuthResult:
-        record = await self._refresh_tokens.find_by_hash(hash_refresh_token(raw_refresh_token))
+        # Phase 1: read-only checks before consuming the token.
+        token_hash = hash_refresh_token(raw_refresh_token)
+        record = await self._refresh_tokens.find_by_hash(token_hash)
         if record is None:
             raise InvalidCredentialsError("Invalid session.")
-        if record.is_revoked:
-            await self._on_reuse_detected(record, ip_address, user_agent)
-            raise TokenReuseError(
-                "Session reuse detected. All sessions for this account were revoked."
-            )
         if record.is_expired:
             raise InvalidTokenError("Session has expired.")
 
+        # Phase 2: prepare the replacement token.
         user = await self._users.find_by_id(record.user_id)
         if user is None or user.status != "active":
             raise AccountSuspendedError("This account is not active.")
@@ -267,7 +294,24 @@ class AuthService:
             token_hash=hash_refresh_token(new_raw),
         )
         await self._refresh_tokens.create(replacement)
-        await self._refresh_tokens.mark_revoked(record.id, replaced_by=replacement.id, at=utcnow())
+
+        # Phase 3: atomically consume the old token.  This is the critical
+        # section — ``find_and_consume`` uses ``findOneAndUpdate`` with a
+        # ``revoked_at: None`` guard so that concurrent refresh requests for
+        # the same token will never both succeed: exactly one wins the race.
+        now = utcnow()
+        consume = await self._refresh_tokens.find_and_consume(
+            token_hash, replaced_by=replacement.id, at=now
+        )
+        if not consume.found:
+            raise InvalidCredentialsError("Invalid session.")
+        if consume.already_revoked:
+            assert consume.token is not None  # already_revoked implies token was found
+            await self._on_reuse_detected(consume.token, ip_address, user_agent)
+            raise TokenReuseError(
+                "Session reuse detected. All sessions for this account were revoked."
+            )
+
         await self._audit.create(
             AuditLog.new(
                 action=AUDIT_TOKEN_REFRESHED,
@@ -289,10 +333,33 @@ class AuthService:
     async def logout(
         self, *, raw_refresh_token: str, ip_address: str | None, user_agent: str | None
     ) -> None:
-        record = await self._refresh_tokens.find_by_hash(hash_refresh_token(raw_refresh_token))
+        """Revoke only the current session's refresh token (SEC-4)."""
+        token_hash = hash_refresh_token(raw_refresh_token)
+        record = await self._refresh_tokens.find_by_hash(token_hash)
         if record is None:
             return
-        await self._refresh_tokens.revoke_all_for_user(record.user_id, utcnow())
+        now = utcnow()
+        await self._refresh_tokens.revoke_token(token_hash, now)
+        await self._audit.create(
+            AuditLog.new(
+                action=AUDIT_LOGOUT,
+                tenant_id=record.tenant_id,
+                user_id=record.user_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+            )
+        )
+
+    async def logout_all(
+        self, *, raw_refresh_token: str, ip_address: str | None, user_agent: str | None
+    ) -> None:
+        """Revoke every session for the user (opt-in via all_sessions=true)."""
+        token_hash = hash_refresh_token(raw_refresh_token)
+        record = await self._refresh_tokens.find_by_hash(token_hash)
+        if record is None:
+            return
+        now = utcnow()
+        await self._refresh_tokens.revoke_all_for_user(record.user_id, now)
         await self._audit.create(
             AuditLog.new(
                 action=AUDIT_LOGOUT,
@@ -397,12 +464,16 @@ class AuthService:
     # ------------------------------------------------------------- internals
 
     async def _resolve_role(self, user: User) -> str:
-        """Resolve the effective RBAC role for a user (Phase 15).
+        """Resolve the effective RBAC role for a user (Phase 15, PERF-1 cached).
 
         Configured `super_admin_emails` take precedence over the tenant
         membership role: a super admin is a platform-level identity, not a
         tenant membership. Everyone else resolves through the tenant member
         role (falling back to `user.role`, the signup default).
+
+        When a ``role_cache`` is configured, the DB membership lookup is
+        cached per-user with a 60-second TTL. Cache misses (or cache
+        unavailability) fall through to the database transparently.
         """
         admin_emails = self._super_admin_emails()
         normalized = user.email.strip().casefold()
@@ -413,14 +484,37 @@ class AuthService:
                 user.email,
             )
             return ROLE_SUPER_ADMIN
+
+        # Try cache (PERF-1) — skip when not configured.
+        if self._role_cache is not None:
+            try:
+                cached = await self._role_cache.get("auth:role", user.id)
+                if cached is not None:
+                    logger.debug("Role cache hit for user %s: %s", user.id, cached)
+                    return cached
+            except Exception:
+                logger.warning(
+                    "Role cache GET failed for user %s", user.id, exc_info=True
+                )
+
+        # Cache miss or unavailable — query database.
         member = await self._members.find_by_user_id(user.id)
         role = member.role if member is not None else user.role
+
+        # Populate cache for next request.
+        if self._role_cache is not None:
+            try:
+                await self._role_cache.set("auth:role", user.id, role, ttl=60)
+            except Exception:
+                logger.warning(
+                    "Role cache SET failed for user %s", user.id, exc_info=True
+                )
+
         logger.debug(
-            "Role resolved as %s for user %s (email=%s, super_admin_emails=%s)",
+            "Role resolved as %s for user %s (super_admin_count=%d)",
             role,
             user.id,
-            user.email,
-            sorted(admin_emails),
+            len(admin_emails),
         )
         return role
 

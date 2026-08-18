@@ -61,6 +61,14 @@ export function formatPrice(amountCents: number | null, currency: string): strin
   return formatter.format(amountCents / 100);
 }
 
-export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(value));
+/** ISO date string → localized date (e.g. "Aug 11, 2026"). Falls back to em-dash. */
+export function formatDate(value: string | null | undefined): string {
+  if (!value) {
+    return '—';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
 }

@@ -48,6 +48,12 @@ class UserRepository(Protocol):
 
     async def set_status(self, user_id: str, status: str, at: datetime) -> None: ...
 
+    async def increment_failed_login(self, user_id: str, at: datetime) -> None: ...
+
+    async def reset_failed_login(self, user_id: str, at: datetime) -> None: ...
+
+    async def lock_account(self, user_id: str, until: datetime, at: datetime) -> None: ...
+
 
 class MongoUserRepository:
     """MongoDB-backed user repository. Every query is tenant-scoped where relevant."""
@@ -119,6 +125,24 @@ class MongoUserRepository:
         await self._collection.update_one(
             {"_id": user_id},
             {"$set": {"status": status, "updated_at": at}},
+        )
+
+    async def increment_failed_login(self, user_id: str, at: datetime) -> None:
+        await self._collection.update_one(
+            {"_id": user_id},
+            {"$inc": {"failed_login_attempts": 1}, "$set": {"updated_at": at}},
+        )
+
+    async def reset_failed_login(self, user_id: str, at: datetime) -> None:
+        await self._collection.update_one(
+            {"_id": user_id},
+            {"$set": {"failed_login_attempts": 0, "locked_until": None, "updated_at": at}},
+        )
+
+    async def lock_account(self, user_id: str, until: datetime, at: datetime) -> None:
+        await self._collection.update_one(
+            {"_id": user_id},
+            {"$set": {"locked_until": until, "updated_at": at}},
         )
 
     @staticmethod

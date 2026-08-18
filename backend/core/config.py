@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     email_verify_token_expire_minutes: int = 60 * 24
     password_reset_token_expire_minutes: int = 30
 
+    # Account lockout (SEC-3)
+    login_max_attempts: int = 5
+    login_lockout_minutes: int = 15
+
     # Rate limiting
     rate_limit_enabled: bool = True
 
@@ -143,6 +147,11 @@ class Settings(BaseSettings):
     # their own sliding window keyed by key id, independent of the per-IP
     # budgets applied to the same endpoints.
     api_key_rate_limit_per_minute: int = 300
+
+    # Per-session-token refresh limit (SEC-7): bounds refresh attempts on a
+    # stolen token+CSRF pair.  Keyed by the token hash so each rotated token
+    # gets a fresh window while an attacker with one token is throttled.
+    refresh_rate_limit_per_minute: int = 30
 
     # Email (Phase 2 - ADR-001)
     resend_api_key: str | None = None
@@ -307,16 +316,18 @@ class Settings(BaseSettings):
     perf_timing_log_enabled: bool = False
     # Log MongoDB commands slower than this threshold (ms); 0 disables.
     mongodb_slow_query_threshold_ms: int = 0
-    # In-process LRU cache of question embeddings (per API worker). Repeated
-    # questions reuse the cached vector and skip the embedding API call, cutting
-    # perceived latency and provider usage on high-repeat traffic. Bounded by
-    # size only; set 0 to disable.
+    # Cross-process Redis cache of question embeddings. Repeated questions
+    # reuse the cached vector and skip the embedding API call, cutting
+    # perceived latency and provider usage on high-repeat traffic. TTL
+    # prevents unbounded Redis growth; set 0 to disable.
     embedding_cache_size: int = 256
-    # Retrieval cache (per API worker): repeat questions - same website, same
-    # normalized text - reuse the embedding AND the vector-search results for
-    # `chat_retrieval_cache_ttl_seconds`, skipping both the embedding provider
-    # and the search query. Answers are NEVER cached: generation still runs so
-    # every turn is fresh. Bounded by size; set size 0 to disable.
+    embedding_cache_ttl_seconds: int = 3600
+    # Retrieval cache (cross-process via Redis): repeat questions - same
+    # website, same normalized text - reuse the embedding AND the vector-search
+    # results for `chat_retrieval_cache_ttl_seconds`, skipping both the
+    # embedding provider and the search query. Answers are NEVER cached:
+    # generation still runs so every turn is a fresh answer. Set size 0 or
+    # TTL 0 to disable.
     chat_retrieval_cache_ttl_seconds: int = 900
     chat_retrieval_cache_size: int = 512
     # Chat-path embedding retries per provider. The chat must fail fast: a

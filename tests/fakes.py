@@ -137,6 +137,22 @@ class FakeUserRepository:
         self._users[user_id].status = status
         self._users[user_id].updated_at = at
 
+    async def increment_failed_login(self, user_id: str, at: datetime) -> None:
+        user = self._users[user_id]
+        user.failed_login_attempts += 1
+        user.updated_at = at
+
+    async def reset_failed_login(self, user_id: str, at: datetime) -> None:
+        user = self._users[user_id]
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.updated_at = at
+
+    async def lock_account(self, user_id: str, until: datetime, at: datetime) -> None:
+        user = self._users[user_id]
+        user.locked_until = until
+        user.updated_at = at
+
 
 class FakeTenantRepository:
     def __init__(self) -> None:
@@ -191,6 +207,7 @@ class FakeTenantRepository:
 class FakeMemberRepository:
     def __init__(self) -> None:
         self._members: dict[str, Member] = {}
+        self.find_by_user_id_calls = 0
 
     @property
     def members(self) -> dict[str, Member]:
@@ -200,6 +217,7 @@ class FakeMemberRepository:
         self._members[member.id] = member
 
     async def find_by_user_id(self, user_id: str) -> Member | None:
+        self.find_by_user_id_calls += 1
         return next((m for m in self._members.values() if m.user_id == user_id), None)
 
 
@@ -217,10 +235,31 @@ class FakeRefreshTokenRepository:
     async def find_by_hash(self, token_hash: str) -> RefreshToken | None:
         return next((t for t in self._tokens.values() if t.token_hash == token_hash), None)
 
-    async def mark_revoked(self, token_id: str, replaced_by: str | None, at: datetime) -> None:
-        token = self._tokens[token_id]
+    async def find_and_consume(
+        self, token_hash: str, *, replaced_by: str, at: datetime
+    ):
+        """Atomically consume a non-revoked token — mirrors Mongo implementation."""
+        from backend.repositories.refresh_token_repository import TokenConsumeResult
+
+        token = self.find_by_hash_sync(token_hash)
+        if token is None:
+            return TokenConsumeResult(found=False)
+        if token.revoked_at is not None:
+            return TokenConsumeResult(found=True, already_revoked=True, token=token)
+        # Consume the token (atomically in Mongo; in-memory is single-threaded).
         token.revoked_at = at
         token.replaced_by = replaced_by
+        return TokenConsumeResult(found=True, already_revoked=False, token=token)
+
+    def find_by_hash_sync(self, token_hash: str) -> RefreshToken | None:
+        return next((t for t in self._tokens.values() if t.token_hash == token_hash), None)
+
+    async def revoke_token(self, token_hash: str, at: datetime) -> bool:
+        token = self.find_by_hash_sync(token_hash)
+        if token is None or token.revoked_at is not None:
+            return False
+        token.revoked_at = at
+        return True
 
     async def revoke_all_for_user(self, user_id: str, at: datetime) -> None:
         for token in self._tokens.values():
@@ -1811,3 +1850,53 @@ class FakeGenerationClient:
                 yield delta
 
         return _stream()
+
+
+class FakeCacheStore:
+    """In-memory ``CacheStore`` for tests.
+
+    Mirrors the Redis-backed implementation's ``get``/``set``/``delete``
+    interface using a plain dict.  No TTL enforcement — tests control expiry
+    through the monkeypatched ``_now`` clock in ``rag_service``.
+    """
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+        self.set_calls: list[tuple[str, str, str | None]] = []
+
+    async def get(self, namespace: str, key: str) -> str | None:
+        return self._data.get(f"{namespace}:{key}")
+
+    async def set(
+        self,
+        namespace: str,
+        key: str,
+        value: str,
+        *,
+        ttl: int | None = None,
+    ) -> None:
+        self._data[f"{namespace}:{key}"] = value
+        self.set_calls.append((namespace, key, ttl))
+
+    async def delete(self, namespace: str, key: str) -> None:
+        self._data.pop(f"{namespace}:{key}", None)
+
+
+class FakeBrokenCacheStore:
+    """Cache store that always raises — tests the DB fallback path."""
+
+    async def get(self, namespace: str, key: str) -> str | None:
+        raise ConnectionError("Redis unavailable")
+
+    async def set(
+        self,
+        namespace: str,
+        key: str,
+        value: str,
+        *,
+        ttl: int | None = None,
+    ) -> None:
+        raise ConnectionError("Redis unavailable")
+
+    async def delete(self, namespace: str, key: str) -> None:
+        raise ConnectionError("Redis unavailable")

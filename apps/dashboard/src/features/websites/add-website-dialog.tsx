@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Check, Copy, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 
 import { useCreateWebsite, useUpdateWebsite } from './hooks';
 import type { CreateWebsiteResponse, Website } from './types';
@@ -31,13 +32,21 @@ export function AddWebsiteDialog({
   const isPending = createWebsite.isPending || updateWebsite.isPending;
   const error = createWebsite.error ?? updateWebsite.error;
 
-  function close() {
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const close = () => {
     onOpenChange(false);
     setName('');
     setUrl('');
     setResult(null);
     setCopied(false);
-  }
+  };
+
+  useAccessibleDialog({
+    open,
+    onClose: close,
+    contentRef,
+  });
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -89,8 +98,16 @@ export function AddWebsiteDialog({
       aria-modal="true"
       aria-labelledby="add-website-title"
     >
-      <div className="absolute inset-0 bg-black/50" onClick={close} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
+      <div
+        className="absolute inset-0 bg-black/50"
+        data-dialog-overlay
+        onClick={close}
+        aria-hidden="true"
+      />
+      <div
+        ref={contentRef}
+        className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg"
+      >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="add-website-title" className="font-sans text-lg font-semibold">

@@ -38,7 +38,7 @@ async def payment_webhook(
     provider: Annotated[PaymentProvider, Depends(get_payment_provider)],
     service: Annotated[SubscriptionService, Depends(get_subscription_service)],
     _: Annotated[None, Depends(webhook_limiter)],
-) -> dict[str, str]:
+) -> dict[str, str | bool]:
     """Receive and verify a payment gateway webhook, then activate on success."""
     payload = await request.body()
     event = provider.parse_webhook(payload, request.headers)

@@ -272,6 +272,8 @@ async def test_init_indexes_declares_api_key_indexes(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     indexes = _index_map(db["api_keys"])
+    # hashed_secret is the authentication lookup key: must be unique.
+    assert ("hashed_secret", True) in indexes
     assert ("tenant_id", False) in indexes  # tenant-scoped queries
     # List + audit read sort: (tenant_id, created_at).
     assert any(

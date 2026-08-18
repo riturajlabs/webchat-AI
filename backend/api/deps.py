@@ -6,6 +6,7 @@ ADR-003 (double-submit CSRF) are enforced as dependencies.
 """
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Annotated, Any
 
@@ -14,6 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
 from backend.ai.registry import build_embedding_fallback, build_generation_fallback
+from backend.core.cache import RedisCacheStore
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import (
@@ -30,6 +32,7 @@ from backend.core.security import (
     API_KEY_PREFIX,
     csrf_tokens_match,
     decode_widget_session_token,
+    hash_refresh_token,
 )
 from backend.repositories import (
     MongoAdminAuditLogRepository,
@@ -75,6 +78,8 @@ from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
 from backend.workers.jobs.knowledge import enqueue_process_document
 
+logger = logging.getLogger("webchat_ai")
+
 
 def get_db() -> AsyncIOMotorDatabase[Any]:
     """Provide the shared application database handle."""
@@ -88,7 +93,17 @@ def get_auth_service(
 
     Emails are enqueued to the ARQ worker (`send_email` job) so API requests
     never block on mail delivery (ADR-001).
+
+    When Redis is available, role resolution is cached per-user (PERF-1, 60 s
+    TTL) to avoid a ``members`` lookup on every authenticated request.
     """
+    settings = get_settings()
+    role_cache: RedisCacheStore | None = None
+    if settings.redis_url:
+        role_cache = RedisCacheStore(
+            redis=get_redis(),
+            prefix=f"{settings.redis_prefix}:auth",
+        )
     return AuthService(
         users=MongoUserRepository(db),
         tenants=MongoTenantRepository(db),
@@ -96,6 +111,7 @@ def get_auth_service(
         refresh_tokens=MongoRefreshTokenRepository(db),
         audit=MongoAuditLogRepository(db),
         mail_dispatcher=enqueue_email,
+        role_cache=role_cache,
     )
 
 
@@ -202,14 +218,22 @@ def get_rag_service(
     Retrieval goes through the vector repository, which is always tenant-scoped
     (ADR-008).
     """
+    settings = get_settings()
+    rag_cache: RedisCacheStore | None = None
+    if settings.redis_url:
+        rag_cache = RedisCacheStore(
+            redis=get_redis(),
+            prefix=f"{settings.redis_prefix}:rag",
+        )
     return RagService(
         websites=MongoWebsiteRepository(db),
         vector=get_vector_repository(db),
-        embedder=build_embedding_fallback(max_retries=get_settings().chat_embedding_max_retries),
+        embedder=build_embedding_fallback(max_retries=settings.chat_embedding_max_retries),
         generation=build_generation_fallback(),
         sessions=MongoChatSessionRepository(db),
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),
+        cache=rag_cache,
     )
 
 
@@ -498,6 +522,44 @@ class RateLimitDependency:
             raise RateLimitExceededError("Too many requests. Please try again later.")
 
 
+class RefreshRateLimitDependency:
+    """Per-session-token sliding-window limiter for the /refresh endpoint (SEC-7).
+
+    Keyed by the SHA-256 prefix of the refresh token cookie, so:
+    - Each rotated token gets a fresh window (normal browser refreshes are unaffected).
+    - A stolen token pair is throttled to ``refresh_rate_limit_per_minute`` attempts.
+    - Different users / sessions are fully isolated.
+
+    Runs *before* the CSRF check so abuse is blocked at minimal cost.
+    Fails closed on Redis outage (503), consistent with ``RateLimitDependency``.
+    """
+
+    def __init__(self) -> None:
+        pass  # limit/window read from settings at call time
+
+    async def __call__(self, request: Request) -> None:
+        settings = get_settings()
+        if not settings.rate_limit_enabled:
+            return
+        raw_token = request.cookies.get(settings.refresh_cookie_name, "")
+        if not raw_token:
+            return  # endpoint rejects with 401 anyway
+        token_hash = hash_refresh_token(raw_token)
+        limiter = SlidingWindowRateLimiter(
+            _RedisRateLimitStore(get_redis()),
+            limit=settings.refresh_rate_limit_per_minute,
+            window_seconds=60,
+        )
+        try:
+            allowed = await limiter.consume(f"rl:refresh:{token_hash[:16]}")
+        except Exception as exc:
+            raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
+        if not allowed:
+            raise RateLimitExceededError(
+                "Too many refresh attempts. Please try again later."
+            )
+
+
 # Per-endpoint limits (Phase 2 auth abuse protection, ADR-004).
 register_limiter = RateLimitDependency(limit=10, window_seconds=3600)
 login_limiter = RateLimitDependency(limit=20, window_seconds=900)
@@ -532,6 +594,10 @@ webhook_limiter = RateLimitDependency(limit=600, window_seconds=3600)
 # Phase 6 chat abuse protection (ADR-004 per-widget message limit; dashboard
 # chat uses the same budget until the widget API lands in Phase 8).
 chat_limiter = RateLimitDependency(limit=60, window_seconds=60)
+# SEC-7 per-session-token refresh abuse protection: keyed by the refresh
+# token's SHA-256 prefix so each rotated token gets a fresh window while a
+# stolen token pair is throttled (ADR-004).
+refresh_limiter = RefreshRateLimitDependency()
 
 
 async def enforce_api_key_rate_limit(
@@ -595,7 +661,17 @@ class WidgetRateLimitDependency:
             return
         limit = self.limit
         if limit is None and self.limit_setting is not None:
-            limit = int(getattr(settings, self.limit_setting))
+            try:
+                limit = int(getattr(settings, self.limit_setting))
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.error(
+                    "widget_rate_limit misconfigured setting=%s error=%s",
+                    self.limit_setting,
+                    exc,
+                )
+                raise ServiceUnavailableError(
+                    "Rate limiter is temporarily unavailable."
+                ) from exc
         if limit is None or self.window_seconds is None:
             return
         limiter = SlidingWindowRateLimiter(
@@ -612,9 +688,17 @@ class WidgetRateLimitDependency:
 
 
 def widget_visitor_id(request: Request) -> str:
-    """Anonymous visitor id from the widget session claims (`"anon"` fallback)."""
+    """Visitor id from widget session claims, with IP-scoped fallback.
+
+    When claims are missing or lack a ``visitor_id``, the fallback includes
+    the client IP so that different visitors do not share a single rate-limit
+    bucket (one abusive client cannot exhaust the budget for everyone).
+    """
     claims = getattr(request.state, "widget_claims", None) or {}
-    return str(claims.get("visitor_id") or "anon")
+    vid = claims.get("visitor_id")
+    if vid:
+        return str(vid)
+    return f"anon:{client_ip(request)}"
 
 
 def _widget_rate_limit_key(request: Request) -> str:

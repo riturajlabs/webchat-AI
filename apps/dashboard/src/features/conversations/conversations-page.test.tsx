@@ -360,4 +360,40 @@ describe('ConversationDetailPage', () => {
 
     expect(mutateAsync).not.toHaveBeenCalled();
   });
+
+  it('renders distinct messages even when timestamps collide', () => {
+    const duplicateTime: ConversationDetail = {
+      ...DETAIL,
+      messages: [
+        {
+          role: 'user',
+          content: 'Hello',
+          sources: [],
+          response_time: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          created_at: '2026-08-01T10:00:00Z',
+        },
+        {
+          role: 'assistant',
+          content: 'Hi there',
+          sources: [],
+          response_time: 0.5,
+          input_tokens: 10,
+          output_tokens: 5,
+          created_at: '2026-08-01T10:00:00Z',
+        },
+      ],
+    };
+    mockedUseConversation.mockReturnValue({
+      data: duplicateTime,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useConversation>);
+    renderDetailPage();
+    expect(screen.getByText('Hello')).toBeInTheDocument();
+    expect(screen.getByText('Hi there')).toBeInTheDocument();
+  });
 });
