@@ -37,6 +37,7 @@ from backend.api.deps import (
     widget_visitor_limiter,
 )
 from backend.api.sse import sse, stream_answer_with_usage
+from backend.core.config import get_settings
 from backend.core.errors import AppError, SpamRejectedError
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
@@ -147,6 +148,7 @@ async def widget_chat(
             visitor_id=claims.get("visitor_id"),
             user_id=None,
         )
+        buffer_ms = get_settings().sse_buffer_ms
         async for frame in stream_answer_with_usage(
             request,
             stream,
@@ -154,6 +156,7 @@ async def widget_chat(
             tenant_id=claims["tenant_id"],
             user_id=None,
             website_id=claims["website_id"],
+            buffer_ms=buffer_ms,
         ):
             yield frame
 

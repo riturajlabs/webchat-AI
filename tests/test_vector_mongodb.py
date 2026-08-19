@@ -17,16 +17,37 @@ from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.repositories.vector.mongodb import MongoVectorRepository
 
 
-def _chunk(chunk_text: str, embedding: list[float], *, index: int) -> dict:
+def _chunk(
+    chunk_text: str,
+    embedding: list[float],
+    *,
+    index: int,
+    tenant_id: str = "tenant-a",
+    website_id: str = "site-a",
+) -> dict:
     chunk = KnowledgeChunk.new(
-        tenant_id="tenant-a",
-        website_id="site-a",
+        tenant_id=tenant_id,
+        website_id=website_id,
         document_id="doc-a",
         chunk_text=chunk_text,
         embedding=embedding,
         chunk_index=index,
     )
     return chunk.to_doc()
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_is_scoped_to_tenant_and_website() -> None:
+    docs = [
+        _chunk("same tenant and website", [1.0, 0.0], index=0),
+        _chunk("different website", [1.0, 0.0], index=1, website_id="site-b"),
+        _chunk("different tenant", [1.0, 0.0], index=2, tenant_id="tenant-b"),
+    ]
+    repo = MongoVectorRepository(_FakeDb(FakeCollection(docs)))
+
+    chunks = await repo.list_chunks("tenant-a", "site-a")
+
+    assert [chunk.chunk_text for chunk in chunks] == ["same tenant and website"]
 
 
 def _vector_index_definition() -> dict:

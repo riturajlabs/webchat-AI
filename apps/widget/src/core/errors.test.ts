@@ -111,9 +111,23 @@ describe('errorFromSseCode', () => {
     expect(errorFromSseCode('MESSAGE_LIMIT_REACHED', 'm').code).toBe('limit');
     expect(errorFromSseCode('SPAM_REJECTED', 'm').code).toBe('invalid');
     expect(errorFromSseCode('RATE_LIMIT_EXCEEDED', 'm').code).toBe('limit');
+    expect(errorFromSseCode('INVALID_CREDENTIALS', 'm').code).toBe('unauthorized');
+    expect(errorFromSseCode('GENERATION_TIMEOUT', 'm').code).toBe('timeout');
+    expect(errorFromSseCode('AI_UNAVAILABLE', 'm').code).toBe('ai_unavailable');
+    expect(errorFromSseCode('VALIDATION_ERROR', 'm').code).toBe('validation');
     expect(errorFromSseCode('WIDGET_DOMAIN_NOT_CONFIGURED', 'm').code).toBe(
       'domain_not_configured',
     );
+  });
+
+  it('provides actionable messages for AI and validation failures', () => {
+    expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').userMessage).toBe(
+      'The assistant is temporarily unavailable. Please try again.',
+    );
+    expect(errorFromSseCode('INVALID_QUESTION', 'internal detail').userMessage).toBe(
+      'Please check your message and try again.',
+    );
+    expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').retryable).toBe(true);
   });
 
   it('surfaces an invalid widget id with an actionable message', () => {

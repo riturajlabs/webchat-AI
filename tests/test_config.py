@@ -230,8 +230,8 @@ def test_latency_settings_are_fail_fast_by_default() -> None:
     assert settings.chat_embedding_max_retries == 1
     assert settings.chat_retrieval_cache_ttl_seconds == 900
     assert settings.chat_retrieval_cache_size == 512
-    assert settings.chat_context_max_chars == 12000
-    assert settings.chat_context_min_score == 0.0
+    assert settings.chat_context_max_chars == 20000
+    assert settings.chat_context_min_score == 0.25
 
 
 # --- embedding fallback configuration (ADR-009, cloud providers) ---

@@ -78,6 +78,10 @@ class MongoVectorRepository(VectorRepository):
         )
         return int(result.deleted_count)
 
+    async def list_chunks(self, tenant_id: str, website_id: str) -> list[KnowledgeChunk]:
+        cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
+        return [KnowledgeChunk.from_doc(item) async for item in cursor]
+
     async def similarity_search(
         self,
         tenant_id: str,
@@ -93,7 +97,7 @@ class MongoVectorRepository(VectorRepository):
                     "path": "embedding",
                     "queryVector": query_embedding,
                     "limit": top_k,
-                    "numCandidates": max(top_k * 10, 50),
+                    "numCandidates": max(top_k * 20, 100),
                     "filter": {
                         "tenant_id": tenant_id,
                         "website_id": website_id,

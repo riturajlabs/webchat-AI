@@ -116,6 +116,7 @@ class GoogleGeminiClient:
                 "system_instruction": system,
                 "max_output_tokens": self._max_output_tokens,
                 "temperature": self._temperature,
+                "top_p": 0.95,
             },
         }
         try:

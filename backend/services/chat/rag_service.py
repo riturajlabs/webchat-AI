@@ -30,6 +30,7 @@ from backend.ai.gemini import GenerationClient
 from backend.core.cache import CacheStore
 from backend.core.config import get_settings
 from backend.core.errors import AppError, SessionNotFoundError
+from backend.core.logging import get_request_id
 from backend.core.privacy import content_hash
 from backend.core.prompt_guard import validate_response
 from backend.core.security import new_id
@@ -53,6 +54,12 @@ from backend.repositories.chat_session_repository import ChatSessionRepository
 from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
 from backend.repositories.website_repository import WebsiteRepository
+from backend.services.chat.retrieval_strategy import (
+    HybridRetrievalStrategy,
+    RetrievalMetricsInfo,
+    RetrievalStrategy,
+    VectorRetrievalStrategy,
+)
 from backend.services.knowledge.embedding import EmbeddingClient
 from backend.workers.timing import chat_stage
 
@@ -97,6 +104,7 @@ class RagService:
         top_k: int | None = None,
         prompt_version: int | None = None,
         memory_turns: int | None = None,
+        retrieval_strategy: RetrievalStrategy | None = None,
     ) -> None:
         settings = get_settings()
         self._websites = websites
@@ -122,6 +130,15 @@ class RagService:
         self._embedding_cache_ttl = settings.embedding_cache_ttl_seconds
         self._retrieval_cache_size = settings.chat_retrieval_cache_size
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
+        # Retrieval strategy: explicit override or config-driven default.
+        if retrieval_strategy is not None:
+            self._retrieval_strategy = retrieval_strategy
+        elif settings.enable_hybrid_search:
+            self._retrieval_strategy = HybridRetrievalStrategy(
+                rrf_k=settings.hybrid_rrf_k,
+            )
+        else:
+            self._retrieval_strategy = VectorRetrievalStrategy()
 
     async def _embed_question(self, question: str) -> tuple[list[float], bool]:
         """Embed `question`, caching identical questions across turns.
@@ -153,13 +170,23 @@ class RagService:
         tenant_id: str,
         website_id: str,
         question: str,
-    ) -> tuple[list[float], list[VectorSearchResult], float, float, bool, bool]:
+    ) -> tuple[
+        list[float],
+        list[VectorSearchResult],
+        float,
+        float,
+        bool,
+        bool,
+        RetrievalMetricsInfo,
+    ]:
         """Embed + search, memoizing repeats within the retrieval TTL.
 
         Returns `(query_vector, results, embedding_ms, retrieval_ms,
-        embedding_cache_hit, retrieval_cache_hit)`. A retrieval-cache hit
-        reports zero stage latency (the work was already done) and skips both
-        the embedding provider and the vector query.
+        embedding_cache_hit, retrieval_cache_hit, retrieval_metrics)`.  A
+        retrieval-cache hit reports zero stage latency (the work was already
+        done) and skips both the embedding provider and the vector query.
+        The retrieval strategy (vector-only or hybrid) is applied *after*
+        the cache lookup so cached entries store raw vector results.
         """
         cache = self._cache
         cache_key = f"{website_id}:{question.strip().lower()}"
@@ -177,14 +204,22 @@ class RagService:
                     entry = json.loads(raw)
                     if now - entry["cached_at"] < self._retrieval_cache_ttl:
                         vector = entry["vector"]
-                        results = [
+                        raw_results = [
                             VectorSearchResult(
                                 chunk=KnowledgeChunk(**r["chunk"]),
                                 score=r["score"],
                             )
                             for r in entry["results"]
                         ]
-                        return vector, results, 0.0, 0.0, True, True
+                        # Apply retrieval strategy to cached raw results.
+                        all_chunks = await self._load_all_chunks(tenant_id, website_id)
+                        results, metrics = self._retrieval_strategy.search(
+                            query=question,
+                            vector_results=raw_results,
+                            all_chunks=all_chunks,
+                            top_k=self._top_k,
+                        )
+                        return vector, results, 0.0, 0.0, True, True, metrics
                 except (json.JSONDecodeError, TypeError, KeyError):
                     pass
         t0 = time.perf_counter()
@@ -193,24 +228,37 @@ class RagService:
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
         async with chat_stage("retrieval.vector_search"):
-            results = await self._vector.similarity_search(
+            raw_results = await self._vector.similarity_search(
                 tenant_id, website_id, query_vector, top_k=self._top_k
             )
         retrieval_ms = (time.perf_counter() - t1) * 1000.0
+        # Cache raw vector results (before strategy) so deserialization
+        # always produces clean VectorSearchResult/KnowledgeChunk objects.
         if retrieval_enabled:
             assert cache is not None  # guaranteed by retrieval_enabled
             entry = {
                 "vector": query_vector,
                 "results": [
                     {"chunk": r.chunk.model_dump(mode="json"), "score": r.score}
-                    for r in results
+                    for r in raw_results
                 ],
                 "cached_at": _now(),
             }
             await cache.set(
                 "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
             )
-        return query_vector, results, embedding_ms, retrieval_ms, embedding_cache_hit, False
+        # Apply retrieval strategy (vector-only or hybrid) to raw results.
+        all_chunks = await self._load_all_chunks(tenant_id, website_id)
+        results, metrics = self._retrieval_strategy.search(
+            query=question,
+            vector_results=raw_results,
+            all_chunks=all_chunks,
+            top_k=self._top_k,
+        )
+        return (
+            query_vector, results, embedding_ms, retrieval_ms,
+            embedding_cache_hit, False, metrics,
+        )
 
     async def stream_answer(
         self,
@@ -227,12 +275,13 @@ class RagService:
         Events: `sources`, `message` (one per delta), `done`, or `error`.
         """
         started = time.monotonic()
-        # perf_counter for the phase breakdown; only measured when the opt-in
-        # timing flag is on (the value is unused otherwise).
         perf_started = time.perf_counter()
+        website_lookup_ms: float = 0.0
         try:
+            t_lookup = time.perf_counter()
             async with chat_stage("website.lookup"):
                 website = await self._websites.find_by_id(tenant_id, website_id)
+            website_lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
             if website is None:
                 yield _error_event("WEBSITE_NOT_FOUND", "Website not found.")
                 return
@@ -248,6 +297,7 @@ class RagService:
                 len(question),
             )
             async with chat_stage("session.resolve"):
+                t_session = time.perf_counter()
                 session = await self._ensure_session(
                     tenant_id=tenant_id,
                     website_id=website_id,
@@ -255,6 +305,7 @@ class RagService:
                     visitor_id=visitor_id,
                     user_id=user_id,
                 )
+                session_resolution_ms = (time.perf_counter() - t_session) * 1000.0
         except Exception as exc:
             yield _error_event(_error_code(exc), _safe_message(exc))
             return
@@ -268,8 +319,10 @@ class RagService:
             role=CHAT_ROLE_USER,
             content=question,
         )
+        t_user_persist = time.perf_counter()
         async with chat_stage("persist.user_message"):
             await self._messages.create(user_message)
+        user_message_persist_ms = (time.perf_counter() - t_user_persist) * 1000.0
 
         if website.knowledge_chunks == 0:
             async for event in self._emit_fallback(
@@ -301,6 +354,7 @@ class RagService:
                 retrieval_ms,
                 embedding_cache_hit,
                 retrieval_cache_hit,
+                retrieval_metrics,
             ) = retrieval
         except Exception as exc:
             history_task.cancel()
@@ -367,6 +421,7 @@ class RagService:
 
         yield {"event": "sources", "data": {"sources": sources}}
 
+        t_prompt = time.perf_counter()
         system_prompt = get_system_prompt(self._prompt_version)
         user_prompt = build_user_prompt(
             question=question,
@@ -374,6 +429,7 @@ class RagService:
             history=history,
             max_chars_per_chunk=self._max_chars_per_chunk,
         )
+        prompt_construction_ms = (time.perf_counter() - t_prompt) * 1000.0
         context_chars = sum(len(item.text) for item in context_items)
         logger.info(
             "chat_prompt tenant=%s website=%s prompt_version=%s context_items=%s "
@@ -396,8 +452,21 @@ class RagService:
             len(user_prompt),
         )
 
+        estimated_prompt_tokens = (len(system_prompt) + len(user_prompt)) // 4
+        logger.info(
+            "chat_prompt_size tenant=%s website=%s context_chars=%d "
+            "system_chars=%d user_chars=%d estimated_tokens=%d",
+            tenant_id,
+            website_id,
+            context_chars,
+            len(system_prompt),
+            len(user_prompt),
+            estimated_prompt_tokens,
+        )
+
         deltas: list[str] = []
         ttft_ms: float | None = None
+        provider_name: str | None = None
         try:
             t2 = time.perf_counter()
             async with chat_stage("generation.stream"):
@@ -407,9 +476,15 @@ class RagService:
                 ):
                     if ttft_ms is None:
                         ttft_ms = (time.perf_counter() - t2) * 1000.0
+                        if hasattr(self._generation, "active_provider"):
+                            provider_name = self._generation.active_provider
                     deltas.append(delta)
                     yield {"event": "message", "data": {"delta": delta}}
             generation_ms = (time.perf_counter() - t2) * 1000.0
+            if hasattr(self._generation, "active_provider"):
+                provider_name = self._generation.active_provider
+            elif hasattr(self._generation, "name"):
+                provider_name = self._generation.name
         except Exception as exc:
             logger.exception("answer generation failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
@@ -447,13 +522,17 @@ class RagService:
         assistant.latency_history_ms = _round_ms(history_ms)
         assistant.latency_generation_ms = _round_ms(generation_ms)
         assistant.latency_ttft_ms = _round_ms(ttft_ms)
+        assistant.latency_website_lookup_ms = _round_ms(website_lookup_ms)
+        assistant.latency_session_resolution_ms = _round_ms(session_resolution_ms)
+        assistant.latency_user_message_persist_ms = _round_ms(user_message_persist_ms)
+        assistant.latency_prompt_construction_ms = _round_ms(prompt_construction_ms)
         assistant.latency_total_ms = round(response_time * 1000.0, 2)
+        t_persist = time.perf_counter()
         async with chat_stage("persist.messages"):
             await self._messages.create(assistant)
-        async with chat_stage("persist.session_touch"):
-            await self._sessions.touch(session.session_id)
-        async with chat_stage("persist.usage"):
-            await self._usage.increment(
+        await asyncio.gather(
+            self._sessions.touch(session.session_id),
+            self._usage.increment(
                 tenant_id=tenant_id,
                 website_id=website_id,
                 date=usage_date_key(),
@@ -464,7 +543,18 @@ class RagService:
                     "output_tokens": usage.output_tokens,
                     "vector_queries": 1,
                 },
-            )
+            ),
+        )
+        persist_ms = (time.perf_counter() - t_persist) * 1000.0
+        assistant.latency_persist_ms = _round_ms(persist_ms)
+        total_ms = (time.perf_counter() - perf_started) * 1000.0
+
+        fallback_attempts = 0
+        if hasattr(self._generation, "last_latency_metrics"):
+            metrics = self._generation.last_latency_metrics
+            if metrics is not None:
+                fallback_attempts = metrics.fallback_attempts
+
         done_data: dict[str, Any] = {
             "message_id": assistant.id,
             "session_id": session.session_id,
@@ -476,7 +566,6 @@ class RagService:
             "fallback": False,
         }
         if self._timing_enabled:
-            total_ms = (time.perf_counter() - perf_started) * 1000.0
             done_data["timing"] = {
                 "embedding_ms": round(embedding_ms, 2),
                 "retrieval_ms": round(retrieval_ms, 2),
@@ -484,14 +573,33 @@ class RagService:
                 "history_ms": round(history_ms, 2),
                 "generation_ms": round(generation_ms, 2),
                 "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
+                "persist_ms": round(persist_ms, 2),
+                "website_lookup_ms": round(website_lookup_ms, 2),
+                "session_resolution_ms": round(session_resolution_ms, 2),
+                "user_message_persist_ms": round(user_message_persist_ms, 2),
+                "prompt_construction_ms": round(prompt_construction_ms, 2),
                 "total_ms": round(total_ms, 2),
+                "provider": provider_name,
+                "embedding_cache": "hit" if embedding_cache_hit else "miss",
+                "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
+                "context_chars": context_chars,
+                "estimated_prompt_tokens": estimated_prompt_tokens,
+                "fallback_attempts": fallback_attempts,
+                # Hybrid retrieval metrics (always present; "vector" when
+                # hybrid search is disabled).
+                "retrieval_method": retrieval_metrics.retrieval_method,
+                "vector_result_count": retrieval_metrics.vector_result_count,
+                "keyword_result_count": retrieval_metrics.keyword_result_count,
+                "final_result_count": retrieval_metrics.final_result_count,
             }
             logger.info(
                 "rag_timing",
                 extra={
+                    "request_id": get_request_id(),
                     "tenant_id": tenant_id,
                     "website_id": website_id,
                     "session_id": session.session_id,
+                    "provider": provider_name,
                     "embedding_cache": "hit" if embedding_cache_hit else "miss",
                     "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
                     "embedding_ms": round(embedding_ms, 2),
@@ -500,7 +608,19 @@ class RagService:
                     "history_ms": round(history_ms, 2),
                     "generation_ms": round(generation_ms, 2),
                     "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
+                    "persist_ms": round(persist_ms, 2),
+                    "website_lookup_ms": round(website_lookup_ms, 2),
+                    "session_resolution_ms": round(session_resolution_ms, 2),
+                    "user_message_persist_ms": round(user_message_persist_ms, 2),
+                    "prompt_construction_ms": round(prompt_construction_ms, 2),
                     "total_ms": round(total_ms, 2),
+                    "context_chars": context_chars,
+                    "estimated_prompt_tokens": estimated_prompt_tokens,
+                    "fallback_attempts": fallback_attempts,
+                    "retrieval_method": retrieval_metrics.retrieval_method,
+                    "vector_result_count": retrieval_metrics.vector_result_count,
+                    "keyword_result_count": retrieval_metrics.keyword_result_count,
+                    "final_result_count": retrieval_metrics.final_result_count,
                 },
             )
         yield {"event": "done", "data": done_data}
@@ -536,6 +656,19 @@ class RagService:
         recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
         return [(message.role, message.content) for message in recent]
 
+    async def _load_all_chunks(
+        self, tenant_id: str, website_id: str
+    ) -> list[VectorSearchResult]:
+        """Fetch all knowledge chunks for a tenant/website.
+
+        Used by the hybrid retrieval strategy for keyword scoring.  Returns
+        ``VectorSearchResult`` objects with a uniform score of 0.5 (the
+        keyword scorer will re-rank them).  Only called when the retrieval
+        strategy is hybrid — never when ``enable_hybrid_search`` is ``False``.
+        """
+        chunks = await self._vector.list_chunks(tenant_id, website_id)
+        return [VectorSearchResult(chunk=chunk, score=0.5) for chunk in chunks]
+
     @staticmethod
     def _provider_name(embedder: Any) -> str:
         """Best-effort provider label for observability (never fails)."""
@@ -557,7 +690,8 @@ class RagService:
         """
         items: list[ContextItem] = []
         sources: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+        seen_text: set[tuple[str, str]] = set()
+        seen_doc: set[str] = set()
         # `chat_context_max_chars <= 0` means "no total budget" (disabled).
         budget = self._max_context_chars if self._max_context_chars > 0 else None
         for _index, result in enumerate(results, start=1):
@@ -566,10 +700,18 @@ class RagService:
             chunk = result.chunk
             url = str(chunk.metadata.get("source_url") or "")
             title = str(chunk.metadata.get("title") or url or "Untitled")
-            key = (url, chunk.chunk_text)
-            if key in seen:
+            # Document-level dedup: keep only the highest-scored chunk per
+            # document to avoid redundant context from the same source.
+            doc_id = chunk.document_id
+            if doc_id and doc_id in seen_doc:
                 continue
-            seen.add(key)
+            if doc_id:
+                seen_doc.add(doc_id)
+            # Text-level dedup: skip identical chunk text from different docs.
+            text_key = (url, chunk.chunk_text)
+            if text_key in seen_text:
+                continue
+            seen_text.add(text_key)
             text = chunk.chunk_text
             if len(text) > self._max_chars_per_chunk:
                 text = text[: self._max_chars_per_chunk]
@@ -630,15 +772,15 @@ class RagService:
         assistant.response_time = response_time
         async with chat_stage("persist.messages"):
             await self._messages.create(assistant)
-        async with chat_stage("persist.session_touch"):
-            await self._sessions.touch(session.session_id)
-        async with chat_stage("persist.usage"):
-            await self._usage.increment(
+        await asyncio.gather(
+            self._sessions.touch(session.session_id),
+            self._usage.increment(
                 tenant_id=tenant_id,
                 website_id=website_id,
                 date=usage_date_key(),
                 counters={"chats": 1, "messages": 2, "vector_queries": vector_queries},
-            )
+            ),
+        )
         yield {"event": "sources", "data": {"sources": []}}
         yield {"event": "message", "data": {"delta": UNKNOWN_ANSWER_FALLBACK}}
         yield {

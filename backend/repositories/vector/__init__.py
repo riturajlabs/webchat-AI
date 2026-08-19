@@ -11,6 +11,11 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from backend.repositories.vector.base import VectorRepository, VectorSearchResult
+from backend.repositories.vector.hybrid import (
+    HybridSearcher,
+    keyword_search,
+    reciprocal_rank_fusion,
+)
 from backend.repositories.vector.mongodb import MongoVectorRepository
 
 
@@ -20,8 +25,11 @@ def get_vector_repository(db: AsyncIOMotorDatabase[Any]) -> VectorRepository:
 
 
 __all__ = [
+    "HybridSearcher",
+    "MongoVectorRepository",
     "VectorRepository",
     "VectorSearchResult",
-    "MongoVectorRepository",
     "get_vector_repository",
+    "keyword_search",
+    "reciprocal_rank_fusion",
 ]

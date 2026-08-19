@@ -14,6 +14,8 @@ export type WidgetErrorCode =
   | 'limit'
   | 'server'
   | 'invalid'
+  | 'validation'
+  | 'ai_unavailable'
   | 'config'
   | 'widget_not_found'
   | 'widget_disabled'
@@ -37,6 +39,8 @@ const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
   limit: 'Message limit reached',
   server: 'Sorry, I couldn’t process that. Please try again.',
   invalid: 'That request could not be sent',
+  validation: 'Please check your message and try again.',
+  ai_unavailable: 'The assistant is temporarily unavailable. Please try again.',
   config: 'Unable to load widget settings',
   widget_not_found: 'Invalid widget ID',
   widget_disabled: 'This assistant is currently unavailable',
@@ -52,6 +56,7 @@ function isRetryable(code: WidgetErrorCode): boolean {
     case 'timeout':
     case 'unauthorized':
     case 'server':
+    case 'ai_unavailable':
     case 'session':
       return true;
     default:
@@ -120,6 +125,17 @@ const BACKEND_CODE_MAP: Record<string, WidgetErrorCode> = {
   MESSAGE_LIMIT_REACHED: 'limit',
   SPAM_REJECTED: 'invalid',
   RATE_LIMIT_EXCEEDED: 'limit',
+  INVALID_CREDENTIALS: 'unauthorized',
+  INVALID_TOKEN: 'unauthorized',
+  TOKEN_EXPIRED: 'unauthorized',
+  GENERATION_TIMEOUT: 'timeout',
+  GENERATION_FAILED: 'ai_unavailable',
+  GENERATION_UNAVAILABLE: 'ai_unavailable',
+  AI_UNAVAILABLE: 'ai_unavailable',
+  EMBEDDING_FAILED: 'ai_unavailable',
+  EMBEDDING_UNAVAILABLE: 'ai_unavailable',
+  INVALID_QUESTION: 'validation',
+  VALIDATION_ERROR: 'validation',
   WIDGET_ORIGIN_NOT_ALLOWED: 'origin',
   WIDGET_DOMAIN_NOT_CONFIGURED: 'domain_not_configured',
 };

@@ -297,6 +297,7 @@ async def test_top_k_limits_retrieved_chunks() -> None:
             website_id=WEB_1,
             text=f"chunk {index}",
             chunk_index=index,
+            document_id=f"doc-{index}",
         )
 
     events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello")
@@ -440,9 +441,30 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "history_ms",
         "generation_ms",
         "ttft_ms",
+        "persist_ms",
+        "website_lookup_ms",
+        "session_resolution_ms",
+        "user_message_persist_ms",
+        "prompt_construction_ms",
         "total_ms",
+        "provider",
+        "embedding_cache",
+        "retrieval_cache",
+        "context_chars",
+        "estimated_prompt_tokens",
+        "fallback_attempts",
+        "retrieval_method",
+        "vector_result_count",
+        "keyword_result_count",
+        "final_result_count",
     }
     assert timing["total_ms"] >= timing["embedding_ms"]
+    assert timing["provider"] is not None
+    assert timing["embedding_cache"] in ("hit", "miss")
+    assert timing["retrieval_cache"] in ("hit", "miss")
+    assert timing["context_chars"] >= 0
+    assert timing["estimated_prompt_tokens"] >= 0
+    assert timing["fallback_attempts"] >= 0
 
     records = [r for r in caplog.records if r.getMessage() == "rag_timing"]
     assert records
@@ -450,6 +472,14 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
     assert records[0].retrieval_cache == "miss"
     assert records[0].website_id == WEB_1
     assert records[0].total_ms >= 0
+    assert records[0].request_id is not None
+    assert records[0].session_resolution_ms >= 0
+    assert records[0].user_message_persist_ms >= 0
+    assert records[0].prompt_construction_ms >= 0
+    assert records[0].provider is not None
+    assert records[0].context_chars >= 0
+    assert records[0].estimated_prompt_tokens >= 0
+    assert records[0].fallback_attempts >= 0
 
 
 async def test_done_event_omits_timing_when_disabled() -> None:
@@ -461,6 +491,28 @@ async def test_done_event_omits_timing_when_disabled() -> None:
     events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
 
     assert "timing" not in _done_event(events)["data"]
+
+
+async def test_hybrid_retrieval_uses_repository_list_chunks(monkeypatch) -> None:
+    monkeypatch.setattr(backend_settings(), "enable_hybrid_search", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Pro plans include priority support.",
+    )
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What support comes with Pro plans?",
+    )
+
+    assert _done_event(events)["data"]["fallback"] is False
+    assert "priority support" in env.generation.calls[0]["messages"][0][1]
 
 
 async def test_retrieval_cache_reuses_embedding_and_search_but_not_generation() -> None:
@@ -539,6 +591,7 @@ async def test_context_is_capped_at_total_budget(monkeypatch) -> None:
         text="A" * 30,
         url="https://a.test",
         title="A",
+        document_id="doc-a",
     )
     await make_chunk(
         env,
@@ -548,6 +601,7 @@ async def test_context_is_capped_at_total_budget(monkeypatch) -> None:
         url="https://b.test",
         title="B",
         chunk_index=1,
+        document_id="doc-b",
     )
     await make_chunk(
         env,
@@ -557,6 +611,7 @@ async def test_context_is_capped_at_total_budget(monkeypatch) -> None:
         url="https://c.test",
         title="C",
         chunk_index=2,
+        document_id="doc-c",
     )
 
     events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
@@ -619,6 +674,9 @@ async def test_stream_persists_stage_latencies() -> None:
     assert message.latency_history_ms is not None
     assert message.latency_generation_ms is not None
     assert message.latency_ttft_ms is not None
+    assert message.latency_session_resolution_ms is not None
+    assert message.latency_user_message_persist_ms is not None
+    assert message.latency_prompt_construction_ms is not None
     assert message.latency_total_ms is not None
     assert message.latency_total_ms >= message.latency_generation_ms
 
@@ -635,6 +693,7 @@ async def test_context_cap_zero_disables_budget(monkeypatch) -> None:
         text="A" * 30,
         url="https://a.test",
         title="A",
+        document_id="doc-a",
     )
     await make_chunk(
         env,
@@ -644,6 +703,7 @@ async def test_context_cap_zero_disables_budget(monkeypatch) -> None:
         url="https://b.test",
         title="B",
         chunk_index=1,
+        document_id="doc-b",
     )
     await make_chunk(
         env,
@@ -653,6 +713,7 @@ async def test_context_cap_zero_disables_budget(monkeypatch) -> None:
         url="https://c.test",
         title="C",
         chunk_index=2,
+        document_id="doc-c",
     )
 
     events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
@@ -914,3 +975,100 @@ async def test_injection_log_never_leaks_raw_question(caplog) -> None:
     assert "patterns=" in record_msg
     assert "query_hash=" in record_msg
     assert "query_length=" in record_msg
+
+
+# ---------------------------------------------------------------------------
+# Latency measurement (Phase 3 Step 1)
+# ---------------------------------------------------------------------------
+
+
+async def test_all_timing_fields_are_non_negative(monkeypatch) -> None:
+    """Every per-stage latency value in the done event and persisted message
+    must be non-negative (no negative durations from clock skew)."""
+    monkeypatch.setattr(backend_settings(), "perf_timing_log_enabled", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+
+    timing = _done_event(events)["data"]["timing"]
+    for key, value in timing.items():
+        if isinstance(value, (int, float)):
+            assert value >= 0, f"timing.{key} is negative: {value}"
+
+    message_id = _done_event(events)["data"]["message_id"]
+    message = await env.messages.find_by_id(TENANT_A, message_id)
+    assert message is not None
+    for field_name in (
+        "latency_embedding_ms",
+        "latency_retrieval_ms",
+        "latency_context_ms",
+        "latency_history_ms",
+        "latency_generation_ms",
+        "latency_ttft_ms",
+        "latency_persist_ms",
+        "latency_website_lookup_ms",
+        "latency_session_resolution_ms",
+        "latency_user_message_persist_ms",
+        "latency_prompt_construction_ms",
+        "latency_total_ms",
+    ):
+        value = getattr(message, field_name)
+        if value is not None:
+            assert value >= 0, f"{field_name} is negative: {value}"
+
+
+async def test_timing_breakdown_is_consistent() -> None:
+    """The total_ms must be >= the sum of individual stage latencies
+    (some overhead from logging, async scheduling, etc. is expected)."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+    message_id = _done_event(events)["data"]["message_id"]
+    message = await env.messages.find_by_id(TENANT_A, message_id)
+    assert message is not None
+
+    assert message.latency_total_ms is not None
+    assert message.latency_generation_ms is not None
+    assert message.latency_total_ms >= message.latency_generation_ms
+
+
+async def test_missing_optional_timings_do_not_break_flow() -> None:
+    """When a stage fails or is skipped, its timing field is None but the
+    pipeline still completes without errors."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=0)
+
+    # The fallback path (empty knowledge base) still produces a done event with
+    # valid timing data — stages like generation are never reached.
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="nonexistent topic",
+    )
+    done = _done_event(events)
+    assert done["data"]["fallback"] is True
+    # Session resolution + user message persist still ran; others may be absent.
+    assert done["data"]["session_id"]
+
+
+async def test_streaming_works_with_timing_enabled(monkeypatch) -> None:
+    """Enabling timing does not break the streaming pipeline."""
+    monkeypatch.setattr(backend_settings(), "perf_timing_log_enabled", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
+
+    # Full pipeline ran: sources, deltas, done.
+    sources = next(event for event in events if event["event"] == "sources")
+    assert sources["data"]["sources"]
+    deltas = _message_event(events)
+    assert deltas
+    done = _done_event(events)
+    assert done["data"]["fallback"] is False

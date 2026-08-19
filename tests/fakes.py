@@ -829,6 +829,13 @@ class FakeVectorRepository:
                 deleted += 1
         return deleted
 
+    async def list_chunks(self, tenant_id: str, website_id: str) -> list[KnowledgeChunk]:
+        return [
+            chunk
+            for chunk in self._chunks.values()
+            if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+        ]
+
     async def similarity_search(
         self,
         tenant_id: str,
@@ -1821,12 +1828,15 @@ class FakeGenerationClient:
     tests exercise the error path.
     """
 
+    name = "fake"
+
     def __init__(self, deltas: list[str] | None = None) -> None:
         self.calls: list[dict] = []
         self.deltas = deltas if deltas is not None else ["Hello", " world!"]
         self.failures: list[Exception] = []
         self.input_tokens = 10
         self.output_tokens = 20
+        self._active_provider: str | None = None
 
     @property
     def usage(self) -> GenerationUsage:
@@ -1834,6 +1844,11 @@ class FakeGenerationClient:
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
         )
+
+    @property
+    def active_provider(self) -> str | None:
+        """Name of the provider that served the most recent request."""
+        return self._active_provider
 
     def stream_generate(
         self,
@@ -1846,6 +1861,7 @@ class FakeGenerationClient:
             raise self.failures.pop(0)
 
         async def _stream():
+            self._active_provider = self.name
             for delta in self.deltas:
                 yield delta
 

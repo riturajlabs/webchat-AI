@@ -280,3 +280,85 @@ async def test_embedding_logs_switch_and_all_failed(caplog) -> None:
     assert "switching to jina" in caplog.text
     assert "no providers left" in caplog.text
     assert "All embedding providers failed" in caplog.text
+
+
+# ---- Provider latency metrics (Phase 3 Step 2) ----
+
+
+async def test_generation_latency_metrics_are_tracked() -> None:
+    """Provider latency metrics are captured for the most recent request."""
+    first = StubGenerationClient(name="gemini", deltas=("hello",))
+    fallback = FallbackGenerationClient([first])
+
+    assert fallback.last_latency_metrics is None
+
+    deltas = []
+    async for delta in fallback.stream_generate(system="s", messages=[("user", "q")]):
+        deltas.append(delta)
+
+    metrics = fallback.last_latency_metrics
+    assert metrics is not None
+    assert metrics.provider == "gemini"
+    assert metrics.success is True
+    assert metrics.first_token_latency_ms is not None
+    assert metrics.first_token_latency_ms >= 0
+    assert metrics.total_generation_latency_ms >= 0
+    assert metrics.fallback_attempts == 0
+    assert metrics.input_tokens == 3
+    assert metrics.output_tokens == 4
+
+
+async def test_generation_latency_metrics_on_fallback() -> None:
+    """Latency metrics track fallback attempts when primary fails."""
+    first = StubGenerationClient(
+        name="gemini", raise_before=GenerationUnavailableError("down")
+    )
+    second = StubGenerationClient(name="groq", deltas=("fallback",))
+    fallback = FallbackGenerationClient([first, second])
+
+    deltas = []
+    async for delta in fallback.stream_generate(system="s", messages=[("user", "q")]):
+        deltas.append(delta)
+
+    metrics = fallback.last_latency_metrics
+    assert metrics is not None
+    assert metrics.provider == "groq"
+    assert metrics.success is True
+    assert metrics.fallback_attempts == 1
+    assert metrics.first_token_latency_ms is not None
+
+
+async def test_generation_latency_metrics_on_failure() -> None:
+    """Latency metrics capture failure state when all providers fail."""
+    first = StubGenerationClient(
+        name="gemini", raise_before=GenerationUnavailableError("down")
+    )
+    second = StubGenerationClient(
+        name="groq", raise_before=GenerationUnavailableError("also down")
+    )
+    fallback = FallbackGenerationClient([first, second])
+
+    with pytest.raises(GenerationUnavailableError):
+        async for _ in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+
+    metrics = fallback.last_latency_metrics
+    assert metrics is not None
+    assert metrics.success is False
+    assert metrics.fallback_attempts == 2
+    assert metrics.error is not None
+
+
+async def test_generation_latency_metrics_empty_chain() -> None:
+    """Latency metrics are set when all providers fail with an empty chain."""
+    fallback = FallbackGenerationClient([])
+
+    with pytest.raises(GenerationUnavailableError):
+        async for _ in fallback.stream_generate(system="s", messages=[("user", "q")]):
+            pass
+
+    metrics = fallback.last_latency_metrics
+    assert metrics is not None
+    assert metrics.success is False
+    assert metrics.fallback_attempts == 0
+    assert metrics.error is not None

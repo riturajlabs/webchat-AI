@@ -88,4 +88,62 @@ describe('Conversation', () => {
       streaming: false,
     });
   });
+
+  it('beginBatch/endBatch defers onChange until endBatch', () => {
+    const conversation = new Conversation();
+    let callCount = 0;
+    conversation.onChange = () => {
+      callCount += 1;
+    };
+    conversation.addUserMessage('q');
+    const initialCalls = callCount;
+
+    conversation.beginBatch();
+    const id = conversation.startAssistantTurn();
+    conversation.appendDelta(id, 'Hel');
+    conversation.appendDelta(id, 'lo');
+    // No onChange during batch
+    expect(callCount).toBe(initialCalls);
+    conversation.endBatch();
+    // Exactly one onChange after batch ends
+    expect(callCount).toBe(initialCalls + 1);
+    expect(conversation.getState().messages[1].content).toBe('Hello');
+  });
+
+  it('nested batches only emit once after the outermost ends', () => {
+    const conversation = new Conversation();
+    let callCount = 0;
+    conversation.onChange = () => {
+      callCount += 1;
+    };
+
+    conversation.beginBatch();
+    conversation.beginBatch();
+    conversation.addUserMessage('a');
+    conversation.endBatch(); // inner - still deferred
+    expect(callCount).toBe(0);
+    conversation.endBatch(); // outer - emits
+    expect(callCount).toBe(1);
+  });
+
+  it('endBatch without beginBatch is a no-op', () => {
+    const conversation = new Conversation();
+    let callCount = 0;
+    conversation.onChange = () => {
+      callCount += 1;
+    };
+    conversation.endBatch();
+    expect(callCount).toBe(0);
+  });
+
+  it('batch with no changes does not emit', () => {
+    const conversation = new Conversation();
+    let callCount = 0;
+    conversation.onChange = () => {
+      callCount += 1;
+    };
+    conversation.beginBatch();
+    conversation.endBatch();
+    expect(callCount).toBe(0);
+  });
 });

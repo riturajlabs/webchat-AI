@@ -15,7 +15,7 @@ import { readSseStream, type SseEvent } from '../core/sse';
 import type { SessionToken } from '../core/session';
 
 /** Connect + first-token timeout for a chat stream (plan §9). */
-export const CHAT_CONNECT_TIMEOUT_MS = 20 * 1000;
+export const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
 
 export interface ChatRequest {
   question: string;
@@ -57,6 +57,18 @@ export interface StreamResult {
   aborted?: boolean;
   done?: DonePayload;
   error?: WidgetError;
+  /** Client-side timing measurements for latency analysis. */
+  timing?: StreamTiming;
+}
+
+/** Client-side latency measurements for a chat stream. */
+export interface StreamTiming {
+  /** Total wall-clock time from request initiation to stream completion (ms). */
+  totalMs: number;
+  /** Time from request initiation to first delta token (ms). */
+  ttftMs: number;
+  /** Number of delta events received. */
+  deltaCount: number;
 }
 
 /** Best-effort parse of a non-OK response body (see `errorFromApiBody`). */
@@ -85,6 +97,7 @@ export async function streamChat(
   signal?: AbortSignal,
 ): Promise<StreamResult> {
   const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
+  const streamStartTime = performance.now();
 
   let token: SessionToken;
   try {
@@ -162,7 +175,7 @@ export async function streamChat(
     }
 
     try {
-      return await consumeStream(response.body, handlers, signal);
+      return await consumeStream(response.body, handlers, signal, streamStartTime);
     } catch (cause) {
       if (signal?.aborted) {
         return { completed: false, aborted: true };
@@ -180,9 +193,12 @@ async function consumeStream(
   body: ReadableStream<Uint8Array>,
   handlers: ChatHandlers,
   signal?: AbortSignal,
+  streamStartTime?: number,
 ): Promise<StreamResult> {
   let terminalReached = false;
   let result: StreamResult = { completed: false };
+  let firstTokenTime: number | null = null;
+  let deltaCount = 0;
 
   try {
     await readSseStream(
@@ -198,6 +214,10 @@ async function consumeStream(
           case 'message': {
             const delta = (event.data as { delta?: string }).delta;
             if (typeof delta === 'string') {
+              if (firstTokenTime === null) {
+                firstTokenTime = performance.now();
+              }
+              deltaCount += 1;
               handlers.onDelta?.(delta);
             }
             break;
@@ -240,6 +260,14 @@ async function consumeStream(
     });
     result = { completed: false, error };
     handlers.onError?.(error);
+  }
+  if (streamStartTime !== undefined) {
+    const now = performance.now();
+    result.timing = {
+      totalMs: Math.round(now - streamStartTime),
+      ttftMs: firstTokenTime !== null ? Math.round(firstTokenTime - streamStartTime) : 0,
+      deltaCount,
+    };
   }
   return result;
 }

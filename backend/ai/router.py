@@ -25,6 +25,7 @@ Fallback semantics
 import logging
 import time
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 
 from backend.ai.gemini import GenerationClient, GenerationUsage
 from backend.core.config import get_settings
@@ -47,6 +48,20 @@ def _timing_enabled() -> bool:
     return get_settings().perf_timing_log_enabled
 
 
+@dataclass
+class ProviderLatencyMetrics:
+    """Per-request provider latency metrics for observability."""
+
+    provider: str
+    first_token_latency_ms: float | None = None
+    total_generation_latency_ms: float = 0.0
+    fallback_attempts: int = 0
+    success: bool = False
+    error: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
 class FallbackGenerationClient:
     """`GenerationClient` that tries providers in order (pre-stream fallback)."""
 
@@ -55,6 +70,7 @@ class FallbackGenerationClient:
         self._usage = GenerationUsage()
         self._active_provider: str | None = None
         self._fallback_count = 0
+        self._last_latency_metrics: ProviderLatencyMetrics | None = None
 
     @property
     def usage(self) -> GenerationUsage:
@@ -65,6 +81,11 @@ class FallbackGenerationClient:
         """Name of the provider that served the most recent request."""
         return self._active_provider
 
+    @property
+    def last_latency_metrics(self) -> ProviderLatencyMetrics | None:
+        """Latency metrics from the most recent request."""
+        return self._last_latency_metrics
+
     async def stream_generate(
         self,
         *,
@@ -72,10 +93,19 @@ class FallbackGenerationClient:
         messages: list[tuple[str, str]],
     ) -> AsyncIterator[str]:
         if not self._providers:
+            self._last_latency_metrics = ProviderLatencyMetrics(
+                provider="none",
+                first_token_latency_ms=None,
+                total_generation_latency_ms=0.0,
+                fallback_attempts=0,
+                success=False,
+                error="No generation providers are configured.",
+            )
             raise GenerationUnavailableError("No generation providers are configured.")
         last_error: Exception | None = None
         started = time.perf_counter()
         ttft_ms: float | None = None
+        successful_provider: str | None = None
         for provider in self._providers:
             name = getattr(provider, "name", type(provider).__name__)
             started_streaming = False
@@ -85,15 +115,26 @@ class FallbackGenerationClient:
                         started_streaming = True
                         ttft_ms = (time.perf_counter() - started) * 1000.0
                         self._active_provider = name
+                        successful_provider = name
                     yield delta
                 self._usage = provider.usage
+                total_ms = (time.perf_counter() - started) * 1000.0
+                self._last_latency_metrics = ProviderLatencyMetrics(
+                    provider=name,
+                    first_token_latency_ms=round(ttft_ms, 2) if ttft_ms is not None else None,
+                    total_generation_latency_ms=round(total_ms, 2),
+                    fallback_attempts=self._fallback_count,
+                    success=True,
+                    input_tokens=provider.usage.input_tokens,
+                    output_tokens=provider.usage.output_tokens,
+                )
                 if _timing_enabled():
                     logger.info(
                         "ai_generation_request",
                         extra=self._timing_extra(
                             provider=name,
                             ttft_ms=ttft_ms,
-                            total_ms=(time.perf_counter() - started) * 1000.0,
+                            total_ms=total_ms,
                             ok=True,
                         ),
                     )
@@ -120,7 +161,23 @@ class FallbackGenerationClient:
                     exc,
                 )
         if last_error is not None:
+            self._last_latency_metrics = ProviderLatencyMetrics(
+                provider=successful_provider or "unknown",
+                first_token_latency_ms=None,
+                total_generation_latency_ms=round((time.perf_counter() - started) * 1000.0, 2),
+                fallback_attempts=self._fallback_count,
+                success=False,
+                error=str(last_error),
+            )
             raise last_error
+        self._last_latency_metrics = ProviderLatencyMetrics(
+            provider="unknown",
+            first_token_latency_ms=None,
+            total_generation_latency_ms=round((time.perf_counter() - started) * 1000.0, 2),
+            fallback_attempts=self._fallback_count,
+            success=False,
+            error="All providers failed",
+        )
         raise GenerationUnavailableError("All generation providers failed before producing output.")
 
     def _timing_extra(

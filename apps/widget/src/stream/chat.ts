@@ -95,6 +95,8 @@ export class Conversation {
   private stoppable = false;
   private error: string | null = null;
   private revision = 0;
+  private batchDepth = 0;
+  private batchQueued = false;
   onChange?: (state: ConversationState) => void;
 
   constructor(options: ConversationOptions = {}) {
@@ -114,8 +116,29 @@ export class Conversation {
   }
 
   private emit(): void {
+    if (this.batchDepth > 0) {
+      this.batchQueued = true;
+      return;
+    }
     this.revision += 1;
     this.onChange?.(this.getState());
+  }
+
+  /** Begin a batch: state-change notifications are deferred until {@link endBatch}. */
+  beginBatch(): void {
+    this.batchDepth += 1;
+  }
+
+  /** End a batch: if any state changed during the batch, emit once now. */
+  endBatch(): void {
+    if (this.batchDepth > 0) {
+      this.batchDepth -= 1;
+    }
+    if (this.batchDepth === 0 && this.batchQueued) {
+      this.batchQueued = false;
+      this.revision += 1;
+      this.onChange?.(this.getState());
+    }
   }
 
   addUserMessage(content: string): void {

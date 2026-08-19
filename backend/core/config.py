@@ -257,27 +257,33 @@ class Settings(BaseSettings):
     # Versioned answer prompt selected from backend/prompts/rag.py.
     rag_prompt_version: int = 1
     # Retrieval depth: tenant-filtered Top-5 vector search (ADR-008 Phase 6).
-    chat_top_k: int = 5
+    chat_top_k: int = 8
     # Conversation turns fed to the model as memory (most recent N).
-    chat_memory_turns: int = 8
+    chat_memory_turns: int = 12
     # Character cap per retrieved chunk when building the model context.
     chat_context_chunk_chars: int = 4000
     # Total character budget for the retrieved context (all chunks combined).
     # Keeps the prompt small so the first token arrives fast (Phase 12.6).
-    chat_context_max_chars: int = 12000
+    chat_context_max_chars: int = 20000
     # Relevance floor for retrieved chunks (cosine similarity). 0 disables the
     # filter; raise it to drop low-signal chunks before they reach the prompt.
-    chat_context_min_score: float = 0.0
+    chat_context_min_score: float = 0.25
     # Question sanitization cap (prompt-injection defense, TRD §8).
     chat_question_max_chars: int = 2000
     # Generation settings for the Gemini answer stream.
-    chat_max_output_tokens: int = 1024
+    chat_max_output_tokens: int = 4096
     chat_temperature: float = 0.2
     # Per-chunk stream timeout (guards a stalled answer mid-stream).
+    # Recommendation: 30s is appropriate for most use cases. Reduce only if
+    # measurements show consistent faster completion. Monitor p99 latency
+    # before adjusting.
     generation_timeout_seconds: float = 30.0
     # Hard bound on the wait for the FIRST token: a provider that takes longer
     # is treated as unavailable so the fallback chain can switch providers
     # instead of leaving the user staring at a spinner.
+    # Recommendation: 10s is a good balance. For Gemini, typical TTFT is 1-3s.
+    # For fallback providers (Groq, OpenRouter), TTFT can be 2-5s. Values
+    # below 5s may cause premature fallbacks on slow networks.
     generation_first_token_timeout_seconds: float = 10.0
     # Conversation/session retention (ADR-005 §5.7; TTL safety net is 90 days).
     chat_retention_days: int = 90
@@ -309,6 +315,15 @@ class Settings(BaseSettings):
     razorpay_key_secret: str | None = None
     razorpay_webhook_secret: str | None = None
 
+    # Hybrid search (opt-in, off by default). When enabled, retrieval combines
+    # vector similarity ranking with keyword-based ranking via Reciprocal Rank
+    # Fusion (RRF) to improve source accuracy.  The existing vector-only path
+    # remains the default fallback — no production behavior changes unless this
+    # flag is explicitly set to True.
+    enable_hybrid_search: bool = False
+    # RRF constant for hybrid fusion (higher reduces top-rank impact).
+    hybrid_rrf_k: int = 60
+
     # Performance instrumentation (Phase 12.1; opt-in, disabled by default).
     # When true, per-request HTTP timing, AI provider timings (TTFT/total) and
     # worker job durations are logged as structured records. Never enabled in
@@ -320,6 +335,8 @@ class Settings(BaseSettings):
     # reuse the cached vector and skip the embedding API call, cutting
     # perceived latency and provider usage on high-repeat traffic. TTL
     # prevents unbounded Redis growth; set 0 to disable.
+    # Recommendation: 256 entries is sufficient for most workloads. Monitor
+    # hit rate to adjust. A hit rate > 30% indicates good value.
     embedding_cache_size: int = 256
     embedding_cache_ttl_seconds: int = 3600
     # Retrieval cache (cross-process via Redis): repeat questions - same
@@ -328,6 +345,8 @@ class Settings(BaseSettings):
     # embedding provider and the search query. Answers are NEVER cached:
     # generation still runs so every turn is a fresh answer. Set size 0 or
     # TTL 0 to disable.
+    # Recommendation: 512 entries with 15-minute TTL balances hit rate vs.
+    # freshness. Monitor hit rate to adjust.
     chat_retrieval_cache_ttl_seconds: int = 900
     chat_retrieval_cache_size: int = 512
     # Chat-path embedding retries per provider. The chat must fail fast: a
@@ -335,6 +354,12 @@ class Settings(BaseSettings):
     # then the next provider. Ingestion keeps `embedding_max_retries` because
     # a crawl has no interactive user waiting on it.
     chat_embedding_max_retries: int = 1
+    # SSE delta coalescing window (ms). Small `message` deltas are buffered and
+    # flushed as a single SSE frame every `sse_buffer_ms` milliseconds, reducing
+    # the number of frames and network round-trips without changing the
+    # client-visible streaming semantics. 0 disables buffering (raw per-token
+    # frames). Default 50ms balances latency vs. frame count.
+    sse_buffer_ms: float = 50.0
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

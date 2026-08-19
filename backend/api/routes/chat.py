@@ -33,6 +33,7 @@ from backend.api.deps import (
     require_principal_role,
 )
 from backend.api.sse import stream_answer_with_usage
+from backend.core.config import get_settings
 from backend.schemas.chat import ChatRequest
 from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
@@ -65,6 +66,7 @@ async def stream_chat(
     """
 
     async def event_stream() -> AsyncIterator[str]:
+        buffer_ms = get_settings().sse_buffer_ms
         async for frame in stream_answer_with_usage(
             request,
             service.stream_answer(
@@ -79,6 +81,7 @@ async def stream_chat(
             tenant_id=principal.tenant_id,
             user_id=principal.user_id,
             website_id=body.website_id,
+            buffer_ms=buffer_ms,
         ):
             yield frame
 

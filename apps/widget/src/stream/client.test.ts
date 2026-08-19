@@ -130,6 +130,27 @@ describe('streamChat', () => {
     expect(h.onDone).not.toHaveBeenCalled();
   });
 
+  it('maps AI availability SSE errors to a retryable user-facing error', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: error\ndata: {"code":"GENERATION_UNAVAILABLE","message":"provider failed"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+
+    expect(result.error?.code).toBe('ai_unavailable');
+    expect(result.error?.userMessage).toBe(
+      'The assistant is temporarily unavailable. Please try again.',
+    );
+    expect(result.error?.retryable).toBe(true);
+    expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'ai_unavailable' }));
+  });
+
   it('maps backend widget errors to the stable taxonomy, never leaking internals', async () => {
     const fetchImpl = vi.fn(async () =>
       sseResponse(['event: error\ndata: {"code":"WIDGET_DISABLED","message":"disabled"}\n\n']),
@@ -271,6 +292,47 @@ describe('streamChat', () => {
     expect(result.aborted).toBe(true);
     expect(result.error).toBeUndefined();
     expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('includes timing measurements in StreamResult', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: sources\ndata: {"sources":[]}\n\n',
+        'event: message\ndata: {"delta":"Hel"}\n\n',
+        'event: message\ndata: {"delta":"lo"}\n\n',
+        'event: done\ndata: {"session_id":"s1"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.timing).toBeDefined();
+    expect(result.timing!.totalMs).toBeGreaterThanOrEqual(0);
+    expect(result.timing!.ttftMs).toBeGreaterThanOrEqual(0);
+    expect(result.timing!.deltaCount).toBe(2);
+  });
+
+  it('reports zero ttftMs when no deltas received', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: sources\ndata: {"sources":[]}\n\n',
+        'event: done\ndata: {"session_id":"s1"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.timing).toBeDefined();
+    expect(result.timing!.ttftMs).toBe(0);
+    expect(result.timing!.deltaCount).toBe(0);
   });
 });
 

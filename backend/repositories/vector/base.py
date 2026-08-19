@@ -29,6 +29,10 @@ class VectorRepository(Protocol):
 
     async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
+    async def list_chunks(
+        self, tenant_id: str, website_id: str
+    ) -> list[KnowledgeChunk]: ...
+
     async def similarity_search(
         self,
         tenant_id: str,

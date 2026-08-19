@@ -47,6 +47,11 @@ class ChatMessage(BaseModel):
     latency_history_ms: float | None = None
     latency_generation_ms: float | None = None
     latency_ttft_ms: float | None = None
+    latency_persist_ms: float | None = None
+    latency_website_lookup_ms: float | None = None
+    latency_session_resolution_ms: float | None = None
+    latency_user_message_persist_ms: float | None = None
+    latency_prompt_construction_ms: float | None = None
     latency_total_ms: float | None = None
     created_at: datetime
     schema_version: int = CHAT_SCHEMA_VERSION
