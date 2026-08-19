@@ -1,0 +1,95 @@
+{
+  "query_count": 6,
+  "vector_mean": {
+    "overall": 0.0,
+    "correctness": 0.0,
+    "completeness": 0.0,
+    "relevance": 0.0,
+    "hallucination_risk": 0.0,
+    "citation_quality": 0.0
+  },
+  "hybrid_mean": {
+    "overall": 0.0,
+    "correctness": 0.0,
+    "completeness": 0.0,
+    "relevance": 0.0,
+    "hallucination_risk": 0.0,
+    "citation_quality": 0.0
+  },
+  "deltas": {
+    "correctness": 0.0,
+    "completeness": 0.0,
+    "relevance": 0.0,
+    "hallucination_risk": 0.0,
+    "citation_quality": 0.0,
+    "overall": 0.0
+  },
+  "golden": {
+    "vector_mean": 0.175,
+    "hybrid_mean": 0.275,
+    "improvement_pct": 57.1
+  },
+  "retrieval": {
+    "vector_precision": 0.2667,
+    "hybrid_precision": 0.4,
+    "vector_source_accuracy": 0.5833,
+    "hybrid_source_accuracy": 0.9167
+  },
+  "latency": {
+    "vector_total_mean": 555.1867,
+    "hybrid_total_mean": 474.855,
+    "delta_ms": -80.33,
+    "vector_retrieval_mean": 111.0383,
+    "hybrid_retrieval_mean": 94.97,
+    "vector_generation_mean": 388.63,
+    "hybrid_generation_mean": 332.3983,
+    "vector_ttft_mean": 83.2767,
+    "hybrid_ttft_mean": 71.2283,
+    "judge_latency_mean": 0.0133
+  },
+  "recommendation": "Strengths: Precision@k improved by +50.0%; Source accuracy improved by +57.2%.\nLatency impact is minimal (-80.3ms).\nENABLE HYBRID \u2014 Hybrid retrieval improves LLM-judged answer quality.",
+  "per_query": [
+    {
+      "label": "pricing_plans",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 1459.7,
+      "hybrid_latency_ms": 502.72
+    },
+    {
+      "label": "free_trial",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 418.03,
+      "hybrid_latency_ms": 600.63
+    },
+    {
+      "label": "integrations",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 335.6,
+      "hybrid_latency_ms": 375.77
+    },
+    {
+      "label": "support_contact",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 491.39,
+      "hybrid_latency_ms": 370.56
+    },
+    {
+      "label": "security_certs",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 317.91,
+      "hybrid_latency_ms": 411.24
+    },
+    {
+      "label": "team_plan",
+      "vector_overall": 0.0,
+      "hybrid_overall": 0.0,
+      "vector_latency_ms": 308.49,
+      "hybrid_latency_ms": 588.21
+    }
+  ]
+}
