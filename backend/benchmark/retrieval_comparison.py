@@ -113,9 +113,7 @@ def _build_method_result(
 ) -> RetrievalMethodResult:
     """Build a ``RetrievalMethodResult`` from raw search results."""
     truncated = results[:top_k]
-    avg = (
-        round(sum(r.score for r in truncated) / len(truncated), 4) if truncated else 0.0
-    )
+    avg = round(sum(r.score for r in truncated) / len(truncated), 4) if truncated else 0.0
     urls = {r.chunk.metadata.get("source_url", "") for r in truncated if r.chunk.metadata}
     return RetrievalMethodResult(
         method=method,

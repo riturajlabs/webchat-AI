@@ -235,9 +235,7 @@ class FakeRefreshTokenRepository:
     async def find_by_hash(self, token_hash: str) -> RefreshToken | None:
         return next((t for t in self._tokens.values() if t.token_hash == token_hash), None)
 
-    async def find_and_consume(
-        self, token_hash: str, *, replaced_by: str, at: datetime
-    ):
+    async def find_and_consume(self, token_hash: str, *, replaced_by: str, at: datetime):
         """Atomically consume a non-revoked token — mirrors Mongo implementation."""
         from backend.repositories.refresh_token_repository import TokenConsumeResult
 

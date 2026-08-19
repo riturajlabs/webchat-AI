@@ -117,7 +117,9 @@ async def _run_crawl_job(
         job.updated_at = utcnow()
         await crawl_jobs.update(job)
         await crawl_events.publish_progress(
-            job.id, pages_completed=completed, pages_total=total,
+            job.id,
+            pages_completed=completed,
+            pages_total=total,
         )
 
     guard = SsrFGuard()

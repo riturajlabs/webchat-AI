@@ -28,11 +28,13 @@ def build_email(to: str, subject: str, template: str, **context: object) -> Emai
     return EmailMessage(to=to, subject=subject, text=text, html=html)
 
 
-_RESEND_SANDBOX_SENDERS = frozenset({
-    "onboarding@resend.dev",
-    "no-reply@resend.dev",
-    "notifications@resend.dev",
-})
+_RESEND_SANDBOX_SENDERS = frozenset(
+    {
+        "onboarding@resend.dev",
+        "no-reply@resend.dev",
+        "notifications@resend.dev",
+    }
+)
 
 
 @lru_cache

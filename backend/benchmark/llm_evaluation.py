@@ -32,6 +32,7 @@ from backend.benchmark.retrieval_metrics import RetrievalMetrics
 # Score dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class AnswerQualityScore:
     """Six-dimensional quality score produced by the LLM judge.
@@ -99,10 +100,13 @@ def _build_judge_prompt(
     answer: str,
     sources: list[SourceInfo],
 ) -> str:
-    source_list = "\n".join(
-        f"  [{i}] {s.title or 'Untitled'} — {s.url} (score={s.score:.3f})"
-        for i, s in enumerate(sources, 1)
-    ) or "  (none)"
+    source_list = (
+        "\n".join(
+            f"  [{i}] {s.title or 'Untitled'} — {s.url} (score={s.score:.3f})"
+            for i, s in enumerate(sources, 1)
+        )
+        or "  (none)"
+    )
 
     return (
         f"## User Question\n{question}\n\n"
@@ -246,9 +250,7 @@ class LLMJudge:
                 chunks.append(delta)
             raw = "".join(chunks)
         except Exception as exc:  # noqa: BLE001
-            return AnswerQualityScore(
-                reasoning=f"judge call failed: {type(exc).__name__}: {exc}"
-            )
+            return AnswerQualityScore(reasoning=f"judge call failed: {type(exc).__name__}: {exc}")
 
         return parse_judge_response(raw)
 
@@ -416,17 +418,11 @@ async def evaluate_single_query(
     # --- Build expected-characteristics text for judge ---
     expected_parts = []
     if golden_case.expected_keywords:
-        expected_parts.append(
-            f"Keywords to include: {', '.join(golden_case.expected_keywords)}"
-        )
+        expected_parts.append(f"Keywords to include: {', '.join(golden_case.expected_keywords)}")
     if golden_case.expected_sources:
-        expected_parts.append(
-            f"Sources to reference: {', '.join(golden_case.expected_sources)}"
-        )
+        expected_parts.append(f"Sources to reference: {', '.join(golden_case.expected_sources)}")
     if golden_case.expected_concepts:
-        expected_parts.append(
-            f"Concepts to address: {', '.join(golden_case.expected_concepts)}"
-        )
+        expected_parts.append(f"Concepts to address: {', '.join(golden_case.expected_concepts)}")
     expected_text = "\n".join(expected_parts) or "(no specific expectations)"
 
     # --- LLM judge evaluation ---
@@ -480,11 +476,7 @@ def _compute_retrieval_from_sources(
 
     if expected_sources:
         expected_lower = {e.lower() for e in expected_sources}
-        hits = sum(
-            1
-            for s in sources
-            if any(e in s.url.lower() for e in expected_lower)
-        )
+        hits = sum(1 for s in sources if any(e in s.url.lower() for e in expected_lower))
         precision = round(hits / len(sources), 4)
     else:
         precision = 1.0
@@ -570,9 +562,7 @@ def compute_llm_ab_report(results: list[LLMQueryResult]) -> LLMABReport:
     report.completeness_delta = round(
         report.hybrid_mean.completeness - report.vector_mean.completeness, 4
     )
-    report.relevance_delta = round(
-        report.hybrid_mean.relevance - report.vector_mean.relevance, 4
-    )
+    report.relevance_delta = round(report.hybrid_mean.relevance - report.vector_mean.relevance, 4)
     report.hallucination_risk_delta = round(
         report.hybrid_mean.hallucination_risk - report.vector_mean.hallucination_risk, 4
     )
@@ -583,21 +573,15 @@ def compute_llm_ab_report(results: list[LLMQueryResult]) -> LLMABReport:
         report.hybrid_mean.overall_score - report.vector_mean.overall_score, 4
     )
 
-    report.vector_golden_mean = _mean(
-        [r.vector_golden.overall_quality_score for r in results]
-    )
-    report.hybrid_golden_mean = _mean(
-        [r.hybrid_golden.overall_quality_score for r in results]
-    )
+    report.vector_golden_mean = _mean([r.vector_golden.overall_quality_score for r in results])
+    report.hybrid_golden_mean = _mean([r.hybrid_golden.overall_quality_score for r in results])
     report.golden_improvement_pct = _improvement_pct(
         report.vector_golden_mean, report.hybrid_golden_mean
     )
 
     report.vector_latency_mean = _mean([r.vector_latency_ms for r in results])
     report.hybrid_latency_mean = _mean([r.hybrid_latency_ms for r in results])
-    report.latency_delta_ms = round(
-        report.hybrid_latency_mean - report.vector_latency_mean, 2
-    )
+    report.latency_delta_ms = round(report.hybrid_latency_mean - report.vector_latency_mean, 2)
     report.judge_latency_mean = _mean([r.judge_latency_ms for r in results])
 
     report.recommendation = _generate_llm_recommendation(report)
@@ -662,8 +646,7 @@ def format_llm_ab_report(report: LLMABReport) -> str:
         delta = h_ov - v_ov
         sign = "+" if delta >= 0 else ""
         lines.append(
-            f"  {qr.label:<20s}  vector={v_ov:.3f}  hybrid={h_ov:.3f}  "
-            f"delta={sign}{delta:.3f}"
+            f"  {qr.label:<20s}  vector={v_ov:.3f}  hybrid={h_ov:.3f}  delta={sign}{delta:.3f}"
         )
     lines.append("")
 
@@ -698,49 +681,31 @@ def _generate_llm_recommendation(report: LLMABReport) -> str:
     concerns: list[str] = []
 
     if report.correctness_delta > 0.02:
-        improvements.append(
-            f"Correctness improved by {report.correctness_delta:+.3f}"
-        )
+        improvements.append(f"Correctness improved by {report.correctness_delta:+.3f}")
     elif report.correctness_delta < -0.02:
-        concerns.append(
-            f"Correctness regressed by {report.correctness_delta:.3f}"
-        )
+        concerns.append(f"Correctness regressed by {report.correctness_delta:.3f}")
 
     if report.completeness_delta > 0.02:
-        improvements.append(
-            f"Completeness improved by {report.completeness_delta:+.3f}"
-        )
+        improvements.append(f"Completeness improved by {report.completeness_delta:+.3f}")
     elif report.completeness_delta < -0.02:
-        concerns.append(
-            f"Completeness regressed by {report.completeness_delta:.3f}"
-        )
+        concerns.append(f"Completeness regressed by {report.completeness_delta:.3f}")
 
     if report.relevance_delta > 0.02:
-        improvements.append(
-            f"Relevance improved by {report.relevance_delta:+.3f}"
-        )
+        improvements.append(f"Relevance improved by {report.relevance_delta:+.3f}")
     elif report.relevance_delta < -0.02:
-        concerns.append(
-            f"Relevance regressed by {report.relevance_delta:.3f}"
-        )
+        concerns.append(f"Relevance regressed by {report.relevance_delta:.3f}")
 
     if report.hallucination_risk_delta < -0.02:
         improvements.append(
             f"Hallucination risk reduced by {abs(report.hallucination_risk_delta):.3f}"
         )
     elif report.hallucination_risk_delta > 0.02:
-        concerns.append(
-            f"Hallucination risk increased by {report.hallucination_risk_delta:.3f}"
-        )
+        concerns.append(f"Hallucination risk increased by {report.hallucination_risk_delta:.3f}")
 
     if report.citation_quality_delta > 0.02:
-        improvements.append(
-            f"Citation quality improved by {report.citation_quality_delta:+.3f}"
-        )
+        improvements.append(f"Citation quality improved by {report.citation_quality_delta:+.3f}")
     elif report.citation_quality_delta < -0.02:
-        concerns.append(
-            f"Citation quality regressed by {report.citation_quality_delta:.3f}"
-        )
+        concerns.append(f"Citation quality regressed by {report.citation_quality_delta:.3f}")
 
     latency_ok = abs(report.latency_delta_ms) < 50.0
 
@@ -750,9 +715,7 @@ def _generate_llm_recommendation(report: LLMABReport) -> str:
     if concerns:
         parts.append("Concerns: " + "; ".join(concerns) + ".")
     if latency_ok:
-        parts.append(
-            f"Latency impact is minimal ({report.latency_delta_ms:+.1f}ms)."
-        )
+        parts.append(f"Latency impact is minimal ({report.latency_delta_ms:+.1f}ms).")
     else:
         parts.append(
             f"Latency increase is significant ({report.latency_delta_ms:+.1f}ms) "

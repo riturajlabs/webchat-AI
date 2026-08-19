@@ -236,11 +236,7 @@ def keyword_search(
         scored.append((score, result))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    return [
-        VectorSearchResult(chunk=r.chunk, score=s)
-        for s, r in scored[:top_k]
-        if s > 0.0
-    ]
+    return [VectorSearchResult(chunk=r.chunk, score=s) for s, r in scored[:top_k] if s > 0.0]
 
 
 # ---------------------------------------------------------------------------
@@ -312,9 +308,7 @@ class HybridSearcher:
         vector_ranks: dict[str, int] = {
             r.chunk.id: rank + 1 for rank, r in enumerate(vector_results)
         }
-        keyword_ranks: dict[str, int] = {
-            r.chunk.id: rank + 1 for rank, r in enumerate(kw_results)
-        }
+        keyword_ranks: dict[str, int] = {r.chunk.id: rank + 1 for rank, r in enumerate(kw_results)}
 
         # RRF fusion
         fused = reciprocal_rank_fusion(

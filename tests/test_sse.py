@@ -152,9 +152,7 @@ async def test_buffered_stream_stops_on_disconnect() -> None:
 
     frames = [
         frame
-        async for frame in buffered_stream_with_disconnect(
-            request, _slow_events(), buffer_ms=50.0
-        )
+        async for frame in buffered_stream_with_disconnect(request, _slow_events(), buffer_ms=50.0)
     ]
     # Only the first delta is yielded; the disconnect stops the stream.
     assert len(frames) == 1
@@ -169,10 +167,7 @@ async def test_buffered_stream_preflights_closed_connection() -> None:
         yield {"event": "message", "data": {"delta": "x"}}
 
     frames = [
-        frame
-        async for frame in buffered_stream_with_disconnect(
-            request, _events(), buffer_ms=50.0
-        )
+        frame async for frame in buffered_stream_with_disconnect(request, _events(), buffer_ms=50.0)
     ]
     assert frames == []
 

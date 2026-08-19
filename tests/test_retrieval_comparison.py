@@ -129,9 +129,7 @@ def test_retrieval_metrics_url_case_insensitive() -> None:
 def test_pairwise_improvement_positive() -> None:
     baseline = RetrievalMetrics(precision_at_k=0.5, source_accuracy=0.5)
     treatment = RetrievalMetrics(precision_at_k=0.8, source_accuracy=0.7)
-    p = compute_pairwise_improvement(
-        baseline, treatment, metric_name="precision_at_k"
-    )
+    p = compute_pairwise_improvement(baseline, treatment, metric_name="precision_at_k")
     assert p.delta == 0.3
     assert p.relative_improvement_pct == 60.0
     assert p.baseline_method == "vector"
@@ -205,18 +203,10 @@ def test_comparison_result_methods_enum() -> None:
 
 
 def test_comparison_result_frozen() -> None:
-    vector = RetrievalMethodResult(
-        method=RetrievalMethod.VECTOR, results=[], chunk_count=0
-    )
-    keyword = RetrievalMethodResult(
-        method=RetrievalMethod.KEYWORD, results=[], chunk_count=0
-    )
-    hybrid = RetrievalMethodResult(
-        method=RetrievalMethod.HYBRID, results=[], chunk_count=0
-    )
-    result = RetrievalComparisonResult(
-        query="test", vector=vector, keyword=keyword, hybrid=hybrid
-    )
+    vector = RetrievalMethodResult(method=RetrievalMethod.VECTOR, results=[], chunk_count=0)
+    keyword = RetrievalMethodResult(method=RetrievalMethod.KEYWORD, results=[], chunk_count=0)
+    hybrid = RetrievalMethodResult(method=RetrievalMethod.HYBRID, results=[], chunk_count=0)
+    result = RetrievalComparisonResult(query="test", vector=vector, keyword=keyword, hybrid=hybrid)
     assert result.query == "test"
 
 
@@ -235,9 +225,7 @@ def test_compare_retrieval_methods_basic() -> None:
         _make_result("b", "security page", 0.8, "https://example.com/security"),
         _make_result("c", "pricing details", 0.7, "https://example.com/pricing-details"),
     ]
-    result = compare_retrieval_methods(
-        "pricing plan", vector_results, all_chunks, top_k=3
-    )
+    result = compare_retrieval_methods("pricing plan", vector_results, all_chunks, top_k=3)
     assert result.query == "pricing plan"
     assert result.vector.method == RetrievalMethod.VECTOR
     assert result.keyword.method == RetrievalMethod.KEYWORD
@@ -261,18 +249,13 @@ def test_compare_retrieval_methods_overlap() -> None:
         _make_result("b", "security", 0.8, "https://example.com/security"),
         _make_result("c", "pricing details", 0.7, "https://example.com/pricing-details"),
     ]
-    result = compare_retrieval_methods(
-        "pricing", vector_results, all_chunks, top_k=3
-    )
+    result = compare_retrieval_methods("pricing", vector_results, all_chunks, top_k=3)
     # Vector has /pricing and /security; keyword will match "pricing" in a and c
     assert result.overlap_vector_keyword >= 0
 
 
 def test_compare_retrieval_methods_top_k() -> None:
-    vector_results = [
-        _make_result(f"c{i}", f"chunk {i}", 0.9 - i * 0.1)
-        for i in range(10)
-    ]
+    vector_results = [_make_result(f"c{i}", f"chunk {i}", 0.9 - i * 0.1) for i in range(10)]
     result = compare_retrieval_methods("chunk", vector_results, vector_results, top_k=3)
     assert result.vector.chunk_count <= 3
     assert result.keyword.chunk_count <= 3
@@ -324,9 +307,7 @@ async def test_compare_methods_with_seeded_data() -> None:
         for chunk in await env.vector.list_chunks(TENANT, WEBSITE)
     ]
 
-    comparison = compare_retrieval_methods(
-        "pricing plan", vector_results, all_chunks, top_k=3
-    )
+    comparison = compare_retrieval_methods("pricing plan", vector_results, all_chunks, top_k=3)
     assert comparison.vector.chunk_count > 0
     assert comparison.hybrid.chunk_count > 0
     assert comparison.overlap_vector_keyword >= 0

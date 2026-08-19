@@ -916,9 +916,7 @@ async def test_context_injection_is_sanitized() -> None:
         title="Poisoned Page",
     )
 
-    await _stream(
-        env, tenant_id=TENANT_A, website_id=WEB_1, question="What does the page say?"
-    )
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="What does the page say?")
 
     # The model receives the chunk but it's wrapped in sanitization markers.
     call = env.generation.calls[0]
@@ -965,9 +963,7 @@ async def test_injection_log_never_leaks_raw_question(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="webchat_ai"):
         await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
 
-    injection_records = [
-        r for r in caplog.records if "injection_detected" in r.getMessage()
-    ]
+    injection_records = [r for r in caplog.records if "injection_detected" in r.getMessage()]
     assert len(injection_records) >= 1
     record_msg = injection_records[0].getMessage()
     assert question not in record_msg

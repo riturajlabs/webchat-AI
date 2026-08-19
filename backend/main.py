@@ -52,10 +52,14 @@ async def _validate_vector_dimensions() -> None:
     collection = db["knowledge_chunks"]
 
     # Sample a few chunks to detect existing dimensions
-    sample = await collection.find(
-        {"embedding": {"$exists": True, "$ne": None}},
-        {"embedding": 1},
-    ).limit(5).to_list(length=5)
+    sample = (
+        await collection.find(
+            {"embedding": {"$exists": True, "$ne": None}},
+            {"embedding": 1},
+        )
+        .limit(5)
+        .to_list(length=5)
+    )
 
     if not sample:
         return

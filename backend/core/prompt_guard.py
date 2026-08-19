@@ -27,6 +27,7 @@ logger = logging.getLogger("webchat_ai")
 # Layer 1 – Input injection detection
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class InjectionVerdict:
     """Result of ``detect_injection``."""

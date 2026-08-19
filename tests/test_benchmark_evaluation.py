@@ -433,9 +433,7 @@ async def test_runner_quality_on_fallback() -> None:
     from backend.benchmark.queries import BenchmarkQuery
 
     env = build_chat_env()
-    await make_website(
-        env, tenant_id=TENANT, website_id=WEB_KNOWN_EMPTY, knowledge_chunks=0
-    )
+    await make_website(env, tenant_id=TENANT, website_id=WEB_KNOWN_EMPTY, knowledge_chunks=0)
 
     runner = BenchmarkRunner(
         queries=[BenchmarkQuery(text="Anything?", label="empty")],

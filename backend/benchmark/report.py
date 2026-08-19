@@ -137,9 +137,7 @@ def compute_summary(requests: list[BenchmarkRequest]) -> BenchmarkReport:
     report.context_coverage = _stats_for(_collect_quality(ok_requests, "context_coverage"))
     report.response_length = _stats_for(_collect_quality(ok_requests, "response_length"))
     report.citation_count = _stats_for(_collect_quality(ok_requests, "citation_count"))
-    report.avg_chunks_retrieved = _stats_for(
-        _collect_quality(ok_requests, "retrieved_chunk_count")
-    )
+    report.avg_chunks_retrieved = _stats_for(_collect_quality(ok_requests, "retrieved_chunk_count"))
     if ok_requests:
         report.empty_rate = round(
             sum(1 for r in ok_requests if r.quality.is_empty) / len(ok_requests) * 100, 1
@@ -155,8 +153,7 @@ def compute_summary(requests: list[BenchmarkRequest]) -> BenchmarkReport:
     golden_requests = [
         r
         for r in ok_requests
-        if r.golden_metrics.overall_quality_score > 0
-        or r.golden_metrics.keyword_coverage_score > 0
+        if r.golden_metrics.overall_quality_score > 0 or r.golden_metrics.keyword_coverage_score > 0
     ]
     report.golden_case_count = len(golden_requests)
     if golden_requests:

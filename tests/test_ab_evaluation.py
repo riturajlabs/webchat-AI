@@ -132,9 +132,12 @@ def test_ab_report_latency_delta() -> None:
 
 def test_ab_report_regression() -> None:
     r = _make_query_result(
-        v_precision=0.9, h_precision=0.5,
-        v_accuracy=0.9, h_accuracy=0.5,
-        v_golden_overall=0.9, h_golden_overall=0.5,
+        v_precision=0.9,
+        h_precision=0.5,
+        v_accuracy=0.9,
+        h_accuracy=0.5,
+        v_golden_overall=0.9,
+        h_golden_overall=0.5,
     )
     report = compute_ab_report([r])
     assert report.precision_improvement_pct < 0
@@ -145,9 +148,12 @@ def test_ab_report_regression() -> None:
 
 def test_ab_report_neutral() -> None:
     r = _make_query_result(
-        v_precision=0.5, h_precision=0.5,
-        v_accuracy=0.5, h_accuracy=0.5,
-        v_golden_overall=0.5, h_golden_overall=0.5,
+        v_precision=0.5,
+        h_precision=0.5,
+        v_accuracy=0.5,
+        h_accuracy=0.5,
+        v_golden_overall=0.5,
+        h_golden_overall=0.5,
     )
     report = compute_ab_report([r])
     assert report.precision_improvement_pct == 0.0
@@ -158,9 +164,12 @@ def test_ab_report_neutral() -> None:
 
 def test_ab_report_mixed() -> None:
     r = _make_query_result(
-        v_precision=0.5, h_precision=0.8,  # improvement
-        v_accuracy=0.8, h_accuracy=0.5,    # regression
-        v_golden_overall=0.5, h_golden_overall=0.5,
+        v_precision=0.5,
+        h_precision=0.8,  # improvement
+        v_accuracy=0.8,
+        h_accuracy=0.5,  # regression
+        v_golden_overall=0.5,
+        h_golden_overall=0.5,
     )
     report = compute_ab_report([r])
     assert "MIXED" in report.recommendation
@@ -217,9 +226,12 @@ def test_format_ab_report_structure() -> None:
 
 def test_format_ab_report_recommendation_recommends() -> None:
     r = _make_query_result(
-        v_precision=0.5, h_precision=0.8,
-        v_accuracy=0.5, h_accuracy=0.8,
-        v_golden_overall=0.5, h_golden_overall=0.8,
+        v_precision=0.5,
+        h_precision=0.8,
+        v_accuracy=0.5,
+        h_accuracy=0.8,
+        v_golden_overall=0.5,
+        h_golden_overall=0.8,
     )
     report = compute_ab_report([r])
     text = format_ab_report(report)
@@ -228,9 +240,12 @@ def test_format_ab_report_recommendation_recommends() -> None:
 
 def test_format_ab_report_recommendation_do_not_enable() -> None:
     r = _make_query_result(
-        v_precision=0.9, h_precision=0.5,
-        v_accuracy=0.9, h_accuracy=0.5,
-        v_golden_overall=0.9, h_golden_overall=0.5,
+        v_precision=0.9,
+        h_precision=0.5,
+        v_accuracy=0.9,
+        h_accuracy=0.5,
+        v_golden_overall=0.9,
+        h_golden_overall=0.5,
     )
     report = compute_ab_report([r])
     text = format_ab_report(report)
@@ -244,22 +259,26 @@ def test_format_ab_report_recommendation_do_not_enable() -> None:
 
 def test_improvement_pct_zero_baseline() -> None:
     from backend.benchmark.ab_evaluation import _improvement_pct
+
     assert _improvement_pct(0.0, 0.5) == 0.0
 
 
 def test_improvement_pct_both_zero() -> None:
     from backend.benchmark.ab_evaluation import _improvement_pct
+
     assert _improvement_pct(0.0, 0.0) == 0.0
 
 
 def test_improvement_pct_negative() -> None:
     from backend.benchmark.ab_evaluation import _improvement_pct
+
     result = _improvement_pct(1.0, 0.5)
     assert result == -50.0
 
 
 def test_improvement_pct_positive() -> None:
     from backend.benchmark.ab_evaluation import _improvement_pct
+
     result = _improvement_pct(0.5, 1.0)
     assert result == 100.0
 
@@ -271,16 +290,19 @@ def test_improvement_pct_positive() -> None:
 
 def test_mean_empty() -> None:
     from backend.benchmark.ab_evaluation import _mean
+
     assert _mean([]) == 0.0
 
 
 def test_mean_single() -> None:
     from backend.benchmark.ab_evaluation import _mean
+
     assert _mean([3.14]) == 3.14
 
 
 def test_mean_multiple() -> None:
     from backend.benchmark.ab_evaluation import _mean
+
     assert _mean([1.0, 2.0, 3.0]) == 2.0
 
 
@@ -462,12 +484,22 @@ def test_ab_report_defaults() -> None:
 
 
 def test_ab_report_golden_aggregation() -> None:
-    r1 = _make_query_result(v_golden_overall=0.6, h_golden_overall=0.8,
-                            v_golden_kw=0.5, h_golden_kw=0.7,
-                            v_golden_src=0.4, h_golden_src=0.9)
-    r2 = _make_query_result(v_golden_overall=0.4, h_golden_overall=0.6,
-                            v_golden_kw=0.3, h_golden_kw=0.5,
-                            v_golden_src=0.6, h_golden_src=0.8)
+    r1 = _make_query_result(
+        v_golden_overall=0.6,
+        h_golden_overall=0.8,
+        v_golden_kw=0.5,
+        h_golden_kw=0.7,
+        v_golden_src=0.4,
+        h_golden_src=0.9,
+    )
+    r2 = _make_query_result(
+        v_golden_overall=0.4,
+        h_golden_overall=0.6,
+        v_golden_kw=0.3,
+        h_golden_kw=0.5,
+        v_golden_src=0.6,
+        h_golden_src=0.8,
+    )
     report = compute_ab_report([r1, r2])
     assert report.vector_golden_overall_mean == 0.5
     assert report.hybrid_golden_overall_mean == 0.7
@@ -479,14 +511,26 @@ def test_ab_report_golden_aggregation() -> None:
 
 
 def test_ab_report_retrieval_aggregation() -> None:
-    r1 = _make_query_result(v_precision=0.6, h_precision=0.9,
-                            v_accuracy=0.5, h_accuracy=0.8,
-                            v_score=0.7, h_score=0.85,
-                            v_unique=2, h_unique=3)
-    r2 = _make_query_result(v_precision=0.4, h_precision=0.7,
-                            v_accuracy=0.6, h_accuracy=0.9,
-                            v_score=0.6, h_score=0.8,
-                            v_unique=1, h_unique=4)
+    r1 = _make_query_result(
+        v_precision=0.6,
+        h_precision=0.9,
+        v_accuracy=0.5,
+        h_accuracy=0.8,
+        v_score=0.7,
+        h_score=0.85,
+        v_unique=2,
+        h_unique=3,
+    )
+    r2 = _make_query_result(
+        v_precision=0.4,
+        h_precision=0.7,
+        v_accuracy=0.6,
+        h_accuracy=0.9,
+        v_score=0.6,
+        h_score=0.8,
+        v_unique=1,
+        h_unique=4,
+    )
     report = compute_ab_report([r1, r2])
     assert report.vector_precision_mean == 0.5
     assert report.hybrid_precision_mean == 0.8
@@ -505,6 +549,7 @@ def test_ab_report_retrieval_aggregation() -> None:
 
 def test_module_all() -> None:
     from backend.benchmark import ab_evaluation as mod
+
     assert hasattr(mod, "ABReport")
     assert hasattr(mod, "QueryABResult")
     assert hasattr(mod, "compute_ab_report")

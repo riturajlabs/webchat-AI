@@ -75,6 +75,7 @@ class RedisCacheStore:
 # Serialization helpers for RAG cache entries
 # ---------------------------------------------------------------------------
 
+
 def dumps(obj: object) -> str:
     """Serialize an object to a JSON string for cache storage."""
     return json.dumps(obj)

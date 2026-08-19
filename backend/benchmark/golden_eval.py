@@ -64,12 +64,7 @@ def evaluate_golden(
     comp_score = _answer_completeness(answer, case.min_answer_length)
     concept_score = _concept_coverage(answer, case.expected_concepts)
 
-    overall = (
-        0.35 * kw_score
-        + 0.30 * src_score
-        + 0.20 * comp_score
-        + 0.15 * concept_score
-    )
+    overall = 0.35 * kw_score + 0.30 * src_score + 0.20 * comp_score + 0.15 * concept_score
 
     return GoldenMetrics(
         keyword_coverage_score=round(kw_score, 4),
@@ -91,9 +86,7 @@ def _keyword_coverage(answer: str, expected_keywords: list[str]) -> float:
     return hits / len(expected_keywords)
 
 
-def _source_accuracy(
-    sources: list[SourceInfo], expected_sources: list[str]
-) -> float:
+def _source_accuracy(sources: list[SourceInfo], expected_sources: list[str]) -> float:
     """Fraction of expected source URL substrings found in retrieved sources."""
     if not expected_sources:
         return 1.0

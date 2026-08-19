@@ -555,9 +555,7 @@ class RefreshRateLimitDependency:
         except Exception as exc:
             raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
         if not allowed:
-            raise RateLimitExceededError(
-                "Too many refresh attempts. Please try again later."
-            )
+            raise RateLimitExceededError("Too many refresh attempts. Please try again later.")
 
 
 # Per-endpoint limits (Phase 2 auth abuse protection, ADR-004).
@@ -669,9 +667,7 @@ class WidgetRateLimitDependency:
                     self.limit_setting,
                     exc,
                 )
-                raise ServiceUnavailableError(
-                    "Rate limiter is temporarily unavailable."
-                ) from exc
+                raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
         if limit is None or self.window_seconds is None:
             return
         limiter = SlidingWindowRateLimiter(

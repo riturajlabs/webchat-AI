@@ -503,9 +503,7 @@ async def test_logout_all_revokes_every_session() -> None:
 async def test_logout_invalid_token_is_silent() -> None:
     """Logout with a non-existent token must succeed silently (no error, no-op)."""
     env = build_auth_env()
-    await env.service.logout(
-        raw_refresh_token="not-a-real-token", ip_address=None, user_agent=None
-    )
+    await env.service.logout(raw_refresh_token="not-a-real-token", ip_address=None, user_agent=None)
     # No audit log should be created for a non-existent token.
     assert env.audit.logs == []
 
@@ -1049,9 +1047,11 @@ async def test_role_cache_miss_queries_database_and_populates() -> None:
     await cache.delete("auth:role", user.id)
 
     principal = await env.service.authenticate(
-        (await env.service.login(
-            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
-        )).access_token
+        (
+            await env.service.login(
+                email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+            )
+        ).access_token
     )
 
     assert principal.role == "viewer"
@@ -1080,9 +1080,11 @@ async def test_role_cache_expiry_triggers_fresh_db_query() -> None:
 
     # First call: populates cache with "viewer".
     principal1 = await env.service.authenticate(
-        (await env.service.login(
-            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
-        )).access_token
+        (
+            await env.service.login(
+                email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+            )
+        ).access_token
     )
     assert principal1.role == "viewer"
     assert await cache.get("auth:role", user.id) == "viewer"
@@ -1094,9 +1096,11 @@ async def test_role_cache_expiry_triggers_fresh_db_query() -> None:
 
     # Second call: cache miss → re-queries DB → gets new role.
     principal2 = await env.service.authenticate(
-        (await env.service.login(
-            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
-        )).access_token
+        (
+            await env.service.login(
+                email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+            )
+        ).access_token
     )
     assert principal2.role == "admin"
 
@@ -1117,9 +1121,11 @@ async def test_role_cache_unavailable_falls_back_to_database() -> None:
     member.role = "admin"
 
     principal = await env.service.authenticate(
-        (await env.service.login(
-            email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
-        )).access_token
+        (
+            await env.service.login(
+                email="alice@example.com", password=VALID_PASSWORD, ip_address=None, user_agent=None
+            )
+        ).access_token
     )
 
     # Falls through to DB despite broken cache.

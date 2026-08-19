@@ -192,9 +192,7 @@ class RagService:
         cache_key = f"{website_id}:{question.strip().lower()}"
         now = _now()
         retrieval_enabled = (
-            cache is not None
-            and self._retrieval_cache_size > 0
-            and self._retrieval_cache_ttl > 0
+            cache is not None and self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0
         )
         if retrieval_enabled:
             assert cache is not None  # guaranteed by retrieval_enabled
@@ -256,8 +254,13 @@ class RagService:
             top_k=self._top_k,
         )
         return (
-            query_vector, results, embedding_ms, retrieval_ms,
-            embedding_cache_hit, False, metrics,
+            query_vector,
+            results,
+            embedding_ms,
+            retrieval_ms,
+            embedding_cache_hit,
+            False,
+            metrics,
         )
 
     async def stream_answer(
@@ -443,8 +446,7 @@ class RagService:
             len(user_prompt),
         )
         logger.debug(
-            "chat_prompt_full tenant=%s website=%s system_chars=%d "
-            "user_hash=%s user_length=%d",
+            "chat_prompt_full tenant=%s website=%s system_chars=%d user_hash=%s user_length=%d",
             tenant_id,
             website_id,
             len(system_prompt),
@@ -656,9 +658,7 @@ class RagService:
         recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
         return [(message.role, message.content) for message in recent]
 
-    async def _load_all_chunks(
-        self, tenant_id: str, website_id: str
-    ) -> list[VectorSearchResult]:
+    async def _load_all_chunks(self, tenant_id: str, website_id: str) -> list[VectorSearchResult]:
         """Fetch all knowledge chunks for a tenant/website.
 
         Used by the hybrid retrieval strategy for keyword scoring.  Returns

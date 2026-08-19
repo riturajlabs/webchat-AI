@@ -81,10 +81,7 @@ def compute_retrieval_metrics(
         hits = sum(
             1
             for r in scored
-            if any(
-                e in r.chunk.metadata.get("source_url", "").lower()
-                for e in expected_lower
-            )
+            if any(e in r.chunk.metadata.get("source_url", "").lower() for e in expected_lower)
             if r.chunk.metadata
         )
         precision = round(hits / len(scored), 4) if scored else 0.0

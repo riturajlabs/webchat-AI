@@ -145,9 +145,7 @@ class BenchmarkRunner:
                         result.fallback_attempts = timing.get("fallback_attempts", 0)
                         result.embedding_cache = timing.get("embedding_cache", "miss")
                         result.retrieval_cache = timing.get("retrieval_cache", "miss")
-                        result.estimated_prompt_tokens = timing.get(
-                            "estimated_prompt_tokens", 0
-                        )
+                        result.estimated_prompt_tokens = timing.get("estimated_prompt_tokens", 0)
                     break
         except Exception as exc:
             result.total_ms = (time.perf_counter() - started) * 1000.0

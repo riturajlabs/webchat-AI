@@ -8,17 +8,21 @@ from urllib.parse import urlparse
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-_RESEND_SANDBOX_SENDERS = frozenset({
-    "onboarding@resend.dev",
-    "no-reply@resend.dev",
-    "notifications@resend.dev",
-})
+_RESEND_SANDBOX_SENDERS = frozenset(
+    {
+        "onboarding@resend.dev",
+        "no-reply@resend.dev",
+        "notifications@resend.dev",
+    }
+)
 
-_RAZORPAY_WEBHOOK_URL_MARKERS = frozenset({
-    "https://",
-    "http://",
-    "dashboard.razorpay.com",
-})
+_RAZORPAY_WEBHOOK_URL_MARKERS = frozenset(
+    {
+        "https://",
+        "http://",
+        "dashboard.razorpay.com",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -450,10 +454,7 @@ class Settings(BaseSettings):
         if self.gemini_embedding_dimensions <= 0:
             raise ValueError("GEMINI_EMBEDDING_DIMENSIONS must be a positive integer.")
         for provider in self.embedding_provider_order:
-            if (
-                provider == "jina"
-                and self.jina_embedding_dimensions != self.embedding_dimensions
-            ):
+            if provider == "jina" and self.jina_embedding_dimensions != self.embedding_dimensions:
                 raise ValueError(
                     "JINA_EMBEDDING_DIMENSIONS must match EMBEDDING_DIMENSIONS "
                     f"({self.embedding_dimensions}); "

@@ -493,9 +493,7 @@ class AuthService:
                     logger.debug("Role cache hit for user %s: %s", user.id, cached)
                     return cached
             except Exception:
-                logger.warning(
-                    "Role cache GET failed for user %s", user.id, exc_info=True
-                )
+                logger.warning("Role cache GET failed for user %s", user.id, exc_info=True)
 
         # Cache miss or unavailable — query database.
         member = await self._members.find_by_user_id(user.id)
@@ -506,9 +504,7 @@ class AuthService:
             try:
                 await self._role_cache.set("auth:role", user.id, role, ttl=60)
             except Exception:
-                logger.warning(
-                    "Role cache SET failed for user %s", user.id, exc_info=True
-                )
+                logger.warning("Role cache SET failed for user %s", user.id, exc_info=True)
 
         logger.debug(
             "Role resolved as %s for user %s (super_admin_count=%d)",

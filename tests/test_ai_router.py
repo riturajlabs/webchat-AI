@@ -310,9 +310,7 @@ async def test_generation_latency_metrics_are_tracked() -> None:
 
 async def test_generation_latency_metrics_on_fallback() -> None:
     """Latency metrics track fallback attempts when primary fails."""
-    first = StubGenerationClient(
-        name="gemini", raise_before=GenerationUnavailableError("down")
-    )
+    first = StubGenerationClient(name="gemini", raise_before=GenerationUnavailableError("down"))
     second = StubGenerationClient(name="groq", deltas=("fallback",))
     fallback = FallbackGenerationClient([first, second])
 
@@ -330,12 +328,8 @@ async def test_generation_latency_metrics_on_fallback() -> None:
 
 async def test_generation_latency_metrics_on_failure() -> None:
     """Latency metrics capture failure state when all providers fail."""
-    first = StubGenerationClient(
-        name="gemini", raise_before=GenerationUnavailableError("down")
-    )
-    second = StubGenerationClient(
-        name="groq", raise_before=GenerationUnavailableError("also down")
-    )
+    first = StubGenerationClient(name="gemini", raise_before=GenerationUnavailableError("down"))
+    second = StubGenerationClient(name="groq", raise_before=GenerationUnavailableError("also down"))
     fallback = FallbackGenerationClient([first, second])
 
     with pytest.raises(GenerationUnavailableError):

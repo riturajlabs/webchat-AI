@@ -41,15 +41,17 @@ WEBSITE = "llm-eval-website"
 
 
 def test_parse_valid_json() -> None:
-    raw = json.dumps({
-        "correctness": 0.9,
-        "completeness": 0.8,
-        "relevance": 0.85,
-        "hallucination_risk": 0.1,
-        "citation_quality": 0.7,
-        "overall_score": 0.82,
-        "reasoning": "Good answer with minor gaps.",
-    })
+    raw = json.dumps(
+        {
+            "correctness": 0.9,
+            "completeness": 0.8,
+            "relevance": 0.85,
+            "hallucination_risk": 0.1,
+            "citation_quality": 0.7,
+            "overall_score": 0.82,
+            "reasoning": "Good answer with minor gaps.",
+        }
+    )
     score = parse_judge_response(raw)
     assert score.correctness == 0.9
     assert score.completeness == 0.8
@@ -121,14 +123,16 @@ def test_parse_missing_keys() -> None:
 
 
 def test_parse_out_of_range_values_clamped() -> None:
-    raw = json.dumps({
-        "correctness": 1.5,
-        "completeness": -0.3,
-        "relevance": 0.5,
-        "hallucination_risk": 2.0,
-        "citation_quality": 0.5,
-        "overall_score": 0.5,
-    })
+    raw = json.dumps(
+        {
+            "correctness": 1.5,
+            "completeness": -0.3,
+            "relevance": 0.5,
+            "hallucination_risk": 2.0,
+            "citation_quality": 0.5,
+            "overall_score": 0.5,
+        }
+    )
     score = parse_judge_response(raw)
     assert score.correctness == 1.0
     assert score.completeness == 0.0
@@ -136,14 +140,16 @@ def test_parse_out_of_range_values_clamped() -> None:
 
 
 def test_parse_non_numeric_values_default_zero() -> None:
-    raw = json.dumps({
-        "correctness": "very good",
-        "completeness": None,
-        "relevance": 0.5,
-        "hallucination_risk": 0.1,
-        "citation_quality": 0.5,
-        "overall_score": 0.5,
-    })
+    raw = json.dumps(
+        {
+            "correctness": "very good",
+            "completeness": None,
+            "relevance": 0.5,
+            "hallucination_risk": 0.1,
+            "citation_quality": 0.5,
+            "overall_score": 0.5,
+        }
+    )
     score = parse_judge_response(raw)
     assert score.correctness == 0.0
     assert score.completeness == 0.0
@@ -174,8 +180,12 @@ def test_aggregate_empty() -> None:
 
 def test_aggregate_single() -> None:
     s = AnswerQualityScore(
-        correctness=0.8, completeness=0.7, relevance=0.9,
-        hallucination_risk=0.1, citation_quality=0.6, overall_score=0.75,
+        correctness=0.8,
+        completeness=0.7,
+        relevance=0.9,
+        hallucination_risk=0.1,
+        citation_quality=0.6,
+        overall_score=0.75,
     )
     result = aggregate_scores([s])
     assert result.correctness == 0.8
@@ -185,12 +195,20 @@ def test_aggregate_single() -> None:
 
 def test_aggregate_multiple() -> None:
     s1 = AnswerQualityScore(
-        correctness=0.6, completeness=0.7, relevance=0.8,
-        hallucination_risk=0.2, citation_quality=0.5, overall_score=0.65,
+        correctness=0.6,
+        completeness=0.7,
+        relevance=0.8,
+        hallucination_risk=0.2,
+        citation_quality=0.5,
+        overall_score=0.65,
     )
     s2 = AnswerQualityScore(
-        correctness=0.8, completeness=0.5, relevance=0.6,
-        hallucination_risk=0.1, citation_quality=0.7, overall_score=0.75,
+        correctness=0.8,
+        completeness=0.5,
+        relevance=0.6,
+        hallucination_risk=0.1,
+        citation_quality=0.7,
+        overall_score=0.75,
     )
     result = aggregate_scores([s1, s2])
     assert result.correctness == 0.7
@@ -218,15 +236,17 @@ def _make_fake_judge_client_raw(raw_text: str) -> FakeGenerationClient:
 
 
 async def test_llm_judge_valid_response() -> None:
-    client = _make_fake_judge_client({
-        "correctness": 0.9,
-        "completeness": 0.8,
-        "relevance": 0.85,
-        "hallucination_risk": 0.1,
-        "citation_quality": 0.7,
-        "overall_score": 0.82,
-        "reasoning": "Good.",
-    })
+    client = _make_fake_judge_client(
+        {
+            "correctness": 0.9,
+            "completeness": 0.8,
+            "relevance": 0.85,
+            "hallucination_risk": 0.1,
+            "citation_quality": 0.7,
+            "overall_score": 0.82,
+            "reasoning": "Good.",
+        }
+    )
     judge = LLMJudge(client)
     score = await judge.score_answer(
         question="What is pricing?",
@@ -340,6 +360,7 @@ def test_answer_quality_score_frozen() -> None:
     score = AnswerQualityScore(correctness=0.9, overall_score=0.8)
     # Frozen — assignment should raise
     import pytest
+
     with pytest.raises(AttributeError):
         score.correctness = 0.5  # type: ignore[misc]
 
@@ -397,20 +418,10 @@ def _make_llm_result(
     v_golden: float = 0.5,
     h_golden: float = 0.7,
 ) -> LLMQueryResult:
-    v_h_risk = (
-        v_hallucination_risk if v_hallucination_risk is not None
-        else (1.0 - v_overall)
-    )
-    v_cite = (
-        v_citation_quality if v_citation_quality is not None else v_overall
-    )
-    h_h_risk = (
-        h_hallucination_risk if h_hallucination_risk is not None
-        else (1.0 - h_overall)
-    )
-    h_cite = (
-        h_citation_quality if h_citation_quality is not None else h_overall
-    )
+    v_h_risk = v_hallucination_risk if v_hallucination_risk is not None else (1.0 - v_overall)
+    v_cite = v_citation_quality if v_citation_quality is not None else v_overall
+    h_h_risk = h_hallucination_risk if h_hallucination_risk is not None else (1.0 - h_overall)
+    h_cite = h_citation_quality if h_citation_quality is not None else h_overall
     return LLMQueryResult(
         query=f"question for {label}",
         label=label,
@@ -506,8 +517,10 @@ def test_llm_ab_report_recommendation_neutral() -> None:
 
 def test_llm_ab_report_mixed_recommendation() -> None:
     r = _make_llm_result(
-        v_overall=0.5, h_overall=0.8,
-        v_correctness=0.9, h_correctness=0.5,
+        v_overall=0.5,
+        h_overall=0.8,
+        v_correctness=0.9,
+        h_correctness=0.5,
     )
     report = compute_llm_ab_report([r])
     assert "MIXED" in report.recommendation
@@ -581,28 +594,44 @@ async def test_llm_ab_evaluation_end_to_end() -> None:
     v_env = build_chat_env(deltas=["The", " Pro", " plan", " is", " $19", "."])
     await make_website(v_env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        v_env, tenant_id=TENANT, website_id=WEBSITE,
+        v_env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19 per month.",
-        url="https://example.com/pricing", title="Pricing", chunk_index=0,
+        url="https://example.com/pricing",
+        title="Pricing",
+        chunk_index=0,
     )
     await make_chunk(
-        v_env, tenant_id=TENANT, website_id=WEBSITE,
+        v_env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Enterprise includes SSO.",
-        url="https://example.com/enterprise", title="Enterprise", chunk_index=1,
+        url="https://example.com/enterprise",
+        title="Enterprise",
+        chunk_index=1,
     )
 
     # Hybrid env (separate RagService with hybrid strategy)
     h_env = build_chat_env(deltas=["The", " Pro", " plan", " is", " $19", "."])
     await make_website(h_env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        h_env, tenant_id=TENANT, website_id=WEBSITE,
+        h_env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19 per month.",
-        url="https://example.com/pricing", title="Pricing", chunk_index=0,
+        url="https://example.com/pricing",
+        title="Pricing",
+        chunk_index=0,
     )
     await make_chunk(
-        h_env, tenant_id=TENANT, website_id=WEBSITE,
+        h_env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Enterprise includes SSO.",
-        url="https://example.com/enterprise", title="Enterprise", chunk_index=1,
+        url="https://example.com/enterprise",
+        title="Enterprise",
+        chunk_index=1,
     )
 
     # Replace rag in h_env with hybrid-strategy rag
@@ -721,6 +750,7 @@ async def test_llm_ab_evaluation_fallback_no_chunks() -> None:
 
 def test_module_all() -> None:
     from backend.benchmark import llm_evaluation as mod
+
     assert hasattr(mod, "AnswerQualityScore")
     assert hasattr(mod, "LLMABReport")
     assert hasattr(mod, "LLMJudge")
@@ -744,6 +774,7 @@ def test_benchmark_init_exports() -> None:
         parse_judge_response,
         run_llm_ab_evaluation,
     )
+
     assert AnswerQualityScore is not None
     assert LLMABReport is not None
     assert LLMJudge is not None

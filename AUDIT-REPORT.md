@@ -635,7 +635,9 @@ logger.info("chat_request tenant=%s website=%s session=%s knowledge_chunks=%s qu
 **Description:** Super admin email addresses are logged at DEBUG level. In production with DEBUG logging enabled (even temporarily), this leaks privileged email addresses to log aggregation systems.
 
 ```python
-logger.debug("Role resolved as %s for user %s (email=%s, super_admin_emails=%s)", ..., sorted(admin_emails))
+logger.debug(
+    "Role resolved as %s for user %s (email=%s, super_admin_emails=%s)", ..., sorted(admin_emails)
+)
 ```
 
 **Fix:** Remove super admin emails from debug logs or mask them.

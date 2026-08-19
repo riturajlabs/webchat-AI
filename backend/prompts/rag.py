@@ -94,8 +94,7 @@ def sanitize_question(question: str, *, max_length: int | None = None) -> str:
     verdict = detect_injection(cleaned)
     if verdict.detected:
         logger.warning(
-            "prompt_guard injection_detected severity=%s patterns=%s "
-            "query_hash=%s query_length=%d",
+            "prompt_guard injection_detected severity=%s patterns=%s query_hash=%s query_length=%d",
             verdict.severity,
             verdict.patterns,
             content_hash(cleaned),

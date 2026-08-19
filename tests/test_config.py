@@ -496,22 +496,16 @@ def test_local_production_test_still_rejects_wildcard_allowed_hosts() -> None:
 
 def test_production_rejects_resend_sandbox_sender() -> None:
     with pytest.raises(ValueError, match="EMAIL_FROM.*Resend sandbox"):
-        Settings(
-            **_prod(email_from="WebChat AI <onboarding@resend.dev>")
-        )
+        Settings(**_prod(email_from="WebChat AI <onboarding@resend.dev>"))
 
 
 def test_production_rejects_resend_sandbox_no_reply_sender() -> None:
     with pytest.raises(ValueError, match="EMAIL_FROM.*Resend sandbox"):
-        Settings(
-            **_prod(email_from="WebChat AI <no-reply@resend.dev>")
-        )
+        Settings(**_prod(email_from="WebChat AI <no-reply@resend.dev>"))
 
 
 def test_production_accepts_verified_custom_domain_sender() -> None:
-    settings = Settings(
-        **_prod(email_from="WebChat AI <no-reply@webchatai.example>")
-    )
+    settings = Settings(**_prod(email_from="WebChat AI <no-reply@webchatai.example>"))
     assert "webchatai.example" in settings.email_from
 
 
@@ -544,9 +538,7 @@ def test_production_accepts_valid_razorpay_webhook_secret() -> None:
 
 
 def test_local_production_test_allows_resend_sandbox_sender() -> None:
-    settings = Settings(
-        **_local_prod(email_from="WebChat AI <onboarding@resend.dev>")
-    )
+    settings = Settings(**_local_prod(email_from="WebChat AI <onboarding@resend.dev>"))
     assert "onboarding@resend.dev" in settings.email_from
 
 

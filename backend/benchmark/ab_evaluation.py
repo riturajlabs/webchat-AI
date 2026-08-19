@@ -216,24 +216,16 @@ def compute_ab_report(results: list[QueryABResult]) -> ABReport:
     n = len(results)
     report = ABReport(query_count=n, per_query=results)
 
-    report.vector_precision_mean = _mean(
-        [r.vector_retrieval.precision_at_k for r in results]
-    )
-    report.hybrid_precision_mean = _mean(
-        [r.hybrid_retrieval.precision_at_k for r in results]
-    )
+    report.vector_precision_mean = _mean([r.vector_retrieval.precision_at_k for r in results])
+    report.hybrid_precision_mean = _mean([r.hybrid_retrieval.precision_at_k for r in results])
     report.vector_source_accuracy_mean = _mean(
         [r.vector_retrieval.source_accuracy for r in results]
     )
     report.hybrid_source_accuracy_mean = _mean(
         [r.hybrid_retrieval.source_accuracy for r in results]
     )
-    report.vector_avg_score_mean = _mean(
-        [r.vector_retrieval.avg_score for r in results]
-    )
-    report.hybrid_avg_score_mean = _mean(
-        [r.hybrid_retrieval.avg_score for r in results]
-    )
+    report.vector_avg_score_mean = _mean([r.vector_retrieval.avg_score for r in results])
+    report.hybrid_avg_score_mean = _mean([r.hybrid_retrieval.avg_score for r in results])
     report.vector_unique_sources_mean = _mean(
         [float(r.vector_retrieval.unique_sources_retrieved) for r in results]
     )
@@ -262,9 +254,7 @@ def compute_ab_report(results: list[QueryABResult]) -> ABReport:
 
     report.vector_latency_mean = _mean([r.vector_latency_ms for r in results])
     report.hybrid_latency_mean = _mean([r.hybrid_latency_ms for r in results])
-    report.latency_delta_ms = round(
-        report.hybrid_latency_mean - report.vector_latency_mean, 2
-    )
+    report.latency_delta_ms = round(report.hybrid_latency_mean - report.vector_latency_mean, 2)
 
     report.precision_improvement_pct = _improvement_pct(
         report.vector_precision_mean, report.hybrid_precision_mean
@@ -291,9 +281,7 @@ def format_ab_report(report: ABReport) -> str:
     lines.append("")
 
     lines.append("  --- Retrieval Quality ---")
-    lines.append(
-        f"  {'Metric':<24s} {'Vector':>10s} {'Hybrid':>10s} {'Delta':>10s}"
-    )
+    lines.append(f"  {'Metric':<24s} {'Vector':>10s} {'Hybrid':>10s} {'Delta':>10s}")
     lines.append("  " + "-" * 56)
     lines.append(
         f"  {'Precision@k':<24s} {report.vector_precision_mean:>10.3f} "
@@ -318,9 +306,7 @@ def format_ab_report(report: ABReport) -> str:
     lines.append("")
 
     lines.append("  --- Golden Quality ---")
-    lines.append(
-        f"  {'Metric':<24s} {'Vector':>10s} {'Hybrid':>10s} {'Delta':>10s}"
-    )
+    lines.append(f"  {'Metric':<24s} {'Vector':>10s} {'Hybrid':>10s} {'Delta':>10s}")
     lines.append("  " + "-" * 56)
     lines.append(
         f"  {'Overall score':<24s} {report.vector_golden_overall_mean:>10.3f} "
@@ -353,8 +339,7 @@ def format_ab_report(report: ABReport) -> str:
         delta = h_acc - v_acc
         sign = "+" if delta >= 0 else ""
         lines.append(
-            f"  {qr.label:<20s}  vector={v_acc:.3f}  hybrid={h_acc:.3f}  "
-            f"delta={sign}{delta:.3f}"
+            f"  {qr.label:<20s}  vector={v_acc:.3f}  hybrid={h_acc:.3f}  delta={sign}{delta:.3f}"
         )
     lines.append("")
 
@@ -383,34 +368,26 @@ def _generate_recommendation(report: ABReport) -> str:
     regressions: list[str] = []
 
     if report.precision_improvement_pct > 0:
-        improvements.append(
-            f"Precision@k improved by {report.precision_improvement_pct:+.1f}%"
-        )
+        improvements.append(f"Precision@k improved by {report.precision_improvement_pct:+.1f}%")
     elif report.precision_improvement_pct < 0:
-        regressions.append(
-            f"Precision@k regressed by {report.precision_improvement_pct:.1f}%"
-        )
+        regressions.append(f"Precision@k regressed by {report.precision_improvement_pct:.1f}%")
 
     if report.source_accuracy_improvement_pct > 0:
         improvements.append(
-            f"Source accuracy improved by "
-            f"{report.source_accuracy_improvement_pct:+.1f}%"
+            f"Source accuracy improved by {report.source_accuracy_improvement_pct:+.1f}%"
         )
     elif report.source_accuracy_improvement_pct < 0:
         regressions.append(
-            f"Source accuracy regressed by "
-            f"{report.source_accuracy_improvement_pct:.1f}%"
+            f"Source accuracy regressed by {report.source_accuracy_improvement_pct:.1f}%"
         )
 
     if report.golden_overall_improvement_pct > 0:
         improvements.append(
-            f"Golden overall score improved by "
-            f"{report.golden_overall_improvement_pct:+.1f}%"
+            f"Golden overall score improved by {report.golden_overall_improvement_pct:+.1f}%"
         )
     elif report.golden_overall_improvement_pct < 0:
         regressions.append(
-            f"Golden overall score regressed by "
-            f"{report.golden_overall_improvement_pct:.1f}%"
+            f"Golden overall score regressed by {report.golden_overall_improvement_pct:.1f}%"
         )
 
     latency_ok = abs(report.latency_delta_ms) < 50.0
@@ -421,9 +398,7 @@ def _generate_recommendation(report: ABReport) -> str:
     if regressions:
         parts.append("Concerns: " + "; ".join(regressions) + ".")
     if latency_ok:
-        parts.append(
-            f"Latency impact is minimal ({report.latency_delta_ms:+.1f}ms)."
-        )
+        parts.append(f"Latency impact is minimal ({report.latency_delta_ms:+.1f}ms).")
     else:
         parts.append(
             f"Latency increase is significant ({report.latency_delta_ms:+.1f}ms) "

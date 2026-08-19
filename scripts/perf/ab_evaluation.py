@@ -303,9 +303,7 @@ async def _run_ab_evaluation(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Hybrid Search A/B Evaluation — Vector vs Hybrid"
-    )
+    parser = argparse.ArgumentParser(description="Hybrid Search A/B Evaluation — Vector vs Hybrid")
     parser.add_argument(
         "--top-k",
         type=int,

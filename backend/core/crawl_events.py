@@ -42,9 +42,7 @@ def _publisher() -> Redis:
     """Lazy singleton Redis connection for the worker publisher."""
     global _pubsub_redis
     if _pubsub_redis is None:
-        _pubsub_redis = Redis.from_url(
-            get_settings().redis_url, decode_responses=True
-        )
+        _pubsub_redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     return _pubsub_redis
 
 
@@ -62,11 +60,16 @@ async def publish_event(job_id: str, event: str, data: dict[str, Any]) -> None:
 
 # Convenience helpers for lifecycle events ----------------------------------
 
+
 async def publish_started(job_id: str) -> None:
-    await publish_event(job_id, "crawl.started", {
-        "status": "started",
-        "message": "Starting crawler…",
-    })
+    await publish_event(
+        job_id,
+        "crawl.started",
+        {
+            "status": "started",
+            "message": "Starting crawler…",
+        },
+    )
 
 
 async def publish_fetching(
@@ -76,20 +79,28 @@ async def publish_fetching(
     pages_processed: int,
     total_pages: int,
 ) -> None:
-    await publish_event(job_id, "crawl.fetching", {
-        "status": "fetching",
-        "current_url": current_url,
-        "pages_processed": pages_processed,
-        "total_pages": total_pages,
-    })
+    await publish_event(
+        job_id,
+        "crawl.fetching",
+        {
+            "status": "fetching",
+            "current_url": current_url,
+            "pages_processed": pages_processed,
+            "total_pages": total_pages,
+        },
+    )
 
 
 async def publish_extracting(job_id: str, *, url: str) -> None:
-    await publish_event(job_id, "crawl.extracting", {
-        "status": "extracting",
-        "message": "Extracting page content",
-        "current_url": url,
-    })
+    await publish_event(
+        job_id,
+        "crawl.extracting",
+        {
+            "status": "extracting",
+            "message": "Extracting page content",
+            "current_url": url,
+        },
+    )
 
 
 async def publish_embedding(
@@ -98,11 +109,15 @@ async def publish_embedding(
     documents_completed: int,
     total_documents: int,
 ) -> None:
-    await publish_event(job_id, "crawl.embedding", {
-        "status": "embedding",
-        "documents_completed": documents_completed,
-        "total_documents": total_documents,
-    })
+    await publish_event(
+        job_id,
+        "crawl.embedding",
+        {
+            "status": "embedding",
+            "documents_completed": documents_completed,
+            "total_documents": total_documents,
+        },
+    )
 
 
 async def publish_completed(
@@ -111,18 +126,26 @@ async def publish_completed(
     pages: int,
     chunks: int,
 ) -> None:
-    await publish_event(job_id, "crawl.completed", {
-        "status": "completed",
-        "pages": pages,
-        "chunks": chunks,
-    })
+    await publish_event(
+        job_id,
+        "crawl.completed",
+        {
+            "status": "completed",
+            "pages": pages,
+            "chunks": chunks,
+        },
+    )
 
 
 async def publish_failed(job_id: str, *, error: str) -> None:
-    await publish_event(job_id, "crawl.failed", {
-        "status": "failed",
-        "error": error,
-    })
+    await publish_event(
+        job_id,
+        "crawl.failed",
+        {
+            "status": "failed",
+            "error": error,
+        },
+    )
 
 
 async def publish_progress(
@@ -132,16 +155,21 @@ async def publish_progress(
     pages_total: int,
 ) -> None:
     """Generic progress tick (called from the existing on_progress callback)."""
-    await publish_event(job_id, "crawl.progress", {
-        "status": "running",
-        "pages_completed": pages_completed,
-        "pages_total": pages_total,
-    })
+    await publish_event(
+        job_id,
+        "crawl.progress",
+        {
+            "status": "running",
+            "pages_completed": pages_completed,
+            "pages_total": pages_total,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
 # Subscriber (called by the API server SSE endpoint)
 # ---------------------------------------------------------------------------
+
 
 async def subscribe(job_id: str) -> PubSub:
     """Return a Redis PubSub handle subscribed to the job's channel."""

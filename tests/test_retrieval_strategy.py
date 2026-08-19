@@ -77,21 +77,30 @@ def test_hybrid_strategy_with_chunks() -> None:
     from backend.repositories.vector.base import VectorSearchResult
 
     c1 = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-1",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-1",
         chunk_text="pricing plan costs $19 per month",
-        embedding=[0.0], chunk_index=0,
+        embedding=[0.0],
+        chunk_index=0,
         metadata={"source_url": "https://example.com/pricing", "title": "Pricing"},
     )
     c2 = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-2",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-2",
         chunk_text="enterprise includes SSO and audit logs",
-        embedding=[0.0], chunk_index=1,
+        embedding=[0.0],
+        chunk_index=1,
         metadata={"source_url": "https://example.com/enterprise", "title": "Enterprise"},
     )
     c3 = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-3",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-3",
         chunk_text="free trial gives 14 days of access",
-        embedding=[0.0], chunk_index=2,
+        embedding=[0.0],
+        chunk_index=2,
         metadata={"source_url": "https://example.com/trial", "title": "Trial"},
     )
     vector_results = [
@@ -105,8 +114,10 @@ def test_hybrid_strategy_with_chunks() -> None:
     ]
     strategy = HybridRetrievalStrategy(rrf_k=60)
     final, metrics = strategy.search(
-        query="pricing plan", vector_results=vector_results,
-        all_chunks=all_chunks, top_k=3,
+        query="pricing plan",
+        vector_results=vector_results,
+        all_chunks=all_chunks,
+        top_k=3,
     )
     assert metrics.retrieval_method == "hybrid"
     assert metrics.vector_result_count == 2
@@ -122,15 +133,21 @@ def test_hybrid_strategy_rrf_k_impact() -> None:
     from backend.repositories.vector.base import VectorSearchResult
 
     c1 = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-1",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-1",
         chunk_text="pricing plan details",
-        embedding=[0.0], chunk_index=0,
+        embedding=[0.0],
+        chunk_index=0,
         metadata={"source_url": "https://example.com/pricing", "title": "Pricing"},
     )
     c2 = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-2",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-2",
         chunk_text="security compliance information",
-        embedding=[0.0], chunk_index=1,
+        embedding=[0.0],
+        chunk_index=1,
         metadata={"source_url": "https://example.com/security", "title": "Security"},
     )
     vector_results = [
@@ -239,7 +256,9 @@ async def test_vector_strategy_e2e_identical_output() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="We offer Pro and Team plans.",
     )
     events = await consume(
@@ -268,14 +287,18 @@ async def test_hybrid_strategy_e2e_produces_sources() -> None:
     )
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19 per month.",
         url="https://example.com/pricing",
         title="Pricing",
         chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Enterprise includes SSO.",
         url="https://example.com/enterprise",
         title="Enterprise",
@@ -300,7 +323,9 @@ async def test_timing_logs_include_retrieval_method() -> None:
     env.rag._timing_enabled = True
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19.",
     )
     events = await consume(
@@ -332,7 +357,9 @@ async def test_timing_logs_hybrid_method() -> None:
     rag._timing_enabled = True
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19.",
     )
     events = await consume(
@@ -355,12 +382,18 @@ async def test_load_all_chunks_returns_chunks() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
-        text="Chunk one.", chunk_index=0,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Chunk one.",
+        chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
-        text="Chunk two.", chunk_index=1,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Chunk two.",
+        chunk_index=1,
     )
     chunks = await env.rag._load_all_chunks(TENANT, WEBSITE)
     assert len(chunks) == 2

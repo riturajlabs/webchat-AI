@@ -312,17 +312,11 @@ async def _run_single_query(
     # --- LLM judge evaluation ---
     expected_parts: list[str] = []
     if case.expected_keywords:
-        expected_parts.append(
-            f"Keywords to include: {', '.join(case.expected_keywords)}"
-        )
+        expected_parts.append(f"Keywords to include: {', '.join(case.expected_keywords)}")
     if case.expected_sources:
-        expected_parts.append(
-            f"Sources to reference: {', '.join(case.expected_sources)}"
-        )
+        expected_parts.append(f"Sources to reference: {', '.join(case.expected_sources)}")
     if case.expected_concepts:
-        expected_parts.append(
-            f"Concepts to address: {', '.join(case.expected_concepts)}"
-        )
+        expected_parts.append(f"Concepts to address: {', '.join(case.expected_concepts)}")
     expected_text = "\n".join(expected_parts) or "(no specific expectations)"
 
     judge_started = time.perf_counter()
@@ -385,11 +379,7 @@ def _compute_retrieval(
 
     if expected_sources:
         expected_lower = {e.lower() for e in expected_sources}
-        hits = sum(
-            1
-            for s in sources
-            if any(e in s.url.lower() for e in expected_lower)
-        )
+        hits = sum(1 for s in sources if any(e in s.url.lower() for e in expected_lower))
         precision = round(hits / len(sources), 4)
     else:
         precision = 1.0
@@ -521,26 +511,28 @@ def _compute_full_report(results: list[EvalQueryResult]) -> FullReport:
         [r.hybrid_score for r in results],
     )
     report.correctness_delta = round(
-        report.hybrid_mean.correctness - report.vector_mean.correctness, 4,
+        report.hybrid_mean.correctness - report.vector_mean.correctness,
+        4,
     )
     report.completeness_delta = round(
-        report.hybrid_mean.completeness - report.vector_mean.completeness, 4,
+        report.hybrid_mean.completeness - report.vector_mean.completeness,
+        4,
     )
     report.relevance_delta = round(
-        report.hybrid_mean.relevance - report.vector_mean.relevance, 4,
+        report.hybrid_mean.relevance - report.vector_mean.relevance,
+        4,
     )
     report.hallucination_risk_delta = round(
-        report.hybrid_mean.hallucination_risk
-        - report.vector_mean.hallucination_risk,
+        report.hybrid_mean.hallucination_risk - report.vector_mean.hallucination_risk,
         4,
     )
     report.citation_quality_delta = round(
-        report.hybrid_mean.citation_quality
-        - report.vector_mean.citation_quality,
+        report.hybrid_mean.citation_quality - report.vector_mean.citation_quality,
         4,
     )
     report.overall_delta = round(
-        report.hybrid_mean.overall_score - report.vector_mean.overall_score, 4,
+        report.hybrid_mean.overall_score - report.vector_mean.overall_score,
+        4,
     )
 
     # Golden quality
@@ -580,7 +572,8 @@ def _compute_full_report(results: list[EvalQueryResult]) -> FullReport:
         [r.hybrid_latency.total_ms for r in results],
     )
     report.latency_delta_ms = round(
-        report.hybrid_latency_mean - report.vector_latency_mean, 2,
+        report.hybrid_latency_mean - report.vector_latency_mean,
+        2,
     )
     report.vector_retrieval_latency_mean = _mean(
         [r.vector_latency.retrieval_ms for r in results],
@@ -618,7 +611,9 @@ def _classify_delta(value: float, threshold: float = 0.02) -> str:
 
 
 def _classify_pct(
-    value: float, threshold: float = 5.0, invert: bool = False,
+    value: float,
+    threshold: float = 5.0,
+    invert: bool = False,
 ) -> str:
     """Return 'improved', 'regressed', or 'no change' for percentages."""
     if invert:
@@ -668,24 +663,20 @@ def _generate_recommendation(report: FullReport) -> str:
 
     if report.hallucination_risk_delta < -0.02:
         improvements.append(
-            "Hallucination risk reduced by "
-            f"{abs(report.hallucination_risk_delta):.3f}",
+            f"Hallucination risk reduced by {abs(report.hallucination_risk_delta):.3f}",
         )
     elif report.hallucination_risk_delta > 0.02:
         concerns.append(
-            "Hallucination risk increased by "
-            f"{report.hallucination_risk_delta:.3f}",
+            f"Hallucination risk increased by {report.hallucination_risk_delta:.3f}",
         )
 
     if report.citation_quality_delta > 0.02:
         improvements.append(
-            "Citation quality improved by "
-            f"{report.citation_quality_delta:+.3f}",
+            f"Citation quality improved by {report.citation_quality_delta:+.3f}",
         )
     elif report.citation_quality_delta < -0.02:
         concerns.append(
-            "Citation quality regressed by "
-            f"{report.citation_quality_delta:.3f}",
+            f"Citation quality regressed by {report.citation_quality_delta:.3f}",
         )
 
     if report.overall_delta > 0.02:
@@ -722,8 +713,7 @@ def _generate_recommendation(report: FullReport) -> str:
         )
     elif report.latency_delta_ms < -100.0:
         parts.append(
-            f"Hybrid is faster by "
-            f"{abs(report.latency_delta_ms):.1f}ms on average.",
+            f"Hybrid is faster by {abs(report.latency_delta_ms):.1f}ms on average.",
         )
     else:
         parts.append(
@@ -736,23 +726,13 @@ def _generate_recommendation(report: FullReport) -> str:
     has_regression = len(concerns) > 0
 
     if has_improvement and not has_regression:
-        verdict = (
-            "ENABLE HYBRID — Hybrid retrieval improves "
-            "LLM-judged answer quality."
-        )
+        verdict = "ENABLE HYBRID — Hybrid retrieval improves LLM-judged answer quality."
     elif has_regression and not has_improvement:
-        verdict = (
-            "KEEP VECTOR — Hybrid shows quality regressions. Investigate."
-        )
+        verdict = "KEEP VECTOR — Hybrid shows quality regressions. Investigate."
     elif has_improvement and has_regression:
-        verdict = (
-            "MIXED - NEED MORE DATA — Both improvements and "
-            "regressions detected."
-        )
+        verdict = "MIXED - NEED MORE DATA — Both improvements and regressions detected."
     else:
-        verdict = (
-            "KEEP VECTOR — No meaningful quality difference detected."
-        )
+        verdict = "KEEP VECTOR — No meaningful quality difference detected."
 
     parts.append(verdict)
     return "\n".join(parts)
@@ -772,8 +752,7 @@ def _format_report(report: FullReport) -> str:
         "- **Dataset**: Default GoldenDataset (6 representative queries)",
     )
     lines.append(
-        "- **Topics**: pricing, free trial, integrations, support, "
-        "security, team plans",
+        "- **Topics**: pricing, free trial, integrations, support, security, team plans",
     )
     lines.append(
         "- **Knowledge base**: 12 seeded chunks across 6 document groups",
@@ -797,12 +776,10 @@ def _format_report(report: FullReport) -> str:
         "risk, citation quality, overall).",
     )
     lines.append(
-        "4. **Golden evaluation**: Automated keyword/source/concept "
-        "coverage scoring.",
+        "4. **Golden evaluation**: Automated keyword/source/concept coverage scoring.",
     )
     lines.append(
-        "5. **Latency**: Wall-clock time measured for retrieval, "
-        "generation, TTFT, and total.",
+        "5. **Latency**: Wall-clock time measured for retrieval, generation, TTFT, and total.",
     )
     lines.append("")
     lines.append(
@@ -815,8 +792,7 @@ def _format_report(report: FullReport) -> str:
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     lines.append(
-        f"| Mean overall quality (LLM judge) "
-        f"| {report.vector_mean.overall_score:.3f} |",
+        f"| Mean overall quality (LLM judge) | {report.vector_mean.overall_score:.3f} |",
     )
     lines.append(
         f"| Mean correctness | {report.vector_mean.correctness:.3f} |",
@@ -828,12 +804,10 @@ def _format_report(report: FullReport) -> str:
         f"| Mean relevance | {report.vector_mean.relevance:.3f} |",
     )
     lines.append(
-        f"| Mean hallucination risk "
-        f"| {report.vector_mean.hallucination_risk:.3f} |",
+        f"| Mean hallucination risk | {report.vector_mean.hallucination_risk:.3f} |",
     )
     lines.append(
-        f"| Mean citation quality "
-        f"| {report.vector_mean.citation_quality:.3f} |",
+        f"| Mean citation quality | {report.vector_mean.citation_quality:.3f} |",
     )
     lines.append(
         f"| Mean golden quality | {report.vector_golden_mean:.3f} |",
@@ -842,19 +816,16 @@ def _format_report(report: FullReport) -> str:
         f"| Mean precision@k | {report.vector_precision_mean:.3f} |",
     )
     lines.append(
-        f"| Mean source accuracy "
-        f"| {report.vector_source_accuracy_mean:.3f} |",
+        f"| Mean source accuracy | {report.vector_source_accuracy_mean:.3f} |",
     )
     lines.append(
         f"| Mean total latency | {report.vector_latency_mean:.1f}ms |",
     )
     lines.append(
-        f"| Mean retrieval latency "
-        f"| {report.vector_retrieval_latency_mean:.1f}ms |",
+        f"| Mean retrieval latency | {report.vector_retrieval_latency_mean:.1f}ms |",
     )
     lines.append(
-        f"| Mean generation latency "
-        f"| {report.vector_generation_latency_mean:.1f}ms |",
+        f"| Mean generation latency | {report.vector_generation_latency_mean:.1f}ms |",
     )
     lines.append(
         f"| Mean TTFT | {report.vector_ttft_mean:.1f}ms |",
@@ -866,8 +837,7 @@ def _format_report(report: FullReport) -> str:
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     lines.append(
-        f"| Mean overall quality (LLM judge) "
-        f"| {report.hybrid_mean.overall_score:.3f} |",
+        f"| Mean overall quality (LLM judge) | {report.hybrid_mean.overall_score:.3f} |",
     )
     lines.append(
         f"| Mean correctness | {report.hybrid_mean.correctness:.3f} |",
@@ -879,12 +849,10 @@ def _format_report(report: FullReport) -> str:
         f"| Mean relevance | {report.hybrid_mean.relevance:.3f} |",
     )
     lines.append(
-        f"| Mean hallucination risk "
-        f"| {report.hybrid_mean.hallucination_risk:.3f} |",
+        f"| Mean hallucination risk | {report.hybrid_mean.hallucination_risk:.3f} |",
     )
     lines.append(
-        f"| Mean citation quality "
-        f"| {report.hybrid_mean.citation_quality:.3f} |",
+        f"| Mean citation quality | {report.hybrid_mean.citation_quality:.3f} |",
     )
     lines.append(
         f"| Mean golden quality | {report.hybrid_golden_mean:.3f} |",
@@ -893,19 +861,16 @@ def _format_report(report: FullReport) -> str:
         f"| Mean precision@k | {report.hybrid_precision_mean:.3f} |",
     )
     lines.append(
-        f"| Mean source accuracy "
-        f"| {report.hybrid_source_accuracy_mean:.3f} |",
+        f"| Mean source accuracy | {report.hybrid_source_accuracy_mean:.3f} |",
     )
     lines.append(
         f"| Mean total latency | {report.hybrid_latency_mean:.1f}ms |",
     )
     lines.append(
-        f"| Mean retrieval latency "
-        f"| {report.hybrid_retrieval_latency_mean:.1f}ms |",
+        f"| Mean retrieval latency | {report.hybrid_retrieval_latency_mean:.1f}ms |",
     )
     lines.append(
-        f"| Mean generation latency "
-        f"| {report.hybrid_generation_latency_mean:.1f}ms |",
+        f"| Mean generation latency | {report.hybrid_generation_latency_mean:.1f}ms |",
     )
     lines.append(
         f"| Mean TTFT | {report.hybrid_ttft_mean:.1f}ms |",
@@ -915,12 +880,10 @@ def _format_report(report: FullReport) -> str:
     lines.append("## Per-Query Comparison")
     lines.append("")
     lines.append(
-        "| Query | Vector Overall | Hybrid Overall | "
-        "Delta | Vector Latency | Hybrid Latency |",
+        "| Query | Vector Overall | Hybrid Overall | Delta | Vector Latency | Hybrid Latency |",
     )
     lines.append(
-        "|-------|---------------|----------------|"
-        "-------|----------------|----------------|",
+        "|-------|---------------|----------------|-------|----------------|----------------|",
     )
     for qr in report.per_query:
         v_ov = qr.vector_score.overall_score
@@ -941,7 +904,9 @@ def _format_report(report: FullReport) -> str:
     lines.append("|--------|-------|----------------|")
 
     def _delta_row(
-        name: str, delta: float, invert: bool = False,
+        name: str,
+        delta: float,
+        invert: bool = False,
     ) -> str:
         if invert:
             interp = _classify_pct(-delta * 100, threshold=2.0)
@@ -1004,8 +969,7 @@ def _format_report(report: FullReport) -> str:
         f"| {report.latency_delta_ms:+.1f}ms |",
     )
     lines.append(
-        f"| LLM Judge overhead "
-        f"| {report.judge_latency_mean:.1f}ms | — | — |",
+        f"| LLM Judge overhead | {report.judge_latency_mean:.1f}ms | — | — |",
     )
     lines.append("")
 
@@ -1020,12 +984,10 @@ def _format_report(report: FullReport) -> str:
     lines.append("---")
     lines.append("")
     lines.append(
-        "*Report generated by the Hybrid vs Vector LLM Evaluation "
-        "framework.*",
+        "*Report generated by the Hybrid vs Vector LLM Evaluation framework.*",
     )
     lines.append(
-        "*No production RAG behavior was modified during this "
-        "evaluation.*",
+        "*No production RAG behavior was modified during this evaluation.*",
     )
     lines.append("")
     return "\n".join(lines)
@@ -1169,7 +1131,9 @@ class TestHybridLLMEvaluation:
         report_path = Path("docs/HYBRID-LLM-EVALUATION-REPORT.md")
         report_path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.get_event_loop().run_in_executor(
-            None, report_path.write_text, markdown,
+            None,
+            report_path.write_text,
+            markdown,
         )
 
         raw_data = _build_raw_json(report, results)
@@ -1185,14 +1149,15 @@ class TestHybridLLMEvaluation:
         assert report.recommendation != ""
         assert report.vector_latency_mean > 0
         assert report.hybrid_latency_mean > 0
-        assert all(
-            qr.vector_score.overall_score >= 0 for qr in results
-        ), "All vector scores should be non-negative"
-        assert all(
-            qr.hybrid_score.overall_score >= 0 for qr in results
-        ), "All hybrid scores should be non-negative"
+        assert all(qr.vector_score.overall_score >= 0 for qr in results), (
+            "All vector scores should be non-negative"
+        )
+        assert all(qr.hybrid_score.overall_score >= 0 for qr in results), (
+            "All hybrid scores should be non-negative"
+        )
         assert await asyncio.get_event_loop().run_in_executor(
-            None, report_path.exists,
+            None,
+            report_path.exists,
         ), f"Report not written to {report_path}"
 
     async def test_evaluation_with_fake_judge(self) -> None:
@@ -1362,12 +1327,8 @@ def _build_raw_json(
             "delta_ms": report.latency_delta_ms,
             "vector_retrieval_mean": report.vector_retrieval_latency_mean,
             "hybrid_retrieval_mean": report.hybrid_retrieval_latency_mean,
-            "vector_generation_mean": (
-                report.vector_generation_latency_mean
-            ),
-            "hybrid_generation_mean": (
-                report.hybrid_generation_latency_mean
-            ),
+            "vector_generation_mean": (report.vector_generation_latency_mean),
+            "hybrid_generation_mean": (report.hybrid_generation_latency_mean),
             "vector_ttft_mean": report.vector_ttft_mean,
             "hybrid_ttft_mean": report.hybrid_ttft_mean,
             "judge_latency_mean": report.judge_latency_mean,
