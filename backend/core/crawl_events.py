@@ -15,7 +15,7 @@ connection pool so enqueue/progress never contend.
 
 import json
 import logging
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
@@ -174,7 +174,7 @@ async def publish_progress(
 async def subscribe(job_id: str) -> PubSub:
     """Return a Redis PubSub handle subscribed to the job's channel."""
     client = Redis.from_url(get_settings().redis_url, decode_responses=True)
-    pubsub = client.pubsub()
+    pubsub = cast(PubSub, client.pubsub())
     await pubsub.subscribe(_channel(job_id))
     return pubsub
 

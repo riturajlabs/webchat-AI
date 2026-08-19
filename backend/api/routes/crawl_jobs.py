@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -137,5 +137,5 @@ async def stream_crawl_progress(
     )
 
 
-def _sse(event: str, data: dict) -> str:
+def _sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
