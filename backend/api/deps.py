@@ -14,7 +14,12 @@ from fastapi import Depends, Header, Path, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from redis.asyncio import Redis
 
-from backend.ai.registry import build_embedding_fallback, build_generation_fallback
+from backend.ai.gemini import GenerationClient
+from backend.ai.registry import (
+    build_embedding_fallback,
+    build_generation_fallback,
+    build_generation_providers,
+)
 from backend.core.cache import RedisCacheStore
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
@@ -58,6 +63,8 @@ from backend.repositories import (
 )
 from backend.schemas.widget import CreateWidgetSessionRequest
 from backend.services.admin import AdminService
+from backend.services.ai.provider_health import ProviderHealthStore
+from backend.services.ai.provider_router import AdaptiveProviderRouter
 from backend.services.analytics import AnalyticsService
 from backend.services.api_keys import ApiKeyPrincipal, ApiKeyService
 from backend.services.auth import AuthService, Principal
@@ -217,6 +224,10 @@ def get_rag_service(
     and API keys come from settings (env) and are never logged or exposed.
     Retrieval goes through the vector repository, which is always tenant-scoped
     (ADR-008).
+
+    When ``AI_PROVIDER_ROUTING_MODE=adaptive``, an ``AdaptiveProviderRouter``
+    wraps the generation providers and uses Redis-backed health state to
+    reorder the fallback chain per-request (Phase 12.6).
     """
     settings = get_settings()
     rag_cache: RedisCacheStore | None = None
@@ -225,11 +236,24 @@ def get_rag_service(
             redis=get_redis(),
             prefix=f"{settings.redis_prefix}:rag",
         )
+    if settings.ai_provider_routing_mode == "adaptive" and settings.redis_url:
+        health = ProviderHealthStore(
+            redis=get_redis(),
+            cooldown_seconds=settings.ai_provider_cooldown_seconds,
+            health_check_interval=settings.ai_provider_health_check_interval,
+        )
+        generation: GenerationClient = AdaptiveProviderRouter(
+            providers=build_generation_providers(),
+            health=health,
+            recovery_window_seconds=settings.ai_provider_recovery_window_seconds,
+        )
+    else:
+        generation = build_generation_fallback()
     return RagService(
         websites=MongoWebsiteRepository(db),
         vector=get_vector_repository(db),
         embedder=build_embedding_fallback(max_retries=settings.chat_embedding_max_retries),
-        generation=build_generation_fallback(),
+        generation=generation,
         sessions=MongoChatSessionRepository(db),
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),

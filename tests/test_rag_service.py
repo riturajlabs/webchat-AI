@@ -457,6 +457,8 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "vector_result_count",
         "keyword_result_count",
         "final_result_count",
+        "reranked",
+        "faithfulness_score",
     }
     assert timing["total_ms"] >= timing["embedding_ms"]
     assert timing["provider"] is not None
@@ -816,6 +818,7 @@ async def test_graceful_fallback_when_no_cache_store() -> None:
         messages=env.messages,
         usage=env.usage,
         cache=None,
+        allow_reranking=False,
     )
     env.rag = rag
 

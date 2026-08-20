@@ -161,6 +161,16 @@ def build_generation_fallback() -> FallbackGenerationClient:
     return FallbackGenerationClient(_registry.build_generation_chain(order))
 
 
+def build_generation_providers() -> list[GenerationClient]:
+    """Build the raw generation provider list for the adaptive router.
+
+    Returns concrete client instances (not wrapped in FallbackGenerationClient)
+    so the adaptive router can wrap them itself and reorder per-request.
+    """
+    order = get_settings().generation_provider_order
+    return _registry.build_generation_chain(order)
+
+
 def build_embedding_fallback(
     max_retries: int | None = None,
 ) -> FallbackEmbeddingClient:
@@ -184,4 +194,5 @@ __all__ = [
     "ProviderRegistry",
     "build_embedding_fallback",
     "build_generation_fallback",
+    "build_generation_providers",
 ]

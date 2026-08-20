@@ -324,9 +324,27 @@ class Settings(BaseSettings):
     # Fusion (RRF) to improve source accuracy.  The existing vector-only path
     # remains the default fallback — no production behavior changes unless this
     # flag is explicitly set to True.
-    enable_hybrid_search: bool = False
+    enable_hybrid_search: bool = True
     # RRF constant for hybrid fusion (higher reduces top-rank impact).
     hybrid_rrf_k: int = 60
+
+    # Reranking (post-retrieval). When enabled, retrieved chunks are re-scored
+    # using the embedding model's query-chunk similarity before context
+    # construction.  Improves ranking quality at the cost of one extra embed
+    # call per query (embeds query + top_k chunk texts in a single batch).
+    enable_reranking: bool = True
+    # Number of top results after reranking fed into context.  Must be <=
+    # chat_top_k.  When 0, reranking is effectively disabled even if the flag
+    # is on.
+    rerank_top_k: int = 5
+
+    # Answer faithfulness (post-generation). When enabled, each answer is
+    # checked for unsupported claims by verifying that every sentence in the
+    # answer is grounded in the retrieved context chunks.  A low faithfulness
+    # score is logged as a warning (never blocks the response).
+    enable_faithfulness_check: bool = True
+    # Minimum faithfulness score (0.0-1.0) before a warning is emitted.
+    faithfulness_warning_threshold: float = 0.6
 
     # Performance instrumentation (Phase 12.1; opt-in, disabled by default).
     # When true, per-request HTTP timing, AI provider timings (TTFT/total) and
@@ -364,6 +382,21 @@ class Settings(BaseSettings):
     # client-visible streaming semantics. 0 disables buffering (raw per-token
     # frames). Default 50ms balances latency vs. frame count.
     sse_buffer_ms: float = 50.0
+
+    # Adaptive provider routing (Phase 12.6). When "adaptive", the router
+    # queries Redis for per-provider health and reorders the fallback chain
+    # per-request to prefer healthy low-latency providers and skip those in
+    # cooldown. "static" preserves the original fixed order (zero health
+    # lookups, zero Redis reads on the chat path).
+    ai_provider_routing_mode: str = "static"
+    # Seconds to suppress a provider after a failure before retesting it.
+    ai_provider_cooldown_seconds: int = 60
+    # Staleness threshold (seconds): health data older than this is treated
+    # as obsolete and the provider is treated as recoverable.
+    ai_provider_health_check_interval: int = 300
+    # After a provider recovers from cooldown, it stays below healthy
+    # providers for this many seconds before regaining normal priority.
+    ai_provider_recovery_window_seconds: int = 120
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod

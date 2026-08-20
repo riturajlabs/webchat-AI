@@ -60,6 +60,7 @@ class ProviderLatencyMetrics:
     error: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    failed_providers: tuple[str, ...] = ()
 
 
 class FallbackGenerationClient:
@@ -106,6 +107,7 @@ class FallbackGenerationClient:
         started = time.perf_counter()
         ttft_ms: float | None = None
         successful_provider: str | None = None
+        failed_names: list[str] = []
         for provider in self._providers:
             name = getattr(provider, "name", type(provider).__name__)
             started_streaming = False
@@ -127,6 +129,7 @@ class FallbackGenerationClient:
                     success=True,
                     input_tokens=provider.usage.input_tokens,
                     output_tokens=provider.usage.output_tokens,
+                    failed_providers=tuple(failed_names),
                 )
                 if _timing_enabled():
                     logger.info(
@@ -143,6 +146,7 @@ class FallbackGenerationClient:
                 if started_streaming:
                     raise
                 last_error = exc
+                failed_names.append(name)
                 if _timing_enabled():
                     logger.info(
                         "ai_generation_request",
@@ -168,6 +172,7 @@ class FallbackGenerationClient:
                 fallback_attempts=self._fallback_count,
                 success=False,
                 error=str(last_error),
+                failed_providers=tuple(failed_names),
             )
             raise last_error
         self._last_latency_metrics = ProviderLatencyMetrics(

@@ -197,7 +197,7 @@ def test_retrieval_metrics_info_frozen() -> None:
 
 def test_rag_service_default_uses_vector_strategy() -> None:
     env = build_chat_env()
-    assert isinstance(env.rag._retrieval_strategy, VectorRetrievalStrategy)
+    assert isinstance(env.rag._retrieval_strategy, HybridRetrievalStrategy)
 
 
 def test_rag_service_explicit_strategy_override() -> None:
@@ -233,6 +233,10 @@ def test_rag_service_hybrid_flag_enables_hybrid() -> None:
         mock_settings.return_value.embedding_cache_ttl_seconds = 3600
         mock_settings.return_value.chat_retrieval_cache_size = 512
         mock_settings.return_value.chat_retrieval_cache_ttl_seconds = 900
+        mock_settings.return_value.enable_reranking = False
+        mock_settings.return_value.rerank_top_k = 0
+        mock_settings.return_value.enable_faithfulness_check = False
+        mock_settings.return_value.faithfulness_warning_threshold = 0.6
         rag = RagService(
             websites=env.websites,
             vector=env.vector,
@@ -334,7 +338,7 @@ async def test_timing_logs_include_retrieval_method() -> None:
     done = next(e for e in events if e["event"] == "done")
     timing = done["data"].get("timing")
     assert timing is not None
-    assert timing["retrieval_method"] == "vector"
+    assert timing["retrieval_method"] == "hybrid"
     assert "vector_result_count" in timing
     assert "keyword_result_count" in timing
     assert "final_result_count" in timing

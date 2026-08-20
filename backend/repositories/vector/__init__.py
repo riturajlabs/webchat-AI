@@ -17,6 +17,7 @@ from backend.repositories.vector.hybrid import (
     reciprocal_rank_fusion,
 )
 from backend.repositories.vector.mongodb import MongoVectorRepository
+from backend.repositories.vector.reranker import EmbeddingReranker
 
 
 def get_vector_repository(db: AsyncIOMotorDatabase[Any]) -> VectorRepository:
@@ -25,6 +26,7 @@ def get_vector_repository(db: AsyncIOMotorDatabase[Any]) -> VectorRepository:
 
 
 __all__ = [
+    "EmbeddingReranker",
     "HybridSearcher",
     "MongoVectorRepository",
     "VectorRepository",

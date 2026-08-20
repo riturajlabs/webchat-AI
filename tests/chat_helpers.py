@@ -48,6 +48,7 @@ def build_chat_env(
     memory_turns: int = 8,
     deltas: list[str] | None = None,
     cache: FakeCacheStore | None = None,
+    reranker: bool = False,
 ) -> ChatEnv:
     websites = FakeWebsiteRepository()
     widgets = FakeWidgetRepository()
@@ -70,6 +71,7 @@ def build_chat_env(
         cache=cache_store,
         top_k=top_k,
         memory_turns=memory_turns,
+        allow_reranking=reranker,
     )
     websites_service = WebsiteService(
         websites=websites,

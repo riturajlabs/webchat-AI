@@ -53,6 +53,7 @@ from backend.repositories.chat_message_repository import ChatMessageRepository
 from backend.repositories.chat_session_repository import ChatSessionRepository
 from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
+from backend.repositories.vector.reranker import EmbeddingReranker
 from backend.repositories.website_repository import WebsiteRepository
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
@@ -105,6 +106,8 @@ class RagService:
         prompt_version: int | None = None,
         memory_turns: int | None = None,
         retrieval_strategy: RetrievalStrategy | None = None,
+        reranker: EmbeddingReranker | None = None,
+        allow_reranking: bool = True,
     ) -> None:
         settings = get_settings()
         self._websites = websites
@@ -130,6 +133,8 @@ class RagService:
         self._embedding_cache_ttl = settings.embedding_cache_ttl_seconds
         self._retrieval_cache_size = settings.chat_retrieval_cache_size
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
+        self._enable_faithfulness_check = settings.enable_faithfulness_check
+        self._faithfulness_warning_threshold = settings.faithfulness_warning_threshold
         # Retrieval strategy: explicit override or config-driven default.
         if retrieval_strategy is not None:
             self._retrieval_strategy = retrieval_strategy
@@ -139,6 +144,17 @@ class RagService:
             )
         else:
             self._retrieval_strategy = VectorRetrievalStrategy()
+        # Reranker: explicit override or config-driven default.
+        self._reranker: EmbeddingReranker | None
+        if reranker is not None:
+            self._reranker = reranker
+        elif allow_reranking and settings.enable_reranking and settings.rerank_top_k > 0:
+            self._reranker = EmbeddingReranker(
+                embedder=embedder,
+                top_k=settings.rerank_top_k,
+            )
+        else:
+            self._reranker = None
 
     async def _embed_question(self, question: str) -> tuple[list[float], bool]:
         """Embed `question`, caching identical questions across turns.
@@ -210,7 +226,11 @@ class RagService:
                             for r in entry["results"]
                         ]
                         # Apply retrieval strategy to cached raw results.
-                        all_chunks = await self._load_all_chunks(tenant_id, website_id)
+                        all_chunks = (
+                            await self._load_all_chunks(tenant_id, website_id)
+                            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
+                            else None
+                        )
                         results, metrics = self._retrieval_strategy.search(
                             query=question,
                             vector_results=raw_results,
@@ -246,13 +266,20 @@ class RagService:
                 "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
             )
         # Apply retrieval strategy (vector-only or hybrid) to raw results.
-        all_chunks = await self._load_all_chunks(tenant_id, website_id)
+        all_chunks = (
+            await self._load_all_chunks(tenant_id, website_id)
+            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
+            else None
+        )
         results, metrics = self._retrieval_strategy.search(
             query=question,
             vector_results=raw_results,
             all_chunks=all_chunks,
             top_k=self._top_k,
         )
+        # Apply reranking to improve ordering quality.
+        if self._reranker is not None and results:
+            results = await self._reranker.rerank(question, results)
         return (
             query_vector,
             results,
@@ -502,6 +529,20 @@ class RagService:
                 website_id,
                 session.session_id,
             )
+        # Faithfulness check: verify answer is grounded in retrieved context.
+        faithfulness_score: float | None = None
+        if self._enable_faithfulness_check and context_items and answer:
+            faithfulness_score = _check_faithfulness(answer, context_items)
+            if faithfulness_score < self._faithfulness_warning_threshold:
+                logger.warning(
+                    "faithfulness_low score=%.2f threshold=%.2f tenant=%s website=%s "
+                    "session=%s",
+                    faithfulness_score,
+                    self._faithfulness_warning_threshold,
+                    tenant_id,
+                    website_id,
+                    session.session_id,
+                )
         response_time = time.monotonic() - started
         usage = self._generation.usage
 
@@ -567,6 +608,8 @@ class RagService:
             "prompt_version": self._prompt_version,
             "fallback": False,
         }
+        if faithfulness_score is not None:
+            done_data["faithfulness_score"] = round(faithfulness_score, 3)
         if self._timing_enabled:
             done_data["timing"] = {
                 "embedding_ms": round(embedding_ms, 2),
@@ -593,6 +636,10 @@ class RagService:
                 "vector_result_count": retrieval_metrics.vector_result_count,
                 "keyword_result_count": retrieval_metrics.keyword_result_count,
                 "final_result_count": retrieval_metrics.final_result_count,
+                "reranked": self._reranker is not None,
+                "faithfulness_score": (
+                    round(faithfulness_score, 3) if faithfulness_score is not None else None
+                ),
             }
             logger.info(
                 "rag_timing",
@@ -623,6 +670,12 @@ class RagService:
                     "vector_result_count": retrieval_metrics.vector_result_count,
                     "keyword_result_count": retrieval_metrics.keyword_result_count,
                     "final_result_count": retrieval_metrics.final_result_count,
+                    "reranked": self._reranker is not None,
+                    "faithfulness_score": (
+                        round(faithfulness_score, 3)
+                        if faithfulness_score is not None
+                        else None
+                    ),
                 },
             )
         yield {"event": "done", "data": done_data}
@@ -803,6 +856,40 @@ def _safe_message(exc: Exception) -> str:
     if isinstance(exc, AppError):
         return exc.message
     return "An unexpected error occurred. Please try again later."
+
+
+def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> float:
+    """Score answer faithfulness by checking if each sentence is grounded in context.
+
+    Returns a value between 0.0 (no support) and 1.0 (fully grounded).
+    Each sentence in the answer is checked for at least one significant
+    word overlap (>3 chars) with the context chunks.  This is a lightweight
+    heuristic that catches obvious hallucinations without an extra LLM call.
+    """
+    import re
+
+    sentences = [s.strip() for s in re.split(r"[.!?]+", answer) if s.strip() and len(s.strip()) > 5]
+    if not sentences:
+        return 1.0
+
+    context_lower = " ".join(item.text.lower() for item in context_items)
+    context_words = {
+        w for w in context_lower.split() if len(w) > 3 and w.isalpha()
+    }
+
+    supported = 0
+    for sentence in sentences:
+        words = {
+            w for w in sentence.lower().split() if len(w) > 3 and w.isalpha()
+        }
+        if not words:
+            supported += 1
+            continue
+        overlap = words & context_words
+        if len(overlap) >= max(1, len(words) // 3):
+            supported += 1
+
+    return round(supported / len(sentences), 3) if sentences else 1.0
 
 
 __all__ = ["RagService"]
