@@ -117,13 +117,19 @@ fallback only triggers on Atlas-missing markers, not a missing index on Atlas).
   "type": "vectorSearch",
   "definition": {
     "fields": [
-      { "type": "vector", "path": "embedding", "numDimensions": 3072, "similarity": "cosine" }
+      { "type": "vector", "path": "embedding", "numDimensions": 1024, "similarity": "cosine" },
+      { "type": "filter", "path": "tenant_id" },
+      { "type": "filter", "path": "website_id" },
+      { "type": "filter", "path": "embedding_provider" },
+      { "type": "filter", "path": "embedding_model" },
+      { "type": "filter", "path": "embedding_dimensions" },
+      { "type": "filter", "path": "embedding_version" }
     ]
   }
 }
 ```
 
-`numDimensions` must match `EMBEDDING_DIMENSIONS` (3072 for gemini-embedding-001).
+`numDimensions` must match `EMBEDDING_DIMENSIONS` (1024 in the current production configuration).
 Add this step to the release runbook.
 
 ---
@@ -149,28 +155,28 @@ Add this step to the release runbook.
 
 ### Runtime (API + worker), production
 
-| Variable                   | Required                 | Notes                                                              |
-| -------------------------- | ------------------------ | ------------------------------------------------------------------ |
-| `ENVIRONMENT`              | yes                      | `production` (triggers fail-fast validator)                        |
-| `DEBUG`                    | yes                      | `false` (also disables `/api/docs`)                                |
-| `JWT_SECRET`               | yes                      | ≥ 32 bytes; `openssl rand -hex 32`                                 |
-| `MONGODB_URI`              | yes                      | Atlas `mongodb+srv://...`                                          |
-| `MONGODB_DB`               | yes                      | e.g. `webchat_ai`                                                  |
-| `REDIS_URL`                | yes                      | Upstash/Redis Cloud RESP w/ TLS (`rediss://`)                      |
-| `REDIS_PREFIX`             | recommended              | per-env key isolation                                              |
-| `CORS_ORIGINS`             | yes                      | JSON array of production dashboard origins                         |
-| `PUBLIC_BASE_URL`          | yes                      | production dashboard origin (email links)                          |
-| `COOKIE_SECURE`            | yes                      | `true`                                                             |
-| `TRUST_PROXY`              | yes                      | `true` behind a trusted LB                                         |
-| `RESEND_API_KEY`           | yes                      | email delivery (Mailpit is dev-only)                               |
-| `EMAIL_FROM`               | yes                      | verified sender domain                                             |
-| `GEMINI_API_KEY`           | yes (or Groq/OpenRouter) | at least one generation provider                                   |
-| `EMBEDDING_PROVIDER_ORDER` | yes                      | e.g. `["gemini"]`                                                  |
-| `EMBEDDING_DIMENSIONS`     | yes                      | must match the Atlas vector index (3072)                           |
-| `WIDGET_SCRIPT_URL`        | yes                      | HTTPS URL of the **content-hashed** widget bundle on the CDN/host  |
-| `WIDGET_API_BASE_URL`      | recommended              | HTTPS API origin; baked into embed snippets as `data-api-base-url` |
-| `RATE_LIMIT_ENABLED`       | recommended              | `true`                                                             |
-| `PERF_TIMING_LOG_ENABLED`  | no                       | keep off in production                                             |
+| Variable                   | Required                 | Notes                                                                            |
+| -------------------------- | ------------------------ | -------------------------------------------------------------------------------- |
+| `ENVIRONMENT`              | yes                      | `production` (triggers fail-fast validator)                                      |
+| `DEBUG`                    | yes                      | `false` (also disables `/api/docs`)                                              |
+| `JWT_SECRET`               | yes                      | ≥ 32 bytes; `openssl rand -hex 32`                                               |
+| `MONGODB_URI`              | yes                      | Atlas `mongodb+srv://...`                                                        |
+| `MONGODB_DB`               | yes                      | e.g. `webchat_ai`                                                                |
+| `REDIS_URL`                | yes                      | Upstash/Redis Cloud RESP w/ TLS (`rediss://`)                                    |
+| `REDIS_PREFIX`             | recommended              | per-env key isolation                                                            |
+| `CORS_ORIGINS`             | yes                      | JSON array of production dashboard origins                                       |
+| `PUBLIC_BASE_URL`          | yes                      | production dashboard origin (email links)                                        |
+| `COOKIE_SECURE`            | yes                      | `true`                                                                           |
+| `TRUST_PROXY`              | yes                      | `true` behind a trusted LB                                                       |
+| `RESEND_API_KEY`           | yes                      | email delivery (Mailpit is dev-only)                                             |
+| `EMAIL_FROM`               | yes                      | verified sender domain                                                           |
+| `GEMINI_API_KEY`           | yes (or Groq/OpenRouter) | at least one generation provider                                                 |
+| `EMBEDDING_PROVIDER_ORDER` | yes                      | e.g. `["gemini"]`                                                                |
+| `EMBEDDING_DIMENSIONS`     | yes                      | must match the Atlas vector index (1024 in the current production configuration) |
+| `WIDGET_SCRIPT_URL`        | yes                      | HTTPS URL of the **content-hashed** widget bundle on the CDN/host                |
+| `WIDGET_API_BASE_URL`      | recommended              | HTTPS API origin; baked into embed snippets as `data-api-base-url`               |
+| `RATE_LIMIT_ENABLED`       | recommended              | `true`                                                                           |
+| `PERF_TIMING_LOG_ENABLED`  | no                       | keep off in production                                                           |
 
 ### Build-time (must be passed at image build)
 
@@ -246,7 +252,7 @@ Add this step to the release runbook.
 | ------- | ----------------------------------------------- | --------------------------------------------------------------- |
 | B1      | Production compose / IaC missing                | Author production deployment config with prod-safe env          |
 | B2      | Dashboard `NEXT_PUBLIC_API_URL` not a build arg | Add `ARG/ENV` to `Dockerfile.dashboard` + pass in compose       |
-| B3      | Atlas Vector Search index manual step           | Create `default` index on `knowledge_chunks.embedding` (3072-d) |
+| B3      | Atlas Vector Search index manual step           | Create `default` index on `knowledge_chunks.embedding` (1024-d) |
 
 Plus: add non-root users (R1), validate `COOKIE_SECURE=true` in prod (R2), set
 `TRUST_PROXY=true` (R3), and add a worker healthcheck (R5).

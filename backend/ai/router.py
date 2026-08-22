@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from backend.ai.gemini import GenerationClient, GenerationUsage
 from backend.core.config import get_settings
+from backend.core.embedding_identity import EmbeddingIdentity
 from backend.core.errors import (
     EmbeddingError,
     EmbeddingUnavailableError,
@@ -223,6 +224,16 @@ class FallbackEmbeddingClient:
     def active_provider(self) -> str | None:
         """Name of the provider that served the most recent request."""
         return self._active_provider
+
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        """Identity of the provider that served the most recent request."""
+        if self._active_provider is None:
+            raise EmbeddingUnavailableError("No embedding identity is available before embedding.")
+        for provider in self._providers:
+            if getattr(provider, "name", type(provider).__name__) == self._active_provider:
+                return provider.embedding_identity
+        raise EmbeddingUnavailableError("The active embedding provider is unavailable.")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not self._providers:

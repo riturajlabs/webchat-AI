@@ -14,6 +14,7 @@ from backend.models.knowledge_chunk import (
     KNOWLEDGE_STATUS_FAILED,
     KNOWLEDGE_STATUS_PROCESSING,
     KNOWLEDGE_STATUS_READY,
+    KnowledgeChunk,
 )
 from backend.models.usage_record import usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
@@ -121,6 +122,10 @@ async def test_embeds_document_and_updates_stats() -> None:
     assert result["chunks"] > 0
     assert len(env.vector.chunks) == result["chunks"]
     assert all(chunk.tenant_id == "tenant-a" for chunk in env.vector.chunks)
+    assert all(chunk.embedding_provider == "fake" for chunk in env.vector.chunks)
+    assert all(chunk.embedding_model == "fake-embedding" for chunk in env.vector.chunks)
+    assert all(chunk.embedding_dimensions == 4 for chunk in env.vector.chunks)
+    assert all(chunk.embedding_version == "1" for chunk in env.vector.chunks)
     stored = env.documents.documents[env.document.id]
     assert stored.knowledge_status == KNOWLEDGE_STATUS_READY
     assert stored.knowledge_checksum == "abc123"
@@ -671,3 +676,77 @@ async def test_failure_is_logged_with_structured_fields(caplog) -> None:
     assert record.error_type == "EmbeddingError"
     assert record.error_message == "provider timeout"
     assert record.timestamp is not None
+
+
+# ---------------------------------------------------------------------------
+# Embedding-identity quarantine (audit BUG-1)
+# ---------------------------------------------------------------------------
+
+
+def _legacy_chunk(document: Document, *, provider: str | None, model: str | None) -> KnowledgeChunk:
+    return KnowledgeChunk.new(
+        tenant_id=document.tenant_id,
+        website_id=document.website_id,
+        document_id="doc-legacy-other-space",
+        chunk_text="chunk embedded in another vector space",
+        embedding=[0.5, 0.5, 0.5, 0.5],
+        chunk_index=0,
+        embedding_provider=provider,
+        embedding_model=model,
+        embedding_dimensions=4,
+        embedding_version="1",
+    )
+
+
+async def test_website_with_foreign_identity_quarantines_ingestion() -> None:
+    """A website whose corpus lives in another embedding space must never
+    receive chunks from a different identity: the document is quarantined
+    (permanent failure) and the existing corpus stays untouched."""
+    env = await _env()
+    await env.vector.insert_chunks(
+        [_legacy_chunk(env.document, provider="jina", model="jina-embeddings-v3")]
+    )
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "failed"
+    assert result["retryable"] is False
+    assert result["reason"] == "embedding_identity_conflict"
+    # Nothing was written or deleted: only the pre-existing foreign chunk remains.
+    assert [c.document_id for c in env.vector.chunks] == ["doc-legacy-other-space"]
+    stored = env.documents.documents[env.document.id]
+    assert stored.knowledge_status == KNOWLEDGE_STATUS_FAILED
+    assert stored.knowledge_retry_count == 0  # permanent: no retry budget burned
+    assert "EmbeddingIdentityConflict" in (stored.knowledge_failure_reason or "")
+    assert any(log.action == AUDIT_KNOWLEDGE_FAILED for log in env.audit.logs)
+
+
+async def test_matching_identity_processes_normally() -> None:
+    """Chunks already stamped with the active embedding identity never block
+    ingestion - including this document's own stale chunks on a rebuild."""
+    env = await _env()
+    await env.processor.process_document(env.document.id)
+
+    env.document.content = TEXT + " Freshly appended sentence. "
+    env.document.checksum = "changed-789"
+    await env.documents.upsert(env.document)
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    assert all(chunk.embedding_provider == "fake" for chunk in env.vector.chunks)
+
+
+async def test_legacy_unstamped_chunks_block_ingestion() -> None:
+    """Chunks without any identity stamp cannot be proven compatible, so they
+    quarantine ingestion instead of silently joining a new embedding space."""
+    env = await _env()
+    unstamped = _legacy_chunk(env.document, provider=None, model=None)
+    unstamped.embedding_dimensions = None
+    unstamped.embedding_version = None
+    await env.vector.insert_chunks([unstamped])
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["reason"] == "embedding_identity_conflict"
+    assert [c.document_id for c in env.vector.chunks] == ["doc-legacy-other-space"]

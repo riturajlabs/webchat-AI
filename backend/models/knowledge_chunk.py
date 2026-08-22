@@ -45,7 +45,11 @@ class KnowledgeChunk(BaseModel):
     website_id: str
     document_id: str
     chunk_text: str
-    embedding: list[float]
+    embedding: list[float] = Field(default_factory=list)
+    embedding_provider: str | None = None
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+    embedding_version: str | None = None
     chunk_index: int
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
@@ -62,6 +66,10 @@ class KnowledgeChunk(BaseModel):
         embedding: list[float],
         chunk_index: int,
         metadata: dict[str, Any] | None = None,
+        embedding_provider: str | None = None,
+        embedding_model: str | None = None,
+        embedding_dimensions: int | None = None,
+        embedding_version: str | None = None,
     ) -> "KnowledgeChunk":
         return cls(
             id=new_id(),
@@ -70,6 +78,10 @@ class KnowledgeChunk(BaseModel):
             document_id=document_id,
             chunk_text=chunk_text,
             embedding=embedding,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            embedding_version=embedding_version,
             chunk_index=chunk_index,
             metadata=metadata or {},
             created_at=utcnow(),

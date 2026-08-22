@@ -22,6 +22,7 @@ class CacheStore(Protocol):
         self, namespace: str, key: str, value: str, *, ttl: int | None = None
     ) -> None: ...
     async def delete(self, namespace: str, key: str) -> None: ...
+    async def delete_by_prefix(self, namespace: str, prefix: str) -> int: ...
 
 
 class RedisCacheStore:
@@ -69,6 +70,32 @@ class RedisCacheStore:
             await self._redis.delete(self._key(namespace, key))
         except Exception:
             logger.warning("Redis cache DEL failed (namespace=%s)", namespace, exc_info=True)
+
+    async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
+        """Delete all keys matching ``{prefix}*`` within *namespace*.
+
+        Returns the number of keys deleted.  Uses SCAN to avoid blocking
+        Redis on large key sets.  Fail-open: Redis errors are logged and
+        silently swallowed.
+        """
+        pattern = self._key(namespace, f"{prefix}*")
+        deleted = 0
+        try:
+            cursor = 0
+            while True:
+                cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    deleted += await self._redis.delete(*keys)
+                if cursor == 0:
+                    break
+        except Exception:
+            logger.warning(
+                "Redis cache DEL_BY_PREFIX failed (namespace=%s prefix=%s)",
+                namespace,
+                prefix,
+                exc_info=True,
+            )
+        return deleted
 
 
 # ---------------------------------------------------------------------------

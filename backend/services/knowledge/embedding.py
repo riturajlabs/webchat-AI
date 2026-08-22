@@ -18,7 +18,11 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
-from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
+from backend.core.embedding_identity import EmbeddingIdentity, ensure_embedding_compatibility
+from backend.core.errors import (
+    EmbeddingError,
+    EmbeddingUnavailableError,
+)
 from backend.services.knowledge.chunker import count_tokens
 
 logger = logging.getLogger("webchat_ai")
@@ -38,11 +42,15 @@ def ensure_vector_dimensions(
     """
     if not vectors:
         return
-    first = len(vectors[0])
-    if first != expected_dimensions:
+    mismatches = {
+        len(vector)
+        for vector in vectors
+        if len(vector) != expected_dimensions
+    }
+    if mismatches:
         raise EmbeddingError(
-            f"Embedding dimension mismatch: {provider_name} returned {first}, "
-            f"configured index expects {expected_dimensions}."
+            f"Embedding dimension mismatch: {provider_name} returned dimensions "
+            f"{sorted(mismatches)}, configured index expects {expected_dimensions}."
         )
 
 
@@ -62,6 +70,11 @@ class EmbeddingClient(Protocol):
     @property
     def usage(self) -> EmbeddingUsage:
         """Aggregate usage so far (Phase 9 fallback reads the serving provider)."""
+        ...
+
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        """Identity of the provider/model used for the most recent embedding."""
         ...
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
@@ -111,6 +124,15 @@ class GoogleEmbeddingClient:
     def dimensions(self) -> int:
         """Embedding vector length (Phase 9 dimension-compatibility check)."""
         return self._dimensions
+
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        return EmbeddingIdentity(
+            provider=self.name,
+            model=self._model,
+            dimensions=self._dimensions,
+            version=getattr(get_settings(), "embedding_version", "1"),
+        )
 
     def _client(self) -> Any:
         """Lazily build the SDK client (never touches network until first call)."""
@@ -224,8 +246,10 @@ class GoogleEmbeddingClient:
 
 
 __all__ = [
+    "EmbeddingIdentity",
     "EmbeddingClient",
     "EmbeddingUsage",
     "GoogleEmbeddingClient",
+    "ensure_embedding_compatibility",
     "ensure_vector_dimensions",
 ]

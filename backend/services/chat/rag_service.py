@@ -55,13 +55,24 @@ from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
 from backend.repositories.vector.reranker import EmbeddingReranker
 from backend.repositories.website_repository import WebsiteRepository
+from backend.services.chat.confidence import ConfidenceMetrics, assess_confidence
+from backend.services.chat.context_optimizer import (
+    OptimizationMetrics,
+    compress_text,
+    remove_near_duplicates,
+)
+from backend.services.chat.query_classifier import QueryComplexity, classify_query
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
     RetrievalMetricsInfo,
     RetrievalStrategy,
     VectorRetrievalStrategy,
 )
-from backend.services.knowledge.embedding import EmbeddingClient
+from backend.services.knowledge.embedding import (
+    EmbeddingClient,
+    EmbeddingIdentity,
+    ensure_embedding_compatibility,
+)
 from backend.workers.timing import chat_stage
 
 logger = logging.getLogger("webchat_ai")
@@ -135,6 +146,24 @@ class RagService:
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
         self._enable_faithfulness_check = settings.enable_faithfulness_check
         self._faithfulness_warning_threshold = settings.faithfulness_warning_threshold
+        # RAG confidence check (pre-generation). When enabled, retrieval
+        # scores are evaluated before the LLM is called.  Low-confidence
+        # queries receive the safe fallback instead of a generated answer.
+        self._confidence_check_enabled = settings.enable_rag_confidence_check
+        self._confidence_threshold = settings.rag_confidence_threshold
+        # Context optimization (opt-in). When enabled, near-duplicate chunks
+        # are removed and context text is compressed before prompt construction.
+        self._context_optimization_enabled = settings.enable_context_optimization
+        self._hybrid_candidate_limit = settings.hybrid_search_candidate_limit
+        # Adaptive retrieval (opt-in). When disabled, all queries use the
+        # same fixed parameters — zero overhead.
+        self._adaptive_enabled = settings.enable_adaptive_retrieval
+        self._adaptive_simple_top_k = settings.adaptive_simple_top_k
+        self._adaptive_simple_rerank_top_k = settings.adaptive_simple_rerank_top_k
+        self._adaptive_simple_max_context_chars = settings.adaptive_simple_max_context_chars
+        self._adaptive_complex_top_k = settings.adaptive_complex_top_k
+        self._adaptive_complex_rerank_top_k = settings.adaptive_complex_rerank_top_k
+        self._adaptive_complex_max_context_chars = settings.adaptive_complex_max_context_chars
         # Retrieval strategy: explicit override or config-driven default.
         if retrieval_strategy is not None:
             self._retrieval_strategy = retrieval_strategy
@@ -156,10 +185,12 @@ class RagService:
         else:
             self._reranker = None
 
-    async def _embed_question(self, question: str) -> tuple[list[float], bool]:
+    async def _embed_question(
+        self, question: str
+    ) -> tuple[list[float], bool, EmbeddingIdentity]:
         """Embed `question`, caching identical questions across turns.
 
-        Returns `(vector, cache_hit)` so callers can report hit/miss and the
+        Returns `(vector, cache_hit, identity)` so callers can report hit/miss and the
         opt-in timing breakdown. The cache is a bounded per-process LRU keyed on
         the normalized (case-folded) question text; repeated/echoed questions hit
         the cache and skip the provider call. Eviction is size-only so entries
@@ -170,15 +201,29 @@ class RagService:
             raw = await self._cache.get("embed", key)
             if raw is not None:
                 try:
-                    return json.loads(raw), True
+                    entry = json.loads(raw)
+                    identity_data = entry["embedding_identity"]
+                    identity = EmbeddingIdentity(
+                        provider=identity_data["provider"],
+                        model=identity_data["model"],
+                        dimensions=identity_data["dimensions"],
+                        version=identity_data["version"],
+                    )
+                    return entry["vector"], True, identity
                 except (json.JSONDecodeError, TypeError):
                     pass
         vectors = await self._embedder.embed([question])
         vector = vectors[0]
+        identity = self._embedder.embedding_identity
         if self._cache is not None and self._embedding_cache_size > 0:
             ttl = self._embedding_cache_ttl if self._embedding_cache_ttl > 0 else None
-            await self._cache.set("embed", key, json.dumps(vector), ttl=ttl)
-        return vector, False
+            await self._cache.set(
+                "embed",
+                key,
+                json.dumps({"vector": vector, "embedding_identity": identity.as_dict()}),
+                ttl=ttl,
+            )
+        return vector, False, identity
 
     async def _retrieve(
         self,
@@ -194,16 +239,32 @@ class RagService:
         bool,
         bool,
         RetrievalMetricsInfo,
+        float,
+        float,
+        float,
+        int,
+        int,
+        int,
     ]:
         """Embed + search, memoizing repeats within the retrieval TTL.
 
         Returns `(query_vector, results, embedding_ms, retrieval_ms,
-        embedding_cache_hit, retrieval_cache_hit, retrieval_metrics)`.  A
-        retrieval-cache hit reports zero stage latency (the work was already
-        done) and skips both the embedding provider and the vector query.
-        The retrieval strategy (vector-only or hybrid) is applied *after*
-        the cache lookup so cached entries store raw vector results.
+        embedding_cache_hit, retrieval_cache_hit, retrieval_metrics,
+        load_chunks_ms, rerank_ms, rerank_embedding_ms,
+        rerank_input_count, hybrid_candidate_count,
+        adaptive_max_context_chars)`.
         """
+        # Adaptive retrieval: classify query complexity and determine params.
+        complexity = classify_query(question)
+        effective_top_k = self._top_k
+        adaptive_max_context_chars = self._max_context_chars
+        if self._adaptive_enabled:
+            if complexity == QueryComplexity.SIMPLE:
+                effective_top_k = self._adaptive_simple_top_k
+                adaptive_max_context_chars = self._adaptive_simple_max_context_chars
+            elif complexity == QueryComplexity.COMPLEX:
+                effective_top_k = self._adaptive_complex_top_k
+                adaptive_max_context_chars = self._adaptive_complex_max_context_chars
         cache = self._cache
         cache_key = f"{website_id}:{question.strip().lower()}"
         now = _now()
@@ -218,6 +279,13 @@ class RagService:
                     entry = json.loads(raw)
                     if now - entry["cached_at"] < self._retrieval_cache_ttl:
                         vector = entry["vector"]
+                        identity_data = entry["embedding_identity"]
+                        query_identity = EmbeddingIdentity(
+                            provider=identity_data["provider"],
+                            model=identity_data["model"],
+                            dimensions=identity_data["dimensions"],
+                            version=identity_data["version"],
+                        )
                         raw_results = [
                             VectorSearchResult(
                                 chunk=KnowledgeChunk(**r["chunk"]),
@@ -225,30 +293,79 @@ class RagService:
                             )
                             for r in entry["results"]
                         ]
-                        # Apply retrieval strategy to cached raw results.
-                        all_chunks = (
-                            await self._load_all_chunks(tenant_id, website_id)
-                            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
-                            else None
-                        )
+                        for raw_result in raw_results:
+                            ensure_embedding_compatibility(raw_result.chunk, query_identity)
+                        # Hybrid keyword matching reranks cached vector hits
+                        # only; it must not load unrelated website chunks.
+                        load_chunks_ms = 0.0
+                        hybrid_candidate_count = len(raw_results) if isinstance(
+                            self._retrieval_strategy, HybridRetrievalStrategy
+                        ) else 0
+                        all_chunks = None
                         results, metrics = self._retrieval_strategy.search(
                             query=question,
                             vector_results=raw_results,
                             all_chunks=all_chunks,
-                            top_k=self._top_k,
+                            top_k=effective_top_k,
                         )
-                        return vector, results, 0.0, 0.0, True, True, metrics
+                        # Apply reranking to cached results too.
+                        rerank_ms = 0.0
+                        rerank_embedding_ms = 0.0
+                        rerank_input_count = 0
+                        if self._reranker is not None and results:
+                            rerank_input_count = len(results)
+                            results, rerank_metrics = await self._reranker.rerank(
+                                question, results, query_embedding=vector
+                            )
+                            rerank_ms = rerank_metrics.rerank_ms
+                            rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
+                        return (
+                            vector,
+                            results,
+                            0.0,
+                            0.0,
+                            True,
+                            True,
+                            metrics,
+                            load_chunks_ms,
+                            rerank_ms,
+                            rerank_embedding_ms,
+                            rerank_input_count,
+                            hybrid_candidate_count,
+                            adaptive_max_context_chars,
+                        )
                 except (json.JSONDecodeError, TypeError, KeyError):
                     pass
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
-            query_vector, embedding_cache_hit = await self._embed_question(question)
+            query_vector, embedding_cache_hit, query_identity = await self._embed_question(question)
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
         async with chat_stage("retrieval.vector_search"):
             raw_results = await self._vector.similarity_search(
-                tenant_id, website_id, query_vector, top_k=self._top_k
+                tenant_id,
+                website_id,
+                query_vector,
+                top_k=effective_top_k,
+                embedding_identity=query_identity,
             )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "mongodb_vector_search_debug question=%r vector_result_count=%d",
+                question,
+                len(raw_results),
+            )
+            for result in raw_results:
+                metadata = result.chunk.metadata
+                logger.debug(
+                    "mongodb_vector_search_result chunk_id=%s score=%s title=%s url=%s "
+                    "chunk_text_200=%r",
+                    result.chunk.id,
+                    round(result.score, 4),
+                    metadata.get("title"),
+                    metadata.get("source_url"),
+                    result.chunk.chunk_text[:200],
+                )
         retrieval_ms = (time.perf_counter() - t1) * 1000.0
         # Cache raw vector results (before strategy) so deserialization
         # always produces clean VectorSearchResult/KnowledgeChunk objects.
@@ -256,6 +373,7 @@ class RagService:
             assert cache is not None  # guaranteed by retrieval_enabled
             entry = {
                 "vector": query_vector,
+                "embedding_identity": query_identity.as_dict(),
                 "results": [
                     {"chunk": r.chunk.model_dump(mode="json"), "score": r.score}
                     for r in raw_results
@@ -265,21 +383,30 @@ class RagService:
             await cache.set(
                 "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
             )
-        # Apply retrieval strategy (vector-only or hybrid) to raw results.
-        all_chunks = (
-            await self._load_all_chunks(tenant_id, website_id)
-            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
-            else None
-        )
+        # Hybrid keyword matching reranks vector hits only; it must not load
+        # or introduce unrelated chunks from the rest of the website.
+        load_chunks_ms = 0.0
+        hybrid_candidate_count = len(raw_results) if isinstance(
+            self._retrieval_strategy, HybridRetrievalStrategy
+        ) else 0
+        all_chunks = None
         results, metrics = self._retrieval_strategy.search(
             query=question,
             vector_results=raw_results,
             all_chunks=all_chunks,
-            top_k=self._top_k,
+            top_k=effective_top_k,
         )
         # Apply reranking to improve ordering quality.
+        rerank_ms = 0.0
+        rerank_embedding_ms = 0.0
+        rerank_input_count = 0
         if self._reranker is not None and results:
-            results = await self._reranker.rerank(question, results)
+            rerank_input_count = len(results)
+            results, rerank_metrics = await self._reranker.rerank(
+                question, results, query_embedding=query_vector
+            )
+            rerank_ms = rerank_metrics.rerank_ms
+            rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
         return (
             query_vector,
             results,
@@ -288,6 +415,12 @@ class RagService:
             embedding_cache_hit,
             False,
             metrics,
+            load_chunks_ms,
+            rerank_ms,
+            rerank_embedding_ms,
+            rerank_input_count,
+            hybrid_candidate_count,
+            adaptive_max_context_chars,
         )
 
     async def stream_answer(
@@ -385,6 +518,12 @@ class RagService:
                 embedding_cache_hit,
                 retrieval_cache_hit,
                 retrieval_metrics,
+                load_chunks_ms,
+                rerank_ms,
+                rerank_embedding_ms,
+                rerank_input_count,
+                hybrid_candidate_count,
+                adaptive_max_context_chars,
             ) = retrieval
         except Exception as exc:
             history_task.cancel()
@@ -435,10 +574,70 @@ class RagService:
                 yield event
             return
 
+        # Pre-generation confidence check.  When enabled, the retrieval
+        # scores are evaluated before the LLM is called.  Low confidence
+        # means the knowledge base likely lacks relevant content, so we
+        # return the safe fallback instead of risking a hallucinated answer.
+        retrieval_scores = [r.score for r in results]
+        confidence_score: float | None = None
+        confidence_metrics: ConfidenceMetrics | None = None
+        if self._confidence_check_enabled:
+            confidence_metrics = assess_confidence(
+                retrieval_scores, min_score=self._min_score
+            )
+            confidence_score = confidence_metrics.confidence
+            if confidence_score < self._confidence_threshold:
+                logger.warning(
+                    "rag_confidence_low score=%.4f threshold=%.4f tenant=%s "
+                    "website=%s session=%s result_count=%d",
+                    confidence_score,
+                    self._confidence_threshold,
+                    tenant_id,
+                    website_id,
+                    session.session_id,
+                    len(results),
+                )
+                history_task.cancel()
+                async for event in self._emit_fallback(
+                    tenant_id=tenant_id,
+                    website_id=website_id,
+                    session=session,
+                    started=started,
+                    vector_queries=1,
+                    reason="confidence_low",
+                    query=question,
+                    scores=retrieval_scores,
+                    confidence_metrics=confidence_metrics,
+                ):
+                    yield event
+                return
+
         t_context = time.perf_counter()
         async with chat_stage("retrieval.context"):
-            context_items, sources = self._build_context(results)
+            context_items, sources, opt_metrics = self._build_context(
+                results, max_context_chars=adaptive_max_context_chars
+            )
         context_ms = (time.perf_counter() - t_context) * 1000.0
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "chat_context_build question=%r context_count=%d",
+                question,
+                len(context_items),
+            )
+            for idx, (item, src) in enumerate(
+                zip(context_items, sources, strict=True)
+            ):
+                logger.debug(
+                    "chat_context_chunk idx=%d chunk_id=%s citation=%s "
+                    "score=%s url=%s title=%s chunk_text_300=%r",
+                    idx,
+                    src.get("chunk_id", ""),
+                    src.get("citation", ""),
+                    src.get("score", ""),
+                    item.url,
+                    item.title,
+                    item.text[:300],
+                )
         try:
             t_history = time.perf_counter()
             async with chat_stage("retrieval.history"):
@@ -496,6 +695,9 @@ class RagService:
         deltas: list[str] = []
         ttft_ms: float | None = None
         provider_name: str | None = None
+        generation_consumed_ms: float = 0.0
+        delta_overhead_ms: float = 0.0
+        delta_count: int = 0
         try:
             t2 = time.perf_counter()
             async with chat_stage("generation.stream"):
@@ -507,9 +709,13 @@ class RagService:
                         ttft_ms = (time.perf_counter() - t2) * 1000.0
                         if hasattr(self._generation, "active_provider"):
                             provider_name = self._generation.active_provider
+                    t_delta_overhead = time.perf_counter()
                     deltas.append(delta)
                     yield {"event": "message", "data": {"delta": delta}}
+                    delta_overhead_ms += (time.perf_counter() - t_delta_overhead) * 1000.0
+                    delta_count += 1
             generation_ms = (time.perf_counter() - t2) * 1000.0
+            generation_consumed_ms = generation_ms
             if hasattr(self._generation, "active_provider"):
                 provider_name = self._generation.active_provider
             elif hasattr(self._generation, "name"):
@@ -569,6 +775,10 @@ class RagService:
         assistant.latency_session_resolution_ms = _round_ms(session_resolution_ms)
         assistant.latency_user_message_persist_ms = _round_ms(user_message_persist_ms)
         assistant.latency_prompt_construction_ms = _round_ms(prompt_construction_ms)
+        assistant.latency_load_chunks_ms = _round_ms(load_chunks_ms)
+        assistant.latency_rerank_ms = _round_ms(rerank_ms)
+        assistant.latency_rerank_embedding_ms = _round_ms(rerank_embedding_ms)
+        assistant.latency_generation_consumed_ms = _round_ms(generation_consumed_ms)
         assistant.latency_total_ms = round(response_time * 1000.0, 2)
         t_persist = time.perf_counter()
         async with chat_stage("persist.messages"):
@@ -607,6 +817,22 @@ class RagService:
             "created_at": assistant.created_at.isoformat(),
             "prompt_version": self._prompt_version,
             "fallback": False,
+            # Confidence telemetry is always emitted (mirrors the fallback
+            # path); the timing block below duplicates it for perf logs.
+            "confidence_score": (
+                round(confidence_score, 4) if confidence_score is not None else None
+            ),
+            "confidence_minimum_score": (
+                confidence_metrics.minimum_score if confidence_metrics is not None else None
+            ),
+            "confidence_average_score": (
+                confidence_metrics.average_score if confidence_metrics is not None else None
+            ),
+            "confidence_rejected_chunks_count": (
+                confidence_metrics.rejected_chunks_count
+                if confidence_metrics is not None
+                else None
+            ),
         }
         if faithfulness_score is not None:
             done_data["faithfulness_score"] = round(faithfulness_score, 3)
@@ -614,15 +840,22 @@ class RagService:
             done_data["timing"] = {
                 "embedding_ms": round(embedding_ms, 2),
                 "retrieval_ms": round(retrieval_ms, 2),
+                "load_chunks_ms": round(load_chunks_ms, 2),
                 "context_ms": round(context_ms, 2),
                 "history_ms": round(history_ms, 2),
                 "generation_ms": round(generation_ms, 2),
+                "generation_consumed_ms": round(generation_consumed_ms, 2),
+                "delta_overhead_ms": round(delta_overhead_ms, 2),
+                "delta_count": delta_count,
                 "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
                 "persist_ms": round(persist_ms, 2),
                 "website_lookup_ms": round(website_lookup_ms, 2),
                 "session_resolution_ms": round(session_resolution_ms, 2),
                 "user_message_persist_ms": round(user_message_persist_ms, 2),
                 "prompt_construction_ms": round(prompt_construction_ms, 2),
+                "rerank_ms": round(rerank_ms, 2),
+                "rerank_embedding_ms": round(rerank_embedding_ms, 2),
+                "rerank_input_count": rerank_input_count,
                 "total_ms": round(total_ms, 2),
                 "provider": provider_name,
                 "embedding_cache": "hit" if embedding_cache_hit else "miss",
@@ -640,6 +873,31 @@ class RagService:
                 "faithfulness_score": (
                     round(faithfulness_score, 3) if faithfulness_score is not None else None
                 ),
+                "hybrid_candidate_count": hybrid_candidate_count,
+                "adaptive_max_context_chars": adaptive_max_context_chars,
+                "confidence_score": (
+                    round(confidence_score, 4) if confidence_score is not None else None
+                ),
+                "confidence_minimum_score": (
+                    confidence_metrics.minimum_score if confidence_metrics is not None else None
+                ),
+                "confidence_average_score": (
+                    confidence_metrics.average_score if confidence_metrics is not None else None
+                ),
+                "confidence_rejected_chunks_count": (
+                    confidence_metrics.rejected_chunks_count
+                    if confidence_metrics is not None
+                    else None
+                ),
+                "original_context_chars": (
+                    opt_metrics.original_chars if opt_metrics is not None else None
+                ),
+                "optimized_context_chars": (
+                    opt_metrics.optimized_chars if opt_metrics is not None else None
+                ),
+                "removed_chunks_count": (
+                    opt_metrics.removed_chunks if opt_metrics is not None else None
+                ),
             }
             logger.info(
                 "rag_timing",
@@ -653,15 +911,22 @@ class RagService:
                     "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
                     "embedding_ms": round(embedding_ms, 2),
                     "retrieval_ms": round(retrieval_ms, 2),
+                    "load_chunks_ms": round(load_chunks_ms, 2),
                     "context_ms": round(context_ms, 2),
                     "history_ms": round(history_ms, 2),
                     "generation_ms": round(generation_ms, 2),
+                    "generation_consumed_ms": round(generation_consumed_ms, 2),
+                    "delta_overhead_ms": round(delta_overhead_ms, 2),
+                    "delta_count": delta_count,
                     "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
                     "persist_ms": round(persist_ms, 2),
                     "website_lookup_ms": round(website_lookup_ms, 2),
                     "session_resolution_ms": round(session_resolution_ms, 2),
                     "user_message_persist_ms": round(user_message_persist_ms, 2),
                     "prompt_construction_ms": round(prompt_construction_ms, 2),
+                    "rerank_ms": round(rerank_ms, 2),
+                    "rerank_embedding_ms": round(rerank_embedding_ms, 2),
+                    "rerank_input_count": rerank_input_count,
                     "total_ms": round(total_ms, 2),
                     "context_chars": context_chars,
                     "estimated_prompt_tokens": estimated_prompt_tokens,
@@ -671,6 +936,43 @@ class RagService:
                     "keyword_result_count": retrieval_metrics.keyword_result_count,
                     "final_result_count": retrieval_metrics.final_result_count,
                     "reranked": self._reranker is not None,
+                    "hybrid_candidate_count": hybrid_candidate_count,
+                    "adaptive_max_context_chars": adaptive_max_context_chars,
+                    "confidence_score": (
+                        round(confidence_score, 4)
+                        if confidence_score is not None
+                        else None
+                    ),
+                    "confidence_minimum_score": (
+                        confidence_metrics.minimum_score
+                        if confidence_metrics is not None
+                        else None
+                    ),
+                    "confidence_average_score": (
+                        confidence_metrics.average_score
+                        if confidence_metrics is not None
+                        else None
+                    ),
+                    "confidence_rejected_chunks_count": (
+                        confidence_metrics.rejected_chunks_count
+                        if confidence_metrics is not None
+                        else None
+                    ),
+                    "original_context_chars": (
+                        opt_metrics.original_chars
+                        if opt_metrics is not None
+                        else None
+                    ),
+                    "optimized_context_chars": (
+                        opt_metrics.optimized_chars
+                        if opt_metrics is not None
+                        else None
+                    ),
+                    "removed_chunks_count": (
+                        opt_metrics.removed_chunks
+                        if opt_metrics is not None
+                        else None
+                    ),
                     "faithfulness_score": (
                         round(faithfulness_score, 3)
                         if faithfulness_score is not None
@@ -711,15 +1013,24 @@ class RagService:
         recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
         return [(message.role, message.content) for message in recent]
 
-    async def _load_all_chunks(self, tenant_id: str, website_id: str) -> list[VectorSearchResult]:
-        """Fetch all knowledge chunks for a tenant/website.
+    async def _load_all_chunks(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[VectorSearchResult]:
+        """Fetch knowledge chunks for a tenant/website for hybrid keyword scoring.
 
-        Used by the hybrid retrieval strategy for keyword scoring.  Returns
-        ``VectorSearchResult`` objects with a uniform score of 0.5 (the
-        keyword scorer will re-rank them).  Only called when the retrieval
-        strategy is hybrid — never when ``enable_hybrid_search`` is ``False``.
+        .. deprecated::
+            This method is **dead code** — the production ``_retrieve()`` flow
+            always passes ``all_chunks=None`` to the retrieval strategy, and
+            ``HybridSearcher`` restricts keyword scoring to vector-search
+            results only.  Retained for potential future full-scan keyword
+            mode and for test coverage of the chunk-loading path.
+
+        When *limit* > 0, at most *limit* chunks are loaded (bounded candidate
+        loading).  When *limit* == 0, all chunks are returned (legacy behavior).
+        Returns ``VectorSearchResult`` objects with a uniform score of 0.5
+        (the keyword scorer will re-rank them).
         """
-        chunks = await self._vector.list_chunks(tenant_id, website_id)
+        chunks = await self._vector.list_chunks(tenant_id, website_id, limit=limit)
         return [VectorSearchResult(chunk=chunk, score=0.5) for chunk in chunks]
 
     @staticmethod
@@ -732,35 +1043,45 @@ class RagService:
         )
 
     def _build_context(
-        self, results: list[VectorSearchResult]
-    ) -> tuple[list[ContextItem], list[dict[str, Any]]]:
-        """Deduplicate hits, apply the relevance floor, and cap total size.
+        self,
+        results: list[VectorSearchResult],
+        *,
+        max_context_chars: int | None = None,
+    ) -> tuple[
+        list[ContextItem],
+        list[dict[str, Any]],
+        OptimizationMetrics | None,
+    ]:
+        """Deduplicate hits, optionally optimize, and cap total size.
 
-        Low-score chunks are dropped (when `chat_context_min_score` > 0) and
-        the combined context is bounded by `chat_context_max_chars`: the last
-        chunk that does not fit is truncated to the remaining budget and the
-        rest of the ranking is dropped, so the prompt never grows unbounded.
+        When ``enable_context_optimization`` is disabled (default), this
+        method behaves identically to the legacy path: exact dedup + budget
+        capping.  When enabled, an additional near-duplicate removal and
+        sentence-level compression step runs between dedup and budget capping,
+        reducing token usage while preserving unique information.
         """
-        items: list[ContextItem] = []
-        sources: list[dict[str, Any]] = []
-        seen_text: set[tuple[str, str]] = set()
-        seen_doc: set[str] = set()
         # `chat_context_max_chars <= 0` means "no total budget" (disabled).
-        budget = self._max_context_chars if self._max_context_chars > 0 else None
-        for _index, result in enumerate(results, start=1):
+        effective_max = (
+            max_context_chars
+            if max_context_chars is not None and max_context_chars > 0
+            else self._max_context_chars
+        )
+
+        # ------------------------------------------------------------------
+        # Phase 1: Exact dedup + min-score filter (always runs).
+        # Collect candidate items before applying the budget so optimization
+        # can operate on the full candidate set.
+        # ------------------------------------------------------------------
+        candidate_items: list[ContextItem] = []
+        candidate_sources: list[dict[str, Any]] = []
+        seen_text: set[tuple[str, str]] = set()
+
+        for result in results:
             if self._min_score > 0 and result.score < self._min_score:
                 continue
             chunk = result.chunk
             url = str(chunk.metadata.get("source_url") or "")
             title = str(chunk.metadata.get("title") or url or "Untitled")
-            # Document-level dedup: keep only the highest-scored chunk per
-            # document to avoid redundant context from the same source.
-            doc_id = chunk.document_id
-            if doc_id and doc_id in seen_doc:
-                continue
-            if doc_id:
-                seen_doc.add(doc_id)
-            # Text-level dedup: skip identical chunk text from different docs.
             text_key = (url, chunk.chunk_text)
             if text_key in seen_text:
                 continue
@@ -768,25 +1089,76 @@ class RagService:
             text = chunk.chunk_text
             if len(text) > self._max_chars_per_chunk:
                 text = text[: self._max_chars_per_chunk]
+            candidate_items.append(ContextItem(url=url, title=title, heading=None, text=text))
+            candidate_sources.append(
+                {
+                    "chunk_id": chunk.id,
+                    "url": url,
+                    "title": title,
+                    "score": result.score,
+                }
+            )
+
+        # ------------------------------------------------------------------
+        # Phase 2: Context optimization (opt-in).
+        # ------------------------------------------------------------------
+        opt_metrics: OptimizationMetrics | None = None
+        if self._context_optimization_enabled and candidate_items:
+            original_chars = sum(len(item.text) for item in candidate_items)
+            original_count = len(candidate_items)
+
+            # 2a. Near-duplicate removal.
+            chunk_texts = [item.text for item in candidate_items]
+            keep_indices = remove_near_duplicates(chunk_texts, threshold=0.75)
+            deduped_items = [candidate_items[i] for i in keep_indices]
+            deduped_sources = [candidate_sources[i] for i in keep_indices]
+            removed_chunks = original_count - len(deduped_items)
+
+            # 2b. Sentence-level compression.
+            seen_sentences: set[str] = set()
+            total_removed_sentences = 0
+            compressed_items: list[ContextItem] = []
+            for item in deduped_items:
+                compressed, removed = compress_text(
+                    item.text, seen_sentences=seen_sentences
+                )
+                compressed_items.append(
+                    ContextItem(
+                        url=item.url, title=item.title,
+                        heading=item.heading, text=compressed,
+                    )
+                )
+                total_removed_sentences += removed
+            optimized_chars = sum(len(ci.text) for ci in compressed_items)
+            candidate_items = compressed_items
+            candidate_sources = deduped_sources
+            opt_metrics = OptimizationMetrics(
+                original_chars=original_chars,
+                optimized_chars=optimized_chars,
+                removed_chunks=removed_chunks,
+                removed_sentences=total_removed_sentences,
+            )
+
+        # ------------------------------------------------------------------
+        # Phase 3: Budget capping (always runs).
+        # ------------------------------------------------------------------
+        budget = effective_max if effective_max > 0 else None
+        items: list[ContextItem] = []
+        sources: list[dict[str, Any]] = []
+        for item, src in zip(candidate_items, candidate_sources, strict=True):
+            text = item.text
             if budget is not None and budget >= 0:
                 if len(text) > budget:
                     text = text[:budget]
                     budget = 0
                 else:
                     budget -= len(text)
-            items.append(ContextItem(url=url, title=title, heading=None, text=text))
-            sources.append(
-                {
-                    "chunk_id": chunk.id,
-                    "url": url,
-                    "title": title,
-                    "score": result.score,
-                    "citation": len(sources) + 1,
-                }
-            )
+            items.append(ContextItem(url=item.url, title=item.title, heading=None, text=text))
+            sources.append({**src, "citation": len(sources) + 1})
             if budget == 0:
                 break
-        return items, sources
+
+        return items, sources, opt_metrics
 
     async def _emit_fallback(
         self,
@@ -799,6 +1171,7 @@ class RagService:
         reason: str,
         query: str,
         scores: list[float] | None = None,
+        confidence_metrics: ConfidenceMetrics | None = None,
     ) -> AsyncGenerator[dict[str, Any]]:
         """Emit the no-context fallback without ever calling the model."""
         logger.warning(
@@ -847,6 +1220,24 @@ class RagService:
                 "created_at": assistant.created_at.isoformat(),
                 "prompt_version": self._prompt_version,
                 "fallback": True,
+                "confidence_score": (
+                    confidence_metrics.confidence if confidence_metrics is not None else None
+                ),
+                "confidence_minimum_score": (
+                    confidence_metrics.minimum_score
+                    if confidence_metrics is not None
+                    else None
+                ),
+                "confidence_average_score": (
+                    confidence_metrics.average_score
+                    if confidence_metrics is not None
+                    else None
+                ),
+                "confidence_rejected_chunks_count": (
+                    confidence_metrics.rejected_chunks_count
+                    if confidence_metrics is not None
+                    else None
+                ),
             },
         }
 
@@ -862,15 +1253,17 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
     """Score answer faithfulness by checking if each sentence is grounded in context.
 
     Returns a value between 0.0 (no support) and 1.0 (fully grounded).
-    Each sentence in the answer is checked for at least one significant
-    word overlap (>3 chars) with the context chunks.  This is a lightweight
-    heuristic that catches obvious hallucinations without an extra LLM call.
+    Each sentence in the answer is checked for significant word overlap
+    (>3 chars, alpha-only) with the context chunks.  Sentences with no
+    significant words (trivial fragments) are counted as *unsupported*
+    since they contribute no verifiable content.  An empty answer is
+    scored 0.0 because there is nothing to be faithful *to*.
     """
     import re
 
     sentences = [s.strip() for s in re.split(r"[.!?]+", answer) if s.strip() and len(s.strip()) > 5]
     if not sentences:
-        return 1.0
+        return 0.0
 
     context_lower = " ".join(item.text.lower() for item in context_items)
     context_words = {
@@ -883,13 +1276,12 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
             w for w in sentence.lower().split() if len(w) > 3 and w.isalpha()
         }
         if not words:
-            supported += 1
             continue
         overlap = words & context_words
         if len(overlap) >= max(1, len(words) // 3):
             supported += 1
 
-    return round(supported / len(sentences), 3) if sentences else 1.0
+    return round(supported / len(sentences), 3)
 
 
 __all__ = ["RagService"]

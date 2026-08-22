@@ -166,6 +166,9 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
     embedding_model: str = "gemini-embedding-001"
+    # Increment when preprocessing or embedding semantics change; existing
+    # chunks must be re-indexed before the new version can retrieve them.
+    embedding_version: str = "1"
 
     # AI provider abstraction (Phase 9, ADR-009). Ordered fallback chains:
     # providers are tried in the order listed; a provider whose required API
@@ -327,6 +330,26 @@ class Settings(BaseSettings):
     enable_hybrid_search: bool = True
     # RRF constant for hybrid fusion (higher reduces top-rank impact).
     hybrid_rrf_k: int = 60
+    # Maximum candidate chunks loaded for keyword scoring in hybrid search.
+    # Bounded loading prevents O(n) memory/CPU growth with large knowledge bases.
+    # Set 0 to disable the limit (loads all chunks — legacy behavior).
+    hybrid_search_candidate_limit: int = 50
+
+    # Adaptive retrieval (opt-in, off by default). When enabled, retrieval
+    # parameters (top_k, rerank candidates, context budget) are adjusted per
+    # query based on lightweight complexity classification.  Simple queries
+    # use smaller budgets for lower latency; complex queries retrieve more
+    # context for better accuracy.  Disabled by default — existing retrieval
+    # behavior is preserved unless explicitly turned on.
+    enable_adaptive_retrieval: bool = False
+    # Adaptive retrieval parameter overrides.  When adaptive retrieval is
+    # enabled, these values replace the defaults for each complexity level.
+    adaptive_simple_top_k: int = 4
+    adaptive_simple_rerank_top_k: int = 3
+    adaptive_simple_max_context_chars: int = 8000
+    adaptive_complex_top_k: int = 12
+    adaptive_complex_rerank_top_k: int = 8
+    adaptive_complex_max_context_chars: int = 30000
 
     # Reranking (post-retrieval). When enabled, retrieved chunks are re-scored
     # using the embedding model's query-chunk similarity before context
@@ -345,6 +368,21 @@ class Settings(BaseSettings):
     enable_faithfulness_check: bool = True
     # Minimum faithfulness score (0.0-1.0) before a warning is emitted.
     faithfulness_warning_threshold: float = 0.6
+
+    # RAG confidence check (pre-generation). When enabled, retrieved context
+    # is scored for relevance *before* the LLM is called.  Low-confidence
+    # queries receive the safe fallback response instead of a generated answer,
+    # preventing hallucinations when the knowledge base lacks relevant content.
+    enable_rag_confidence_check: bool = True
+    # Minimum confidence score (0.0–1.0) required to proceed with generation.
+    # Scores below this threshold trigger the fallback response.
+    rag_confidence_threshold: float = 0.3
+
+    # Context optimization (opt-in, disabled by default). When enabled,
+    # near-duplicate chunks are removed and context text is compressed
+    # (redundant sentences stripped) before prompt construction.  This
+    # reduces unnecessary tokens while preserving answer quality.
+    enable_context_optimization: bool = False
 
     # Performance instrumentation (Phase 12.1; opt-in, disabled by default).
     # When true, per-request HTTP timing, AI provider timings (TTFT/total) and
@@ -504,6 +542,15 @@ class Settings(BaseSettings):
                     f"got {self.cohere_embedding_dimensions}. "
                     "A mismatched fallback provider corrupts $vectorSearch."
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_confidence_config(self) -> "Settings":
+        """Keep confidence controls within their documented range."""
+        if not 0.0 <= self.rag_confidence_threshold <= 1.0:
+            raise ValueError("RAG_CONFIDENCE_THRESHOLD must be between 0 and 1.")
+        if not 0.0 <= self.chat_context_min_score <= 1.0:
+            raise ValueError("CHAT_CONTEXT_MIN_SCORE must be between 0 and 1.")
         return self
 
     @model_validator(mode="after")

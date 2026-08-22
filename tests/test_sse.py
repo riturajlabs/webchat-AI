@@ -290,3 +290,7 @@ async def test_stream_answer_with_usage_logs_sse_transport(caplog) -> None:
     assert record.sse_transport_ms >= 0
     assert record.tenant_id == "t1"
     assert record.buffer_ms == 0.0
+    assert record.first_event_ms is not None
+    assert record.first_event_ms >= 0
+    assert record.first_token_ms is not None
+    assert record.first_token_ms >= 0

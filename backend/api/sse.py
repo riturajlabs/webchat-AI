@@ -160,8 +160,14 @@ async def stream_answer_with_usage(
         stream_fn = stream_with_disconnect(request, recording_gen)
     sse_started = time.perf_counter()
     event_count = 0
+    first_event_ms: float | None = None
+    first_token_ms: float | None = None
     async for frame in stream_fn:
         event_count += 1
+        if first_event_ms is None:
+            first_event_ms = (time.perf_counter() - sse_started) * 1000.0
+        if first_token_ms is None and frame.startswith("event: message"):
+            first_token_ms = (time.perf_counter() - sse_started) * 1000.0
         yield frame
     sse_transport_ms = (time.perf_counter() - sse_started) * 1000.0
     logger.info(
@@ -173,6 +179,8 @@ async def stream_answer_with_usage(
             "events_yielded": event_count,
             "buffer_ms": buffer_ms,
             "sse_transport_ms": round(sse_transport_ms, 2),
+            "first_event_ms": round(first_event_ms, 2) if first_event_ms is not None else None,
+            "first_token_ms": round(first_token_ms, 2) if first_token_ms is not None else None,
         },
     )
 

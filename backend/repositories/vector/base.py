@@ -9,6 +9,7 @@ cross-tenant vector access is possible.
 from dataclasses import dataclass
 from typing import Protocol
 
+from backend.core.embedding_identity import EmbeddingIdentity
 from backend.models.knowledge_chunk import KnowledgeChunk
 
 
@@ -29,7 +30,21 @@ class VectorRepository(Protocol):
 
     async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
-    async def list_chunks(self, tenant_id: str, website_id: str) -> list[KnowledgeChunk]: ...
+    async def list_chunks(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]: ...
+
+    async def list_chunks_light(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]:
+        """Like :pymethod:`list_chunks` but excludes embedding vectors.
+
+        .. deprecated::
+            This method is **dead code** — no production code path calls it.
+            Keyword scoring was refactored to operate on vector-search results
+            only, making the lightweight chunk load unnecessary.  Retained for
+            potential future use and for test coverage.
+        """
 
     async def similarity_search(
         self,
@@ -38,6 +53,7 @@ class VectorRepository(Protocol):
         query_embedding: list[float],
         *,
         top_k: int = 5,
+        embedding_identity: EmbeddingIdentity | None = None,
     ) -> list[VectorSearchResult]: ...
 
 

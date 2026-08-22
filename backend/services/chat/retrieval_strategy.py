@@ -30,6 +30,7 @@ class RetrievalMetricsInfo:
     vector_result_count: int = 0
     keyword_result_count: int = 0
     final_result_count: int = 0
+    hybrid_candidate_count: int = 0
 
 
 class RetrievalStrategy(Protocol):
@@ -93,10 +94,10 @@ class HybridRetrievalStrategy:
     Wraps the existing ``HybridSearcher`` and adds keyword-based ranking
     on top of the vector results.  The RRF constant is configurable.
 
-    RRF scores are rescaled to the [0, 1] range so the existing
-    ``chat_context_min_score`` filter in ``RagService._build_context``
-    continues to work correctly.  The rescaled score preserves the relative
-    ordering from RRF while being comparable to cosine-similarity scores.
+    Keyword matching is restricted to the vector candidate set, so hybrid
+    ranking cannot introduce unrelated website chunks. RRF determines the
+    ordering, while the original vector score is retained for context
+    filtering and confidence decisions.
     """
 
     def __init__(self, *, rrf_k: int = 60) -> None:
@@ -121,45 +122,37 @@ class HybridRetrievalStrategy:
         searcher = HybridSearcher(rrf_k=self._rrf_k)
         hybrid_results = searcher.search(query, vector_results, all_chunks, top_k=top_k)
 
-        # Rescale RRF scores to [0, 1] so the min_score filter in
-        # _build_context works correctly.  RRF raw scores are typically
-        # in the 0.01-0.03 range which would be dropped by a 0.25 floor.
-        final = _rescale_rrf_scores(hybrid_results)
+        # RRF is a rank signal, not a similarity score. Preserve the original
+        # vector score so a weak nearest neighbor cannot become 1.0 merely
+        # because it was first in the fused ranking.
+        final = _preserve_vector_scores(hybrid_results, vector_results)
 
+        keyword_count = min(len(vector_results), top_k)
         return final, RetrievalMetricsInfo(
             retrieval_method="hybrid",
             vector_result_count=len(vector_results),
-            keyword_result_count=len(all_chunks) if all_chunks else 0,
+            keyword_result_count=keyword_count,
             final_result_count=len(final),
+            hybrid_candidate_count=len(vector_results),
         )
 
 
-def _rescale_rrf_scores(
+def _preserve_vector_scores(
     hybrid_results: list[HybridSearchResult],
+    vector_results: list[VectorSearchResult],
 ) -> list[VectorSearchResult]:
-    """Rescale RRF scores to [0, 1] range.
-
-    RRF raw scores are typically in the 0.01-0.03 range, which would be
-    dropped by the default ``chat_context_min_score=0.25`` filter.  This
-    rescales the top result to 1.0 and the rest proportionally, preserving
-    relative ordering while making scores compatible with the min_score
-    floor in ``RagService._build_context``.
-    """
+    """Keep RRF ordering while restoring each candidate's vector score."""
     if not hybrid_results:
         return []
 
-    # Extract RRF scores from HybridSearchResult objects.
-    rrf_scores = [hr.rrf_score for hr in hybrid_results]
-    max_score = max(rrf_scores) if rrf_scores else 1.0
-    if max_score <= 0:
-        max_score = 1.0
+    vector_scores = {result.chunk.id: result.score for result in vector_results}
 
     return [
         VectorSearchResult(
             chunk=hr.chunk.chunk,
-            score=round(rrf / max_score, 4),
+            score=vector_scores.get(hr.chunk.chunk.id, 0.0),
         )
-        for hr, rrf in zip(hybrid_results, rrf_scores, strict=True)
+        for hr in hybrid_results
     ]
 
 

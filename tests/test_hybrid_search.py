@@ -258,7 +258,7 @@ def test_hybrid_searcher_empty_vector_results() -> None:
 
 
 def test_hybrid_searcher_fallback_to_vector_only() -> None:
-    """When all_chunks is None, keyword search uses vector results only."""
+    """Keyword search uses vector results only."""
     chunks = [
         _make_result("a", "pricing plan", 0.9),
         _make_result("b", "security page", 0.8),
@@ -266,6 +266,25 @@ def test_hybrid_searcher_fallback_to_vector_only() -> None:
     searcher = HybridSearcher()
     results = searcher.search("pricing", chunks, all_chunks=None, top_k=5)
     assert len(results) > 0
+
+
+def test_hybrid_searcher_does_not_introduce_keyword_only_chunks() -> None:
+    """Keyword matches outside vector hits cannot enter the fused results."""
+    vector_chunks = [
+        _make_result("semantic", "account settings and profile", 0.9),
+    ]
+    unrelated_keyword_chunk = _make_result(
+        "keyword-only", "create an API key in the dashboard", 0.1
+    )
+
+    results = HybridSearcher().search(
+        "How do I create an API key?",
+        vector_chunks,
+        all_chunks=[*vector_chunks, unrelated_keyword_chunk],
+        top_k=5,
+    )
+
+    assert [result.chunk.chunk.id for result in results] == ["semantic"]
 
 
 def test_hybrid_searcher_rank_info() -> None:

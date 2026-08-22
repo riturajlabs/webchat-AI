@@ -24,6 +24,7 @@ from backend.workers.jobs.crawl import _run_crawl_job
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher
 from tests.fakes import (
     FakeAuditLogRepository,
+    FakeCacheStore,
     FakeCrawlJobRepository,
     FakeDocumentRepository,
     FakeUsageRecordRepository,
@@ -627,3 +628,67 @@ async def test_worker_publishes_failed_on_ssrf_blocked(patch_dns, monkeypatch) -
         usage=usage,
     )
     publish_failed.assert_awaited_once()
+
+
+async def test_worker_invalidates_retrieval_cache_on_completion(patch_dns) -> None:
+    """Successful crawl invalidates retrieval cache for the website only."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    cache = FakeCacheStore()
+
+    # Seed the cache with entries for this website and a different website.
+    await cache.set("retrieval", f"{job.website_id}:what is acme", '["stale"]')
+    await cache.set("retrieval", f"{job.website_id}:pricing", '["stale"]')
+    await cache.set("retrieval", "other-website-id:pricing", '["keep"]')
+    assert len(cache._data) == 3
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+        cache=cache,
+    )
+
+    assert result["status"] == "completed"
+    # The two entries for this website must be evicted.
+    assert await cache.get("retrieval", f"{job.website_id}:what is acme") is None
+    assert await cache.get("retrieval", f"{job.website_id}:pricing") is None
+    # The entry for the other website must be untouched.
+    assert await cache.get("retrieval", "other-website-id:pricing") == '["keep"]'
+
+
+async def test_worker_cache_invalidation_is_best_effort(patch_dns) -> None:
+    """Cache invalidation failure must not fail the crawl job."""
+
+    class BrokenCache:
+        async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
+            raise ConnectionError("Redis down")
+
+        async def get(self, namespace: str, key: str) -> str | None:
+            return None
+
+        async def set(
+            self, namespace: str, key: str, value: str, *, ttl: int | None = None
+        ) -> None:
+            pass
+
+        async def delete(self, namespace: str, key: str) -> None:
+            pass
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+        cache=BrokenCache(),
+    )
+
+    assert result["status"] == "completed"

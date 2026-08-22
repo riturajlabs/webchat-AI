@@ -40,7 +40,7 @@ import type { FeedbackState } from '../stream/chat';
 import { WIDGET_STYLES } from '../ui/styles';
 import { streamChat } from '../stream/client';
 import { Conversation, type ChatMessage } from '../stream/chat';
-import type { WidgetError } from './errors';
+import { WidgetError } from './errors';
 import {
   detectIntent,
   isNoContextAnswer,
@@ -405,6 +405,23 @@ export function mount(options: WidgetHostOptions): WidgetController {
         conversation.stopTurn(turnId);
       } else if (!result.completed && !result.error) {
         conversation.endTurn(turnId); // safety net
+      }
+    } catch (cause) {
+      // streamChat rethrows non-abort failures that escape its internal
+      // handling (e.g. the SSE body erroring mid-read). Without this catch
+      // the turn would stay stuck in the streaming state and the rejection
+      // would go unhandled.
+      if (turn.signal.aborted) {
+        conversation.stopTurn(turnId);
+      } else {
+        const error =
+          cause instanceof WidgetError
+            ? cause
+            : new WidgetError({ code: 'network', message: 'Chat stream failed', cause });
+        lastFailedQuestion = question;
+        lastError = error;
+        windowElement.setBanner(error.userMessage, error.retryable);
+        conversation.failTurn(turnId, error.userMessage);
       }
     } finally {
       if (activeAbort === turn) {

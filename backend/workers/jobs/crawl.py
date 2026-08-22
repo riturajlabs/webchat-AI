@@ -16,6 +16,7 @@ from arq.connections import ArqRedis
 from redis.asyncio import ConnectionPool
 
 from backend.core import crawl_events
+from backend.core.cache import CacheStore, RedisCacheStore
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import InvalidUrlError
@@ -53,6 +54,22 @@ def _arq_redis() -> ArqRedis:
     return ArqRedis(connection_pool=_pool)
 
 
+def _build_cache() -> CacheStore | None:
+    """Build a RedisCacheStore for retrieval cache invalidation.
+
+    Returns ``None`` if Redis is unavailable — invalidation is best-effort
+    and must never fail the crawl job.
+    """
+    try:
+        from redis.asyncio import Redis as _Redis
+
+        redis = _Redis.from_url(get_settings().redis_url, decode_responses=True)
+        return RedisCacheStore(redis)
+    except Exception:
+        logger.warning("Could not build cache for crawl invalidation", exc_info=True)
+        return None
+
+
 async def enqueue_crawl_website(crawl_job_id: str) -> None:
     """Enqueue a crawl job for the ARQ worker (ADR-002 task registry)."""
     await _arq_redis().enqueue_job("crawl_website", crawl_job_id)
@@ -61,6 +78,7 @@ async def enqueue_crawl_website(crawl_job_id: str) -> None:
 async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any]:
     """Worker task: run one crawl job and record the outcome on the website."""
     db = MongoDB.db()
+    cache = _build_cache()
     return await _run_crawl_job(
         ctx,
         crawl_job_id,
@@ -70,6 +88,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         audit=MongoAuditLogRepository(db),
         usage=MongoUsageRecordRepository(db),
         enqueue_knowledge=enqueue_process_website_documents,
+        cache=cache,
     )
 
 
@@ -83,6 +102,7 @@ async def _run_crawl_job(
     audit: Any,
     usage: Any = None,
     enqueue_knowledge: Any = None,
+    cache: CacheStore | None = None,
 ) -> dict[str, Any]:
     """Core worker logic, testable with fake repositories/fetcher injected.
 
@@ -189,6 +209,18 @@ async def _run_crawl_job(
             # is marked `ready` here; `knowledge_chunks` is updated as each
             # document's embedding lands.
             await enqueue_knowledge(job.website_id)
+        # Invalidate retrieval cache for this website so stale search results
+        # from the previous crawl are not served.  Best-effort: cache outage
+        # must never fail the crawl job.
+        if cache is not None:
+            try:
+                await cache.delete_by_prefix("retrieval", f"{job.website_id}:")
+            except Exception:
+                logger.warning(
+                    "Failed to invalidate retrieval cache for website %s",
+                    job.website_id,
+                    exc_info=True,
+                )
         return {"status": "completed", "pages": stored}
     except InvalidUrlError as exc:
         # Deterministic failure: the seed is not crawlable (SSRF-blocked,

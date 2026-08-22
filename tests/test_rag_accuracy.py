@@ -5,12 +5,14 @@ Covers:
 - Reranker execution path
 - Faithfulness score generation
 - Adaptive provider routing (integration-level)
+- RAG confidence scoring (pre-generation)
 """
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
 from backend.core.config import get_settings
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.prompts.rag import ContextItem
@@ -164,11 +166,12 @@ async def test_reranker_reorders_results() -> None:
         VectorSearchResult(chunk=chunk_b, score=0.95),
     ]
 
-    result = await reranker.rerank("query text", candidates)
+    result, metrics = await reranker.rerank("query text", candidates)
     assert len(result) == 2
     assert result[0].chunk.chunk_text == "chunk_b text"
     assert result[1].chunk.chunk_text == "chunk_a text"
-    assert len(fake_embedder.calls) == 1
+    assert metrics.input_count == 2
+    assert metrics.output_count == 2
 
 
 async def test_reranker_returns_original_on_embed_failure() -> None:
@@ -183,9 +186,10 @@ async def test_reranker_returns_original_on_embed_failure() -> None:
         chunk_text="test", embedding=[0.0] * 4, chunk_index=0,
     )
     candidates = [VectorSearchResult(chunk=chunk, score=0.9)]
-    result = await reranker.rerank("query", candidates)
+    result, metrics = await reranker.rerank("query", candidates)
     assert len(result) == 1
     assert result[0].chunk.chunk_text == "test"
+    assert metrics.output_count == 1
 
 
 async def test_reranker_top_k_limits_output() -> None:
@@ -206,8 +210,9 @@ async def test_reranker_top_k_limits_output() -> None:
         VectorSearchResult(chunk=c, score=0.9 - i * 0.01)
         for i, c in enumerate(chunks)
     ]
-    result = await reranker.rerank("query", candidates)
+    result, metrics = await reranker.rerank("query", candidates)
     assert len(result) == 2
+    assert metrics.output_count == 2
 
 
 async def test_reranker_in_done_timing_event() -> None:
@@ -270,15 +275,26 @@ def test_faithfulness_partial_support() -> None:
 
 
 def test_faithfulness_empty_answer() -> None:
-    assert _check_faithfulness("", []) == 1.0
+    assert _check_faithfulness("", []) == 0.0
 
 
-def test_faithfulness_short_sentences_supported() -> None:
+def test_faithfulness_short_sentences_unsupported() -> None:
+    """Sentences with no significant words (<=3 chars) are now unsupported."""
     context = [
         ContextItem(url="https://a.com", title="A", heading=None,
                     text="Some context."),
     ]
     score = _check_faithfulness("Hi. Ok.", context)
+    assert score == 0.0
+
+
+def test_faithfulness_short_sentence_with_long_words_supported() -> None:
+    """Short sentences with enough significant words can still be faithful."""
+    context = [
+        ContextItem(url="https://a.com", title="A", heading=None,
+                    text="The pricing page details plans."),
+    ]
+    score = _check_faithfulness("The pricing page.", context)
     assert score == 1.0
 
 
@@ -347,3 +363,1061 @@ async def test_done_event_includes_reranked_and_faithfulness_fields() -> None:
     events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="test")
     done = _done_event(events)
     assert "faithfulness_score" in done["data"]
+
+
+# ---------------------------------------------------------------------------
+# 5. P0 optimization: reranker uses stored embeddings (no API call)
+# ---------------------------------------------------------------------------
+
+
+async def test_reranker_uses_stored_embeddings_no_embed_call() -> None:
+    """When query_embedding is provided, the reranker must NOT call the
+    embedding API — it uses stored chunk embeddings for cosine similarity."""
+
+    class TrackingEmbedder:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.call_count += 1
+            return [[1.0, 0.0, 0.0, 0.0]] * len(texts)
+
+    embedder = TrackingEmbedder()
+    reranker = EmbeddingReranker(embedder=embedder, top_k=3)
+
+    chunk_a = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
+        chunk_text="chunk_a text", embedding=[1.0, 0.0, 0.0, 0.0], chunk_index=0,
+    )
+    chunk_b = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
+        chunk_text="chunk_b text", embedding=[0.0, 1.0, 0.0, 0.0], chunk_index=1,
+    )
+    chunk_c = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-c",
+        chunk_text="chunk_c text", embedding=[0.0, 0.0, 1.0, 0.0], chunk_index=2,
+    )
+
+    candidates = [
+        VectorSearchResult(chunk=chunk_a, score=0.9),
+        VectorSearchResult(chunk=chunk_b, score=0.8),
+        VectorSearchResult(chunk=chunk_c, score=0.7),
+    ]
+
+    query_embedding = [1.0, 0.0, 0.0, 0.0]
+    result, metrics = await reranker.rerank("query", candidates, query_embedding=query_embedding)
+
+    # No embedding API call should have been made.
+    assert embedder.call_count == 0
+    assert metrics.rerank_embedding_ms == 0.0
+    # chunk_a has embedding identical to query -> highest similarity.
+    assert result[0].chunk.chunk_text == "chunk_a text"
+    assert result[0].score == 1.0
+    assert len(result) == 3
+
+
+async def test_reranker_precomputed_embedding_reorders_correctly() -> None:
+    """Precomputed query embedding produces correct cosine-similarity ordering."""
+    embedder = TrackingEmbedder()
+    reranker = EmbeddingReranker(embedder=embedder, top_k=3)
+
+    chunk_a = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
+        chunk_text="a", embedding=[0.0, 1.0, 0.0, 0.0], chunk_index=0,
+    )
+    chunk_b = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
+        chunk_text="b", embedding=[0.9, 0.1, 0.0, 0.0], chunk_index=1,
+    )
+    chunk_c = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-c",
+        chunk_text="c", embedding=[0.0, 0.0, 0.0, 1.0], chunk_index=2,
+    )
+
+    candidates = [
+        VectorSearchResult(chunk=chunk_a, score=0.5),
+        VectorSearchResult(chunk=chunk_b, score=0.5),
+        VectorSearchResult(chunk=chunk_c, score=0.5),
+    ]
+
+    # Query is close to chunk_b's embedding.
+    query_embedding = [1.0, 0.0, 0.0, 0.0]
+    result, _ = await reranker.rerank("query", candidates, query_embedding=query_embedding)
+
+    # chunk_b has the highest cosine similarity with the query.
+    assert result[0].chunk.chunk_text == "b"
+    # chunk_a is orthogonal to query (cosine ~0).
+    assert result[1].chunk.chunk_text == "a"
+    # chunk_c is orthogonal to query (cosine ~0).
+    assert result[2].chunk.chunk_text == "c"
+
+
+async def test_reranker_legacy_path_still_works() -> None:
+    """Without query_embedding, the reranker falls back to the embed API."""
+    class LegacyEmbedder:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            self.call_count += 1
+            vectors = []
+            for t in texts:
+                if "query" in t.lower():
+                    vectors.append([1.0, 0.0, 0.0, 0.0])
+                elif "best" in t.lower():
+                    vectors.append([0.9, 0.1, 0.0, 0.0])
+                else:
+                    vectors.append([0.0, 0.0, 0.0, 1.0])
+            return vectors
+
+    embedder = LegacyEmbedder()
+    reranker = EmbeddingReranker(embedder=embedder, top_k=2)
+
+    chunk_a = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
+        chunk_text="worst match", embedding=[0.0] * 4, chunk_index=0,
+    )
+    chunk_b = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
+        chunk_text="best match", embedding=[0.0] * 4, chunk_index=1,
+    )
+
+    candidates = [
+        VectorSearchResult(chunk=chunk_a, score=0.9),
+        VectorSearchResult(chunk=chunk_b, score=0.8),
+    ]
+
+    # No query_embedding -> legacy embed path.
+    result, _ = await reranker.rerank("query text", candidates)
+    assert embedder.call_count == 1  # embed was called
+    assert result[0].chunk.chunk_text == "best match"
+
+
+async def test_reranker_empty_chunk_embedding_handled() -> None:
+    """Chunks with empty stored embeddings get similarity 0 (graceful handling)."""
+    embedder = TrackingEmbedder()
+    reranker = EmbeddingReranker(embedder=embedder, top_k=3)
+
+    chunk_empty = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-empty",
+        chunk_text="no embedding", embedding=[], chunk_index=0,
+    )
+    chunk_valid = KnowledgeChunk.new(
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-valid",
+        chunk_text="has embedding", embedding=[1.0, 0.0, 0.0, 0.0], chunk_index=1,
+    )
+
+    candidates = [
+        VectorSearchResult(chunk=chunk_empty, score=0.9),
+        VectorSearchResult(chunk=chunk_valid, score=0.8),
+    ]
+
+    query_embedding = [1.0, 0.0, 0.0, 0.0]
+    result, metrics = await reranker.rerank("query", candidates, query_embedding=query_embedding)
+
+    assert embedder.call_count == 0
+    # Valid chunk ranks first (similarity 1.0), empty chunk gets 0.0.
+    assert result[0].chunk.chunk_text == "has embedding"
+    assert result[0].score == 1.0
+    assert result[1].chunk.chunk_text == "no embedding"
+    assert result[1].score == 0.0
+
+
+async def test_reranker_passes_query_embedding_in_rag_flow() -> None:
+    """Integration: RagService passes query_embedding to the reranker."""
+    env = build_chat_env(reranker=True)
+    env.rag._confidence_check_enabled = False
+    env.rag._timing_enabled = True
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
+    await make_chunk(
+        env, tenant_id=TENANT, website_id=WEBSITE,
+        text="Plan A costs $19.",
+        url="https://example.com/a", title="Plan A", chunk_index=0,
+    )
+    await make_chunk(
+        env, tenant_id=TENANT, website_id=WEBSITE,
+        text="Plan B costs $49.",
+        url="https://example.com/b", title="Plan B", chunk_index=1,
+    )
+
+    events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="pricing")
+    done = _done_event(events)
+    assert done["data"]["fallback"] is False
+    # Reranker was active.
+    timing = done["data"]["timing"]
+    assert timing["reranked"] is True
+    assert timing["rerank_embedding_ms"] == 0.0
+    assert timing["rerank_ms"] >= 0
+
+
+class TrackingEmbedder:
+    """Reusable test embedder that tracks call count."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        self.call_count += 1
+        return [[1.0, 0.0, 0.0, 0.0]] * len(texts)
+
+
+# ---------------------------------------------------------------------------
+# 6. Adaptive retrieval strategy
+# ---------------------------------------------------------------------------
+
+ADAPTIVE_TENANT = "adaptive-tenant"
+ADAPTIVE_WEB = "adaptive-web"
+
+
+def _make_adaptive_settings(**overrides):  # type: ignore[no-untyped-def]
+    """Build a mock settings object with adaptive retrieval enabled."""
+    defaults = dict(
+        enable_hybrid_search=True,
+        hybrid_rrf_k=40,
+        chat_top_k=8,
+        rag_prompt_version=1,
+        chat_memory_turns=8,
+        chat_context_chunk_chars=4000,
+        chat_context_max_chars=20000,
+        chat_context_min_score=0.25,
+        perf_timing_log_enabled=True,
+        embedding_cache_size=0,
+        embedding_cache_ttl_seconds=0,
+        chat_retrieval_cache_size=0,
+        chat_retrieval_cache_ttl_seconds=0,
+        enable_reranking=False,
+        rerank_top_k=0,
+        enable_faithfulness_check=False,
+        faithfulness_warning_threshold=0.6,
+        hybrid_search_candidate_limit=50,
+        enable_adaptive_retrieval=True,
+        adaptive_simple_top_k=4,
+        adaptive_simple_rerank_top_k=3,
+        adaptive_simple_max_context_chars=8000,
+        adaptive_complex_top_k=12,
+        adaptive_complex_rerank_top_k=8,
+        adaptive_complex_max_context_chars=30000,
+        enable_rag_confidence_check=False,
+        rag_confidence_threshold=0.3,
+        enable_context_optimization=False,
+    )
+    defaults.update(overrides)
+
+    class _Settings:
+        pass
+
+    s = _Settings()
+    for k, v in defaults.items():
+        setattr(s, k, v)
+    return s
+
+
+def _build_rag_with_adaptive(env, **settings_overrides):  # type: ignore[no-untyped-def]
+    """Build a RagService with adaptive retrieval settings patched."""
+    settings = _make_adaptive_settings(**settings_overrides)
+    with patch(
+        "backend.services.chat.rag_service.get_settings",
+        return_value=settings,
+    ):
+        from backend.services.chat.rag_service import RagService
+
+        return RagService(
+            websites=env.websites,
+            vector=env.vector,
+            embedder=env.embedder,
+            generation=env.generation,
+            sessions=env.sessions,
+            messages=env.messages,
+            usage=env.usage,
+            cache=None,
+            allow_reranking=False,
+        )
+
+
+async def test_adaptive_config_defaults() -> None:
+    """Default settings have adaptive retrieval disabled."""
+    settings = get_settings()
+    assert settings.enable_adaptive_retrieval is False
+    assert settings.adaptive_simple_top_k == 4
+    assert settings.adaptive_complex_top_k == 12
+    assert settings.adaptive_simple_max_context_chars == 8000
+    assert settings.adaptive_complex_max_context_chars == 30000
+
+
+async def test_adaptive_disabled_by_default() -> None:
+    """When adaptive is disabled (default), RagService reflects that."""
+    env = build_chat_env()
+    assert env.rag._adaptive_enabled is False
+
+
+async def test_adaptive_enabled_flag() -> None:
+    """When settings enable adaptive, RagService picks it up."""
+    env = build_chat_env()
+    rag = _build_rag_with_adaptive(env)
+    assert rag._adaptive_enabled is True
+    assert rag._adaptive_simple_top_k == 4
+    assert rag._adaptive_complex_top_k == 12
+    assert rag._adaptive_simple_max_context_chars == 8000
+    assert rag._adaptive_complex_max_context_chars == 30000
+
+
+async def test_adaptive_e2e_simple_query_uses_smaller_context() -> None:
+    """End-to-end: simple query with adaptive enabled uses simple budget."""
+    env = build_chat_env()
+    rag = _build_rag_with_adaptive(env)
+    await make_website(
+        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=ADAPTIVE_TENANT,
+        website_id=ADAPTIVE_WEB,
+        text="Contact us at support@example.com.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=ADAPTIVE_TENANT,
+            website_id=ADAPTIVE_WEB,
+            question="What is the contact email?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    assert done["data"]["timing"]["adaptive_max_context_chars"] == 8000
+
+
+async def test_adaptive_e2e_complex_query_uses_larger_context() -> None:
+    """End-to-end: complex query with adaptive enabled uses complex budget."""
+    env = build_chat_env()
+    rag = _build_rag_with_adaptive(env)
+    await make_website(
+        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=2
+    )
+    await make_chunk(
+        env,
+        tenant_id=ADAPTIVE_TENANT,
+        website_id=ADAPTIVE_WEB,
+        text="Plan A costs $19 with basic features.",
+        chunk_index=0,
+    )
+    await make_chunk(
+        env,
+        tenant_id=ADAPTIVE_TENANT,
+        website_id=ADAPTIVE_WEB,
+        text="Plan B costs $49 with advanced features and priority support.",
+        chunk_index=1,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=ADAPTIVE_TENANT,
+            website_id=ADAPTIVE_WEB,
+            question=(
+                "Can you compare the differences between the basic and enterprise plans "
+                "and explain the advantages and disadvantages of each option and also "
+                "describe the implementation details for the integration?"
+            ),
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    assert done["data"]["timing"]["adaptive_max_context_chars"] == 30000
+
+
+async def test_adaptive_e2e_medium_query_uses_default_context() -> None:
+    """End-to-end: medium query uses default (non-adaptive) context budget."""
+    env = build_chat_env()
+    rag = _build_rag_with_adaptive(env)
+    await make_website(
+        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=ADAPTIVE_TENANT,
+        website_id=ADAPTIVE_WEB,
+        text="We offer API access.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=ADAPTIVE_TENANT,
+            website_id=ADAPTIVE_WEB,
+            question="How does the API work?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    assert done["data"]["timing"]["adaptive_max_context_chars"] == 20000
+
+
+async def test_adaptive_disabled_fallback_to_fixed_params() -> None:
+    """When adaptive is disabled, all queries use the fixed top_k / context."""
+    env = build_chat_env()
+    env.rag._timing_enabled = True
+    assert env.rag._adaptive_enabled is False
+    await make_website(
+        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=ADAPTIVE_TENANT,
+        website_id=ADAPTIVE_WEB,
+        text="Hello world.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        env.rag.stream_answer(
+            tenant_id=ADAPTIVE_TENANT,
+            website_id=ADAPTIVE_WEB,
+            question="What is the pricing and features and integration and deployment?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    # Even for a complex query, adaptive_max_context_chars equals the fixed default.
+    assert done["data"]["timing"]["adaptive_max_context_chars"] == 20000
+
+
+async def test_adaptive_custom_settings_override() -> None:
+    """Custom adaptive settings are respected when building RagService."""
+    env = build_chat_env()
+    rag = _build_rag_with_adaptive(
+        env,
+        adaptive_simple_top_k=2,
+        adaptive_complex_top_k=20,
+        adaptive_simple_max_context_chars=4000,
+        adaptive_complex_max_context_chars=50000,
+    )
+    assert rag._adaptive_simple_top_k == 2
+    assert rag._adaptive_complex_top_k == 20
+    assert rag._adaptive_simple_max_context_chars == 4000
+    assert rag._adaptive_complex_max_context_chars == 50000
+
+
+# ---------------------------------------------------------------------------
+# 7. RAG confidence scoring (pre-generation)
+# ---------------------------------------------------------------------------
+
+CONF_TENANT = "conf-tenant"
+CONF_WEB = "conf-web"
+
+
+def _make_confidence_settings(**overrides):  # type: ignore[no-untyped-def]
+    """Build a mock settings object with confidence check enabled."""
+    defaults = dict(
+        enable_hybrid_search=True,
+        hybrid_rrf_k=40,
+        chat_top_k=8,
+        rag_prompt_version=1,
+        chat_memory_turns=8,
+        chat_context_chunk_chars=4000,
+        chat_context_max_chars=20000,
+        chat_context_min_score=0.25,
+        perf_timing_log_enabled=True,
+        embedding_cache_size=0,
+        embedding_cache_ttl_seconds=0,
+        chat_retrieval_cache_size=0,
+        chat_retrieval_cache_ttl_seconds=0,
+        enable_reranking=False,
+        rerank_top_k=0,
+        enable_faithfulness_check=False,
+        faithfulness_warning_threshold=0.6,
+        hybrid_search_candidate_limit=50,
+        enable_adaptive_retrieval=False,
+        adaptive_simple_top_k=4,
+        adaptive_simple_rerank_top_k=3,
+        adaptive_simple_max_context_chars=8000,
+        adaptive_complex_top_k=12,
+        adaptive_complex_rerank_top_k=8,
+        adaptive_complex_max_context_chars=30000,
+        enable_rag_confidence_check=True,
+        rag_confidence_threshold=0.3,
+        enable_context_optimization=False,
+    )
+    defaults.update(overrides)
+
+    class _Settings:
+        pass
+
+    s = _Settings()
+    for k, v in defaults.items():
+        setattr(s, k, v)
+    return s
+
+
+def _build_rag_with_confidence(env, **settings_overrides):  # type: ignore[no-untyped-def]
+    """Build a RagService with confidence check settings patched."""
+    settings = _make_confidence_settings(**settings_overrides)
+    retrieval_strategy = settings_overrides.pop("retrieval_strategy", None)
+    with patch(
+        "backend.services.chat.rag_service.get_settings",
+        return_value=settings,
+    ):
+        from backend.services.chat.rag_service import RagService
+
+        return RagService(
+            websites=env.websites,
+            vector=env.vector,
+            embedder=env.embedder,
+            generation=env.generation,
+            sessions=env.sessions,
+            messages=env.messages,
+            usage=env.usage,
+            cache=None,
+            allow_reranking=False,
+            retrieval_strategy=retrieval_strategy,
+        )
+
+
+async def test_confidence_config_defaults() -> None:
+    """Default settings enable the production abstention guard."""
+    settings = get_settings()
+    assert settings.enable_rag_confidence_check is True
+    assert settings.rag_confidence_threshold == 0.3
+
+
+async def test_confidence_disabled_by_default() -> None:
+    """The default RagService enables confidence checking."""
+    env = build_chat_env()
+    assert env.rag._confidence_check_enabled is True
+
+
+async def test_confidence_enabled_flag() -> None:
+    """When settings enable confidence check, RagService picks it up."""
+    env = build_chat_env()
+    rag = _build_rag_with_confidence(env)
+    assert rag._confidence_check_enabled is True
+    assert rag._confidence_threshold == 0.3
+
+
+async def test_confidence_high_scores_proceed() -> None:
+    """High-confidence retrieval (fake scores ~0.9) proceeds to generation."""
+    env = build_chat_env()
+    rag = _build_rag_with_confidence(env)
+    await make_website(
+        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        text="We offer Pro and Team plans.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=CONF_TENANT,
+            website_id=CONF_WEB,
+            question="What plans do you offer?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    # Confidence was computed and included in timing.
+    timing = done["data"]["timing"]
+    assert timing["confidence_score"] is not None
+    assert timing["confidence_score"] > 0.3
+
+
+async def test_confidence_low_scores_fallback() -> None:
+    """Low-confidence retrieval triggers fallback response."""
+    from backend.services.chat.retrieval_strategy import VectorRetrievalStrategy
+
+    env = build_chat_env()
+    # Use vector-only strategy so scores are raw (0.9) not RRF-boosted (1.0).
+    # Set threshold above 0.9 so the confidence check fails.
+    rag = _build_rag_with_confidence(
+        env,
+        rag_confidence_threshold=0.95,
+        retrieval_strategy=VectorRetrievalStrategy(),
+    )
+    await make_website(
+        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        text="We offer Pro and Team plans.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=CONF_TENANT,
+            website_id=CONF_WEB,
+            question="What plans do you offer?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is True
+    # Should contain the standard fallback message.
+    msg_events = [e for e in events if e["event"] == "message"]
+    assert any("couldn't find" in e["data"]["delta"].lower() for e in msg_events)
+
+
+async def test_unrelated_database_password_question_abstains() -> None:
+    """An unrelated question must not turn nearest-neighbor noise into an answer."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1)
+    chunk = await make_chunk(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        text="Stripe invoices and checkout payments are documented here.",
+    )
+
+    async def low_similarity_search(*args, **kwargs):  # type: ignore[no-untyped-def]
+        return [VectorSearchResult(chunk=chunk, score=0.08)]
+
+    env.vector.similarity_search = low_similarity_search  # type: ignore[method-assign]
+    events = await _stream(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        question="What is the database password?",
+    )
+
+    done = _done_event(events)
+    assert done["data"]["fallback"] is True
+    assert done["data"]["confidence_rejected_chunks_count"] == 1
+
+
+async def test_confidence_disabled_skips_check() -> None:
+    """When confidence check is disabled, low scores don't block generation."""
+    from backend.services.chat.retrieval_strategy import VectorRetrievalStrategy
+
+    env = build_chat_env()
+    # Don't enable confidence check — even with high threshold, should proceed.
+    rag = _build_rag_with_confidence(
+        env,
+        enable_rag_confidence_check=False,
+        rag_confidence_threshold=0.95,
+        retrieval_strategy=VectorRetrievalStrategy(),
+    )
+    await make_website(
+        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        text="We offer Pro and Team plans.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=CONF_TENANT,
+            website_id=CONF_WEB,
+            question="What plans do you offer?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+
+
+async def test_confidence_timing_field_present_when_disabled() -> None:
+    """Timing includes confidence metrics when the guard is enabled."""
+    env = build_chat_env()
+    env.rag._timing_enabled = True
+    await make_website(
+        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=CONF_TENANT,
+        website_id=CONF_WEB,
+        text="Hello world.",
+        chunk_index=0,
+    )
+
+    events = await consume(
+        env.rag.stream_answer(
+            tenant_id=CONF_TENANT,
+            website_id=CONF_WEB,
+            question="Hi",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    timing = done["data"]["timing"]
+    assert timing["confidence_score"] is not None
+    assert timing["confidence_minimum_score"] is not None
+    assert timing["confidence_average_score"] is not None
+    assert timing["confidence_rejected_chunks_count"] == 0
+
+
+async def test_confidence_threshold_custom_value() -> None:
+    """Custom threshold value is respected."""
+    env = build_chat_env()
+    rag = _build_rag_with_confidence(env, rag_confidence_threshold=0.5)
+    assert rag._confidence_threshold == 0.5
+
+
+def test_embedding_dimension_validation_rejects_mixed_batch() -> None:
+    from backend.services.knowledge.embedding import ensure_vector_dimensions
+
+    with pytest.raises(Exception, match="dimensions"):
+        ensure_vector_dimensions("test", [[0.0, 1.0], [0.0]], 2)
+
+
+# ---------------------------------------------------------------------------
+# 8. Context optimization (near-dup removal + compression)
+# ---------------------------------------------------------------------------
+
+OPT_TENANT = "opt-tenant"
+OPT_WEB = "opt-web"
+
+
+def _make_opt_settings(**overrides):  # type: ignore[no-untyped-def]
+    """Build a mock settings object with context optimization enabled."""
+    defaults = dict(
+        enable_hybrid_search=True,
+        hybrid_rrf_k=40,
+        chat_top_k=8,
+        rag_prompt_version=1,
+        chat_memory_turns=8,
+        chat_context_chunk_chars=4000,
+        chat_context_max_chars=20000,
+        chat_context_min_score=0.25,
+        perf_timing_log_enabled=True,
+        embedding_cache_size=0,
+        embedding_cache_ttl_seconds=0,
+        chat_retrieval_cache_size=0,
+        chat_retrieval_cache_ttl_seconds=0,
+        enable_reranking=False,
+        rerank_top_k=0,
+        enable_faithfulness_check=False,
+        faithfulness_warning_threshold=0.6,
+        hybrid_search_candidate_limit=50,
+        enable_adaptive_retrieval=False,
+        adaptive_simple_top_k=4,
+        adaptive_simple_rerank_top_k=3,
+        adaptive_simple_max_context_chars=8000,
+        adaptive_complex_top_k=12,
+        adaptive_complex_rerank_top_k=8,
+        adaptive_complex_max_context_chars=30000,
+        enable_rag_confidence_check=False,
+        rag_confidence_threshold=0.3,
+        enable_context_optimization=True,
+    )
+    defaults.update(overrides)
+
+    class _Settings:
+        pass
+
+    s = _Settings()
+    for k, v in defaults.items():
+        setattr(s, k, v)
+    return s
+
+
+def _build_rag_with_opt(env, **settings_overrides):  # type: ignore[no-untyped-def]
+    """Build a RagService with context optimization settings patched."""
+    settings = _make_opt_settings(**settings_overrides)
+    with patch(
+        "backend.services.chat.rag_service.get_settings",
+        return_value=settings,
+    ):
+        from backend.services.chat.rag_service import RagService
+
+        return RagService(
+            websites=env.websites,
+            vector=env.vector,
+            embedder=env.embedder,
+            generation=env.generation,
+            sessions=env.sessions,
+            messages=env.messages,
+            usage=env.usage,
+            cache=None,
+            allow_reranking=False,
+        )
+
+
+async def test_optimization_config_default() -> None:
+    """Default settings have context optimization disabled."""
+    settings = get_settings()
+    assert settings.enable_context_optimization is False
+
+
+async def test_optimization_disabled_by_default() -> None:
+    """When disabled (default), RagService reflects that."""
+    env = build_chat_env()
+    assert env.rag._context_optimization_enabled is False
+
+
+async def test_optimization_enabled_flag() -> None:
+    """When enabled, RagService picks it up."""
+    env = build_chat_env()
+    rag = _build_rag_with_opt(env)
+    assert rag._context_optimization_enabled is True
+
+
+async def test_optimization_e2e_metrics_present() -> None:
+    """When enabled, timing includes optimization metrics."""
+    env = build_chat_env()
+    rag = _build_rag_with_opt(env)
+    await make_website(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="Cats are independent animals. They like to explore.",
+        url="https://example.com/cats", title="Cats",
+        chunk_index=0,
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="Dogs are loyal companions. They love their owners.",
+        url="https://example.com/dogs", title="Dogs",
+        chunk_index=1,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            question="Tell me about pets.",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    timing = done["data"]["timing"]
+    assert timing["original_context_chars"] is not None
+    assert timing["optimized_context_chars"] is not None
+    assert timing["removed_chunks_count"] is not None
+    assert timing["original_context_chars"] >= timing["optimized_context_chars"]
+
+
+async def test_optimization_disabled_no_metrics() -> None:
+    """When disabled, optimization metrics are None in timing."""
+    env = build_chat_env()
+    env.rag._timing_enabled = True
+    await make_website(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="Hello world.", chunk_index=0,
+    )
+
+    events = await consume(
+        env.rag.stream_answer(
+            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            question="Hi",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    timing = done["data"]["timing"]
+    assert timing["original_context_chars"] is None
+    assert timing["optimized_context_chars"] is None
+    assert timing["removed_chunks_count"] is None
+
+
+async def test_optimization_removes_near_duplicates() -> None:
+    """Near-duplicate chunks are removed when optimization is enabled."""
+    env = build_chat_env()
+    rag = _build_rag_with_opt(env)
+    await make_website(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=3
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="The pricing page shows three plans: Starter, Pro, and Enterprise.",
+        url="https://example.com/pricing", title="Pricing",
+        document_id="doc-pricing-1", chunk_index=0,
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="The pricing page shows three plans: Starter, Pro, and Enterprise tiers.",
+        url="https://example.com/pricing-alt", title="Pricing Alt",
+        document_id="doc-pricing-2", chunk_index=1,
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="Contact our support team for custom enterprise pricing options.",
+        url="https://example.com/contact", title="Contact",
+        document_id="doc-contact", chunk_index=2,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            question="What are your pricing plans?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    timing = done["data"]["timing"]
+    # At least one chunk removed as near-duplicate.
+    assert timing["removed_chunks_count"] >= 1
+
+
+async def test_optimization_preserves_unique_content() -> None:
+    """Unique content from different sources is preserved in context."""
+    env = build_chat_env()
+    rag = _build_rag_with_opt(env)
+    await make_website(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="We offer 24/7 phone support for all enterprise customers.",
+        url="https://example.com/support", title="Support",
+        document_id="doc-support", chunk_index=0,
+    )
+    await make_chunk(
+        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        text="Our billing cycle runs monthly with automatic renewals.",
+        url="https://example.com/billing", title="Billing",
+        document_id="doc-billing", chunk_index=1,
+    )
+
+    events = await consume(
+        rag.stream_answer(
+            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            question="What support do you offer and how does billing work?",
+        )
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    timing = done["data"]["timing"]
+    # Both unique chunks should survive — no near-duplicates to remove.
+    assert timing["removed_chunks_count"] == 0
+    # Both chunks contribute to context.
+    assert timing["original_context_chars"] > 0
+    assert timing["optimized_context_chars"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 9. Regression: _load_all_chunks must use list_chunks (with embeddings)
+# ---------------------------------------------------------------------------
+
+REG_TENANT = "regression-tenant"
+REG_WEB = "regression-web"
+
+
+async def test_keyword_only_chunk_survives_reranker_and_min_score() -> None:
+    """Regression: chunks loaded via _load_all_chunks must carry embeddings so the
+    reranker can score them.  Previously, _load_all_chunks used list_chunks_light
+    which returned empty embeddings, causing the reranker to assign score 0.0 and
+    _build_context's min_score filter to discard them."""
+    from backend.models.knowledge_chunk import KnowledgeChunk as KC
+
+    env = build_chat_env(reranker=True)
+    await make_website(env, tenant_id=REG_TENANT, website_id=REG_WEB, knowledge_chunks=4)
+
+    # Use non-zero embeddings so the reranker's cosine similarity produces
+    # meaningful scores above the min_score threshold.
+    chunks_data = [
+        {
+            "text": "Our pricing plans include Starter at $9, Pro at $19, and Enterprise custom.",
+            "url": "https://example.com/pricing", "title": "Pricing",
+            "document_id": "doc-pricing", "chunk_index": 0,
+            "embedding": [0.9, 0.1, 0.0, 0.0],
+        },
+        {
+            "text": "Contact support@example.com for help with your account.",
+            "url": "https://example.com/support", "title": "Support",
+            "document_id": "doc-support", "chunk_index": 1,
+            "embedding": [0.1, 0.9, 0.0, 0.0],
+        },
+        {
+            # Target: found by keyword ("api key") but at a higher index.
+            "text": "To create an API key, go to Settings and click Generate.",
+            "url": "https://example.com/apikeys", "title": "API Keys",
+            "document_id": "doc-apikeys", "chunk_index": 2,
+            "embedding": [0.0, 0.0, 0.9, 0.1],
+        },
+        {
+            "text": "Our enterprise tier includes SSO, audit logs, and priority support.",
+            "url": "https://example.com/enterprise", "title": "Enterprise",
+            "document_id": "doc-enterprise", "chunk_index": 3,
+            "embedding": [0.0, 0.0, 0.1, 0.9],
+        },
+    ]
+
+    for cd in chunks_data:
+        chunk = KC.new(
+            tenant_id=REG_TENANT,
+            website_id=REG_WEB,
+            document_id=cd["document_id"],
+            chunk_text=cd["text"],
+            embedding=cd["embedding"],
+            chunk_index=cd["chunk_index"],
+                embedding_provider=env.embedder.embedding_identity.provider,
+                embedding_model=env.embedder.embedding_identity.model,
+                embedding_dimensions=env.embedder.embedding_identity.dimensions,
+                embedding_version=env.embedder.embedding_identity.version,
+            metadata={"source_url": cd["url"], "title": cd["title"]},
+        )
+        await env.vector.insert_chunks([chunk])
+
+    events = await _stream(
+        env, tenant_id=REG_TENANT, website_id=REG_WEB,
+        question="How do I create an API key?",
+    )
+    sources = next(e for e in events if e["event"] == "sources")
+    source_urls = [s["url"] for s in sources["data"]["sources"]]
+
+    # The API key chunk must survive through retrieval → reranker → min_score filter.
+    assert any("apikeys" in url for url in source_urls), (
+        f"API key chunk missing from sources (was discarded by reranker/min_score). "
+        f"Got: {source_urls}"
+    )
+
+    done = _done_event(events)
+    assert done["data"]["fallback"] is False
+
+
+# ---------------------------------------------------------------------------
+# Stale retrieval prevention (cache invalidation)
+# ---------------------------------------------------------------------------
+
+
+async def test_stale_retrieval_prevented_after_cache_invalidation() -> None:
+    """After invalidating the retrieval cache for a website, a second query
+    hits the vector store instead of returning stale cached results."""
+    from tests.fakes import FakeCacheStore
+
+    env = build_chat_env(cache=FakeCacheStore())
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE)
+
+    await make_chunk(
+        env,
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-v1",
+        text="Version one: the pricing is $9 per month.",
+        url="https://example.com/pricing-v1", title="Pricing V1",
+        chunk_index=0,
+    )
+
+    # First query — populates the retrieval cache.
+    question = "what is the pricing"
+    events_1 = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question=question)
+    sources_1 = next(e for e in events_1 if e["event"] == "sources")
+    urls_1 = [s["url"] for s in sources_1["data"]["sources"]]
+    assert any("pricing-v1" in u for u in urls_1)
+
+    # Simulate a crawl: add new content, invalidate the cache.
+    await make_chunk(
+        env,
+        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-v2",
+        text="Version two: the pricing changed to $19 per month.",
+        url="https://example.com/pricing-v2", title="Pricing V2",
+        chunk_index=1,
+    )
+    deleted = await env.cache.delete_by_prefix("retrieval", f"{WEBSITE}:")
+    assert deleted >= 1
+
+    # Second query — must NOT return the stale v1-only cached result.
+    events_2 = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question=question)
+    sources_2 = next(e for e in events_2 if e["event"] == "sources")
+    urls_2 = [s["url"] for s in sources_2["data"]["sources"]]
+
+    # The fresh retrieval should see both chunks (or at least v2).
+    assert any("pricing-v2" in u for u in urls_2), (
+        f"Expected fresh v2 chunk after cache invalidation, got: {urls_2}"
+    )

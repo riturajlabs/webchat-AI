@@ -52,6 +52,10 @@ class ChatMessage(BaseModel):
     latency_session_resolution_ms: float | None = None
     latency_user_message_persist_ms: float | None = None
     latency_prompt_construction_ms: float | None = None
+    latency_load_chunks_ms: float | None = None
+    latency_rerank_ms: float | None = None
+    latency_rerank_embedding_ms: float | None = None
+    latency_generation_consumed_ms: float | None = None
     latency_total_ms: float | None = None
     created_at: datetime
     schema_version: int = CHAT_SCHEMA_VERSION

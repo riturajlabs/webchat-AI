@@ -489,4 +489,125 @@ describe('mount integration', () => {
 
     controller.destroy();
   });
+
+  it('recovers when the SSE body errors mid-stream (turn must not stay stuck)', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_1')) {
+        return jsonResponse(CONFIG);
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({
+          session_token: 'tok-1',
+          expires_at: '2030-01-01T00:00:00Z',
+        });
+      }
+      if (url.endsWith('/chat')) {
+        // Deliver one delta, then fail the body mid-read. streamChat rethrows
+        // this non-abort failure; mount's catch must fail the turn instead of
+        // leaving it streaming forever.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode('event: message\ndata: {"delta":"partial"}\n\n'),
+            );
+            controller.error(new Error('connection reset mid-stream'));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({
+      widgetId: 'widget_1',
+      apiBaseUrl: API_BASE,
+      fetchImpl,
+      host,
+    });
+    await controller.ready();
+    controller.open();
+    controller.sendMessage('What is pricing?');
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    await vi.waitFor(() => {
+      expect(shadow.querySelector('.wc-bubble-error')).toBeTruthy();
+    });
+    // The failed turn offers Retry and never keeps the Stop button active.
+    expect(shadow.querySelector('.wc-retry-message')).toBeTruthy();
+    expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(true);
+    // The visitor is told what happened and can type again immediately.
+    expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+    expect(shadow.querySelector('.wc-banner')?.textContent).toContain(
+      'Unable to connect right now',
+    );
+    expect(shadow.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(false);
+
+    controller.destroy();
+  });
+
+  it('renders an answer delivered as a single post-delay burst', async () => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_1')) {
+        return jsonResponse(CONFIG);
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({
+          session_token: 'tok-1',
+          expires_at: '2030-01-01T00:00:00Z',
+        });
+      }
+      if (url.endsWith('/chat')) {
+        // Production pattern (observed via Groq): TTFT dominates and every
+        // delta arrives coalesced into ONE chunk right before the stream
+        // closes. The consumer must still render sources + answer + done.
+        const frames =
+          'event: sources\ndata: {"sources":[{"url":"https://docs.example.com/x","title":"Docs X"}]}\n\n' +
+          'event: message\ndata: {"delta":"Full answer"}\n\n' +
+          'event: done\ndata: {"session_id":"s-burst","fallback":false}\n\n';
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            window.setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode(frames));
+              controller.close();
+            }, 30);
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({
+      widgetId: 'widget_1',
+      apiBaseUrl: API_BASE,
+      fetchImpl,
+      host,
+    });
+    await controller.ready();
+    controller.open();
+    controller.sendMessage('What is pricing?');
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    await vi.waitFor(() => {
+      expect(shadow.querySelector('.wc-bubble-content')?.textContent).toBe('Full answer');
+    });
+    expect(shadow.querySelector('.wc-sources')?.textContent).toContain('Docs X');
+    expect(shadow.querySelector('.wc-stopped')).toBeNull();
+    expect(shadow.querySelector('.wc-bubble-error')).toBeNull();
+    expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(true);
+
+    controller.destroy();
+  });
 });

@@ -14,7 +14,7 @@ from typing import Any
 
 from arq.connections import RedisSettings
 
-from backend.ai.registry import build_embedding_fallback
+from backend.ai.registry import build_ingestion_embedding_client
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.redis import close_redis
@@ -30,9 +30,13 @@ async def startup(ctx: dict[str, Any]) -> None:
     """Runs once when the worker starts."""
     ctx["app_name"] = _settings.app_name
     # Shared embedding client for all knowledge jobs in this process (Phase 9,
-    # ADR-009): the configured fallback chain. Building it never touches the
-    # network (clients are created lazily).
-    ctx["embedding_client"] = build_embedding_fallback()
+    # ADR-009): the single primary provider only. Ingestion must never switch
+    # embedding spaces mid-corpus (BUG-1): a Gemini->Jina failover while
+    # storing chunks would stamp one website with two incompatible vector
+    # identities. On failure the same provider is retried (client batch
+    # retries + document-level backoff); exhausted retries quarantine the
+    # document instead of writing foreign-space vectors.
+    ctx["embedding_client"] = build_ingestion_embedding_client()
 
 
 async def _close_async(resource: str, closer: Callable[[], Awaitable[None]]) -> None:

@@ -121,7 +121,9 @@ def test_hybrid_strategy_with_chunks() -> None:
     )
     assert metrics.retrieval_method == "hybrid"
     assert metrics.vector_result_count == 2
-    assert metrics.keyword_result_count == 3
+    assert metrics.keyword_result_count == 2
+    assert metrics.hybrid_candidate_count == 2
+    assert max(result.score for result in final) == 0.9
     assert len(final) <= 3
     # Hybrid should include the pricing chunk (keyword match on "pricing plan")
     urls = {r.chunk.metadata.get("source_url") for r in final}
@@ -237,6 +239,7 @@ def test_rag_service_hybrid_flag_enables_hybrid() -> None:
         mock_settings.return_value.rerank_top_k = 0
         mock_settings.return_value.enable_faithfulness_check = False
         mock_settings.return_value.faithfulness_warning_threshold = 0.6
+        mock_settings.return_value.hybrid_search_candidate_limit = 50
         rag = RagService(
             websites=env.websites,
             vector=env.vector,
@@ -288,6 +291,7 @@ async def test_hybrid_strategy_e2e_produces_sources() -> None:
         usage=env.usage,
         cache=env.cache,
         retrieval_strategy=custom,
+        allow_reranking=False,
     )
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
@@ -357,6 +361,7 @@ async def test_timing_logs_hybrid_method() -> None:
         usage=env.usage,
         cache=env.cache,
         retrieval_strategy=custom,
+        allow_reranking=False,
     )
     rag._timing_enabled = True
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
@@ -437,3 +442,163 @@ async def test_prompt_injection_protection_preserved() -> None:
     # Should still get a fallback, not an error
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["fallback"] is True
+
+
+# ---------------------------------------------------------------------------
+# Bounded hybrid candidate loading (HYBRID_SEARCH_CANDIDATE_LIMIT)
+# ---------------------------------------------------------------------------
+
+
+async def test_load_all_chunks_respects_limit() -> None:
+    """_load_all_chunks with limit returns at most limit chunks."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=10)
+    for i in range(10):
+        await make_chunk(
+            env,
+            tenant_id=TENANT,
+            website_id=WEBSITE,
+            text=f"Chunk {i} content.",
+            chunk_index=i,
+        )
+    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=3)
+    assert len(all_chunks) == 3
+
+
+async def test_load_all_chunks_zero_limit_returns_all() -> None:
+    """_load_all_chunks with limit=0 returns all chunks (legacy behavior)."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=5)
+    for i in range(5):
+        await make_chunk(
+            env,
+            tenant_id=TENANT,
+            website_id=WEBSITE,
+            text=f"Chunk {i}.",
+            chunk_index=i,
+        )
+    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=0)
+    assert len(all_chunks) == 5
+
+
+async def test_load_all_chunks_limit_larger_than_total() -> None:
+    """Limit larger than total chunks returns all chunks."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="A", chunk_index=0)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="B", chunk_index=1)
+    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=100)
+    assert len(all_chunks) == 2
+
+
+async def test_hybrid_candidate_count_in_timing() -> None:
+    """Timing dict includes hybrid_candidate_count when hybrid is active."""
+    env = build_chat_env()
+    env.rag._timing_enabled = True
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=3)
+    for i in range(3):
+        await make_chunk(
+            env,
+            tenant_id=TENANT,
+            website_id=WEBSITE,
+            text=f"Chunk {i} about pricing.",
+            chunk_index=i,
+        )
+    events = await consume(
+        env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="pricing?")
+    )
+    done = next(e for e in events if e["event"] == "done")
+    timing = done["data"].get("timing")
+    assert timing is not None
+    assert "hybrid_candidate_count" in timing
+    assert timing["hybrid_candidate_count"] >= 1
+
+
+async def test_hybrid_e2e_sources_with_limit() -> None:
+    """Hybrid e2e with bounded candidates still produces valid sources."""
+    env = build_chat_env()
+    rag = RagService(
+        websites=env.websites,
+        vector=env.vector,
+        embedder=env.embedder,
+        generation=env.generation,
+        sessions=env.sessions,
+        messages=env.messages,
+        usage=env.usage,
+        cache=env.cache,
+        retrieval_strategy=HybridRetrievalStrategy(rrf_k=60),
+        allow_reranking=False,
+    )
+    rag._timing_enabled = True
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
+    await make_chunk(
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Pro plan costs $19 per month.",
+        url="https://example.com/pricing",
+        title="Pricing",
+        chunk_index=0,
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Enterprise includes SSO.",
+        url="https://example.com/enterprise",
+        title="Enterprise",
+        chunk_index=1,
+    )
+    events = await consume(
+        rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="pricing plan")
+    )
+    sources = next(e for e in events if e["event"] == "sources")
+    assert len(sources["data"]["sources"]) >= 1
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+    timing = done["data"].get("timing")
+    assert timing is not None
+    assert timing["hybrid_candidate_count"] <= 2
+
+
+async def test_vector_only_flow_unchanged_by_candidate_limit() -> None:
+    """Vector-only strategy is unaffected by hybrid candidate limit."""
+    env = build_chat_env()
+    rag = RagService(
+        websites=env.websites,
+        vector=env.vector,
+        embedder=env.embedder,
+        generation=env.generation,
+        sessions=env.sessions,
+        messages=env.messages,
+        usage=env.usage,
+        cache=env.cache,
+        retrieval_strategy=VectorRetrievalStrategy(),
+        allow_reranking=False,
+    )
+    rag._timing_enabled = True
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
+    await make_chunk(
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Pro plan details.",
+        chunk_index=0,
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="Enterprise features.",
+        chunk_index=1,
+    )
+    events = await consume(
+        rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="plans?")
+    )
+    sources = next(e for e in events if e["event"] == "sources")
+    assert len(sources["data"]["sources"]) >= 1
+    done = next(e for e in events if e["event"] == "done")
+    timing = done["data"].get("timing")
+    assert timing is not None
+    assert timing["retrieval_method"] == "vector"
+    assert timing["hybrid_candidate_count"] == 0

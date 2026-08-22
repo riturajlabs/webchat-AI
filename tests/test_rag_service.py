@@ -287,6 +287,32 @@ async def test_chunks_are_deduplicated_by_url_and_text() -> None:
     assert len(env.generation.calls) == 1
 
 
+async def test_distinct_chunks_from_one_document_are_retained() -> None:
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="API keys are created in Settings.",
+        document_id="same-document",
+        chunk_index=0,
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="API keys can be revoked from the security page.",
+        document_id="same-document",
+        chunk_index=1,
+    )
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="API keys")
+
+    sources = next(event for event in events if event["event"] == "sources")
+    assert len(sources["data"]["sources"]) == 2
+
+
 async def test_top_k_limits_retrieved_chunks() -> None:
     env = build_chat_env(top_k=2)
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
@@ -437,15 +463,22 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
     assert set(timing) == {
         "embedding_ms",
         "retrieval_ms",
+        "load_chunks_ms",
         "context_ms",
         "history_ms",
         "generation_ms",
+        "generation_consumed_ms",
+        "delta_overhead_ms",
+        "delta_count",
         "ttft_ms",
         "persist_ms",
         "website_lookup_ms",
         "session_resolution_ms",
         "user_message_persist_ms",
         "prompt_construction_ms",
+        "rerank_ms",
+        "rerank_embedding_ms",
+        "rerank_input_count",
         "total_ms",
         "provider",
         "embedding_cache",
@@ -459,6 +492,15 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "final_result_count",
         "reranked",
         "faithfulness_score",
+        "hybrid_candidate_count",
+        "adaptive_max_context_chars",
+        "confidence_score",
+        "confidence_minimum_score",
+        "confidence_average_score",
+        "confidence_rejected_chunks_count",
+        "original_context_chars",
+        "optimized_context_chars",
+        "removed_chunks_count",
     }
     assert timing["total_ms"] >= timing["embedding_ms"]
     assert timing["provider"] is not None
@@ -467,6 +509,13 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
     assert timing["context_chars"] >= 0
     assert timing["estimated_prompt_tokens"] >= 0
     assert timing["fallback_attempts"] >= 0
+    assert timing["load_chunks_ms"] >= 0
+    assert timing["rerank_ms"] >= 0
+    assert timing["rerank_embedding_ms"] >= 0
+    assert timing["rerank_input_count"] >= 0
+    assert timing["generation_consumed_ms"] >= 0
+    assert timing["delta_overhead_ms"] >= 0
+    assert timing["delta_count"] >= 0
 
     records = [r for r in caplog.records if r.getMessage() == "rag_timing"]
     assert records
@@ -482,6 +531,13 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
     assert records[0].context_chars >= 0
     assert records[0].estimated_prompt_tokens >= 0
     assert records[0].fallback_attempts >= 0
+    assert records[0].load_chunks_ms >= 0
+    assert records[0].rerank_ms >= 0
+    assert records[0].rerank_embedding_ms >= 0
+    assert records[0].rerank_input_count >= 0
+    assert records[0].generation_consumed_ms >= 0
+    assert records[0].delta_overhead_ms >= 0
+    assert records[0].delta_count >= 0
 
 
 async def test_done_event_omits_timing_when_disabled() -> None:
@@ -515,6 +571,36 @@ async def test_hybrid_retrieval_uses_repository_list_chunks(monkeypatch) -> None
 
     assert _done_event(events)["data"]["fallback"] is False
     assert "priority support" in env.generation.calls[0]["messages"][0][1]
+
+
+async def test_debug_logs_raw_mongodb_vector_results(caplog, monkeypatch) -> None:
+    """Raw vector hits are logged before hybrid retrieval changes ranking."""
+    monkeypatch.setattr(backend_settings(), "debug", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="A" * 250,
+        url="https://example.com/vector",
+        title="Vector page",
+    )
+
+    with caplog.at_level("DEBUG", logger="webchat_ai"):
+        await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="vector question")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("mongodb_vector_search_debug" in message for message in messages)
+    result_message = next(
+        message for message in messages if "mongodb_vector_search_result" in message
+    )
+    assert "vector question" not in result_message
+    assert "chunk_id=" in result_message
+    assert "score=" in result_message
+    assert "title=Vector page" in result_message
+    assert "url=https://example.com/vector" in result_message
+    assert "chunk_text_200=" in result_message
 
 
 async def test_retrieval_cache_reuses_embedding_and_search_but_not_generation() -> None:
@@ -628,8 +714,11 @@ async def test_context_is_capped_at_total_budget(monkeypatch) -> None:
 
 async def test_context_min_score_drops_low_ranked_chunks(monkeypatch) -> None:
     """`chat_context_min_score` filters retrieved chunks below the threshold."""
+    from backend.services.chat.retrieval_strategy import VectorRetrievalStrategy
+
     monkeypatch.setattr(backend_settings(), "chat_context_min_score", 0.895)
     env = build_chat_env()
+    env.rag._retrieval_strategy = VectorRetrievalStrategy()
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=2)
     await make_chunk(
         env,
@@ -646,7 +735,7 @@ async def test_context_min_score_drops_low_ranked_chunks(monkeypatch) -> None:
         text="Worse result.",
         url="https://b.test",
         title="B",
-        chunk_index=1,
+        chunk_index=2,
     )
 
     events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Pricing?")
@@ -679,6 +768,10 @@ async def test_stream_persists_stage_latencies() -> None:
     assert message.latency_session_resolution_ms is not None
     assert message.latency_user_message_persist_ms is not None
     assert message.latency_prompt_construction_ms is not None
+    assert message.latency_load_chunks_ms is not None
+    assert message.latency_rerank_ms is not None
+    assert message.latency_rerank_embedding_ms is not None
+    assert message.latency_generation_consumed_ms is not None
     assert message.latency_total_ms is not None
     assert message.latency_total_ms >= message.latency_generation_ms
 
@@ -1011,6 +1104,10 @@ async def test_all_timing_fields_are_non_negative(monkeypatch) -> None:
         "latency_session_resolution_ms",
         "latency_user_message_persist_ms",
         "latency_prompt_construction_ms",
+        "latency_load_chunks_ms",
+        "latency_rerank_ms",
+        "latency_rerank_embedding_ms",
+        "latency_generation_consumed_ms",
         "latency_total_ms",
     ):
         value = getattr(message, field_name)

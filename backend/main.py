@@ -40,6 +40,10 @@ from backend.core.redis import close_redis
 logger = logging.getLogger("webchat_ai")
 
 
+class VectorConfigurationError(RuntimeError):
+    """Raised when stored vectors cannot satisfy the Atlas index contract."""
+
+
 async def _validate_vector_dimensions() -> None:
     """Check existing vector dimensions in knowledge_chunks match configured EMBEDDING_DIMENSIONS.
 
@@ -82,6 +86,10 @@ async def _validate_vector_dimensions() -> None:
                 count,
                 expected_dim,
             )
+            raise VectorConfigurationError(
+                f"Stored vector dimension {dim} does not match configured dimension "
+                f"{expected_dim}; re-index knowledge_chunks before serving chat."
+            )
 
 
 def _cors_headers_for(request: Request) -> dict[str, str]:
@@ -115,6 +123,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # to prevent silent corruption of $vectorSearch results.
     try:
         await _validate_vector_dimensions()
+    except VectorConfigurationError:
+        logger.exception("Vector configuration is incompatible with the Atlas index.")
+        raise
     except Exception:
         logger.warning("Vector dimension validation skipped (MongoDB unavailable).")
     yield

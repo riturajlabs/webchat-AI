@@ -27,6 +27,8 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from backend.core.embedding_identity import EmbeddingIdentity, ensure_embedding_compatibility
+from backend.core.errors import EmbeddingCompatibilityError
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.repositories.vector.base import VectorRepository, VectorSearchResult
 
@@ -78,8 +80,30 @@ class MongoVectorRepository(VectorRepository):
         )
         return int(result.deleted_count)
 
-    async def list_chunks(self, tenant_id: str, website_id: str) -> list[KnowledgeChunk]:
-        cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
+    async def list_chunks(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]:
+        query = {"tenant_id": tenant_id, "website_id": website_id}
+        cursor = self._collection.find(query)
+        if limit > 0:
+            cursor = cursor.limit(limit)
+        return [KnowledgeChunk.from_doc(item) async for item in cursor]
+
+    async def list_chunks_light(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]:
+        """Like :pymeth:`list_chunks` but excludes embedding vectors.
+
+        .. deprecated::
+            This method is **dead code** — no production code path calls it.
+            Keyword scoring was refactored to operate on vector-search results
+            only, making the lightweight chunk load unnecessary.  Retained for
+            potential future use and for test coverage.
+        """
+        query = {"tenant_id": tenant_id, "website_id": website_id}
+        cursor = self._collection.find(query, {"embedding": 0})
+        if limit > 0:
+            cursor = cursor.limit(limit)
         return [KnowledgeChunk.from_doc(item) async for item in cursor]
 
     async def similarity_search(
@@ -89,6 +113,7 @@ class MongoVectorRepository(VectorRepository):
         query_embedding: list[float],
         *,
         top_k: int = 5,
+        embedding_identity: EmbeddingIdentity | None = None,
     ) -> list[VectorSearchResult]:
         pipeline: list[dict[str, Any]] = [
             {
@@ -101,6 +126,16 @@ class MongoVectorRepository(VectorRepository):
                     "filter": {
                         "tenant_id": tenant_id,
                         "website_id": website_id,
+                        **(
+                            {
+                                "embedding_provider": embedding_identity.provider,
+                                "embedding_model": embedding_identity.model,
+                                "embedding_dimensions": embedding_identity.dimensions,
+                                "embedding_version": embedding_identity.version,
+                            }
+                            if embedding_identity is not None
+                            else {}
+                        ),
                     },
                 }
             },
@@ -117,6 +152,9 @@ class MongoVectorRepository(VectorRepository):
                 )
                 async for item in cursor
             ]
+            if embedding_identity is not None:
+                for result in results:
+                    ensure_embedding_compatibility(result.chunk, embedding_identity)
         except Exception as exc:
             if _atlas_only_error(exc):
                 # Local MongoDB community server has no `$vectorSearch` (Atlas
@@ -132,7 +170,11 @@ class MongoVectorRepository(VectorRepository):
                     website_id,
                 )
                 return await self._brute_force_search(
-                    tenant_id, website_id, query_embedding, top_k=top_k
+                    tenant_id,
+                    website_id,
+                    query_embedding,
+                    top_k=top_k,
+                    embedding_identity=embedding_identity,
                 )
             raise RuntimeError(
                 "Vector search unavailable: create an Atlas Vector Search index "
@@ -148,6 +190,13 @@ class MongoVectorRepository(VectorRepository):
         # genuine no-match except by checking for a usable vector index. Do that
         # once (cached), and fall back to the exact scan when none exists.
         if await self._has_search_index():
+            if embedding_identity is not None and await self._has_incompatible_chunks(
+                tenant_id, website_id, embedding_identity
+            ):
+                raise EmbeddingCompatibilityError(
+                    "Knowledge chunks exist with an incompatible or missing embedding "
+                    "identity; re-index this website before querying it."
+                )
             logger.info(
                 "vector search returned zero hits (tenant=%s website=%s top_k=%s)",
                 tenant_id,
@@ -163,7 +212,35 @@ class MongoVectorRepository(VectorRepository):
             website_id,
             top_k,
         )
-        return await self._brute_force_search(tenant_id, website_id, query_embedding, top_k=top_k)
+        return await self._brute_force_search(
+            tenant_id,
+            website_id,
+            query_embedding,
+            top_k=top_k,
+            embedding_identity=embedding_identity,
+        )
+
+    async def _has_incompatible_chunks(
+        self,
+        tenant_id: str,
+        website_id: str,
+        identity: EmbeddingIdentity,
+    ) -> bool:
+        """Detect legacy or mixed-space chunks when Atlas returns no hits."""
+        find_one = getattr(self._collection, "find_one", None)
+        if find_one is None:
+            return False
+        query = {
+            "tenant_id": tenant_id,
+            "website_id": website_id,
+            "$or": [
+                {"embedding_provider": {"$ne": identity.provider}},
+                {"embedding_model": {"$ne": identity.model}},
+                {"embedding_dimensions": {"$ne": identity.dimensions}},
+                {"embedding_version": {"$ne": identity.version}},
+            ],
+        }
+        return await find_one(query, {"_id": 1}) is not None
 
     async def _has_search_index(self) -> bool:
         """Whether a usable Atlas Search vector index exists (cached probe).
@@ -177,18 +254,35 @@ class MongoVectorRepository(VectorRepository):
         return self._search_supported
 
     async def _probe_search_support(self) -> bool:
-        """`listSearchIndexes` works and reports a vector index on `embedding`."""
+        """A queryable Atlas Search vector index exists on `embedding` (BUG-2).
+
+        Probes via the `$listSearchIndexes` *aggregation stage*: the
+        `listSearchIndexes` command form fails on several deployments (pymongo
+        reports `command not found` / client-side type errors) while the stage
+        works and is the documented introspection path. An index counts as
+        usable when it indexes the `embedding` path and - when the server
+        reports them - is `READY` and `queryable`. Any probe failure means "no
+        search support" so the caller degrades to the exact cosine scan.
+        """
         try:
-            info = await self._database.command({"listSearchIndexes": self._collection.name})
+            cursor = self._collection.aggregate([{"$listSearchIndexes": {}}])
+            async for index in cursor:
+                if not isinstance(index, dict):
+                    continue
+                status = index.get("status")
+                if status is not None and status != "READY":
+                    continue
+                if index.get("queryable") is False:
+                    continue
+                definition = index.get("latestDefinition") or index.get("definition") or {}
+                fields = definition.get("fields", []) if isinstance(definition, dict) else []
+                if any(
+                    isinstance(field, dict) and field.get("path") == "embedding"
+                    for field in fields
+                ):
+                    return True
         except Exception:  # noqa: BLE001 - any probe failure means "no search"
             return False
-        indexes = info.get("indexes", []) if isinstance(info, dict) else []
-        for index in indexes:
-            definition = index.get("latestDefinition") or index.get("definition") or {}
-            fields = definition.get("fields", []) if isinstance(definition, dict) else []
-            for field in fields:
-                if field.get("path") == "embedding":
-                    return True
         return False
 
     async def _brute_force_search(
@@ -198,6 +292,7 @@ class MongoVectorRepository(VectorRepository):
         query_embedding: list[float],
         *,
         top_k: int,
+        embedding_identity: EmbeddingIdentity | None = None,
     ) -> list[VectorSearchResult]:
         """Exact cosine similarity over the tenant/website's chunks (fallback).
 
@@ -217,6 +312,8 @@ class MongoVectorRepository(VectorRepository):
         async for item in cursor:
             chunk = KnowledgeChunk.from_doc(item)
             scanned += 1
+            if embedding_identity is not None:
+                ensure_embedding_compatibility(chunk, embedding_identity)
             if not chunk.embedding:
                 continue
             if len(chunk.embedding) != expected_dimension:

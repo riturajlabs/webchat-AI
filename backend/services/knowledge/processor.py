@@ -27,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from backend.core.config import get_settings
+from backend.core.embedding_identity import EmbeddingIdentity
 from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
 from backend.core.security import utcnow
 from backend.models.audit_log import (
@@ -190,6 +191,7 @@ class KnowledgeProcessor:
                 return {"status": "insufficient_content"}
 
             vectors = await self._embedder.embed([text_chunk.text for text_chunk in text_chunks])
+            embedding_identity = self._embedder.embedding_identity
         except EmbeddingUnavailableError as exc:
             # Configuration error (e.g. missing API key): retrying cannot fix
             # it, so fail the document permanently and surface the reason.
@@ -240,7 +242,35 @@ class KnowledgeProcessor:
             }
 
         # Changed (or first run): replace old chunks with freshly embedded ones.
-        chunks = self._build_chunks(document, text_chunks, vectors)
+        chunks = self._build_chunks(document, text_chunks, vectors, embedding_identity)
+        if await self._chunks.has_incompatible_identity(
+            document.tenant_id, document.website_id, embedding_identity
+        ):
+            # BUG-1 guard: the website corpus lives in another embedding space.
+            # Storing these chunks would create mixed identities and hide one
+            # of them from every identity-filtered `$vectorSearch`. Quarantine
+            # instead: keep the existing corpus untouched and fail permanently
+            # (retrying cannot fix an identity conflict; re-index the website).
+            await self._record_failure(
+                document,
+                website,
+                stage="embedding",
+                error_type="EmbeddingIdentityConflict",
+                error_message=(
+                    "Website already contains knowledge chunks with a different "
+                    f"embedding identity than {embedding_identity.provider}/"
+                    f"{embedding_identity.model}; refusing to store mixed "
+                    "embedding spaces. Re-index the website with one consistent "
+                    "embedding provider."
+                ),
+                permanent=True,
+                audit=True,
+            )
+            return {
+                "status": "failed",
+                "retryable": False,
+                "reason": "embedding_identity_conflict",
+            }
         await self._vector.delete_by_document(document.tenant_id, document.id)
         await self._vector.insert_chunks(chunks)
 
@@ -270,6 +300,7 @@ class KnowledgeProcessor:
         document: Document,
         text_chunks: list[TextChunk],
         vectors: list[list[float]],
+        embedding_identity: EmbeddingIdentity,
     ) -> list[KnowledgeChunk]:
         metadata: dict[str, Any] = {
             "source_url": document.url,
@@ -288,6 +319,10 @@ class KnowledgeProcessor:
                 embedding=vectors[i],
                 chunk_index=text_chunks[i].index,
                 metadata=metadata,
+                embedding_provider=embedding_identity.provider,
+                embedding_model=embedding_identity.model,
+                embedding_dimensions=embedding_identity.dimensions,
+                embedding_version=embedding_identity.version,
             )
             for i in range(len(text_chunks))
         ]

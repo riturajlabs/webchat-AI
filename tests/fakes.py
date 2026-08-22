@@ -56,6 +56,7 @@ from backend.services.billing.payments.base import (
     PaymentVerification,
     WebhookEvent,
 )
+from backend.services.knowledge.embedding import EmbeddingIdentity
 from backend.services.mail.base import EmailMessage
 
 
@@ -772,6 +773,15 @@ class FakeEmbeddingClient:
         self.calls: list[list[str]] = []
 
     @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        return EmbeddingIdentity(
+            provider="fake",
+            model="fake-embedding",
+            dimensions=4,
+            version="1",
+        )
+
+    @property
     def embeddings(self) -> dict[str, list[float]]:
         return {text: self._vector(text) for batch in self.calls for text in batch}
 
@@ -827,11 +837,42 @@ class FakeVectorRepository:
                 deleted += 1
         return deleted
 
-    async def list_chunks(self, tenant_id: str, website_id: str) -> list[KnowledgeChunk]:
-        return [
+    async def list_chunks(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]:
+        chunks = [
             chunk
             for chunk in self._chunks.values()
             if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+        ]
+        if limit > 0:
+            return chunks[:limit]
+        return chunks
+
+    async def list_chunks_light(
+        self, tenant_id: str, website_id: str, *, limit: int = 0
+    ) -> list[KnowledgeChunk]:
+        """Deprecated: dead code retained for test coverage."""
+        chunks = [
+            chunk
+            for chunk in self._chunks.values()
+            if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+        ]
+        if limit > 0:
+            chunks = chunks[:limit]
+        return [
+            KnowledgeChunk(
+                id=chunk.id,
+                tenant_id=chunk.tenant_id,
+                website_id=chunk.website_id,
+                document_id=chunk.document_id,
+                chunk_text=chunk.chunk_text,
+                chunk_index=chunk.chunk_index,
+                metadata=chunk.metadata,
+                created_at=chunk.created_at,
+                schema_version=chunk.schema_version,
+            )
+            for chunk in chunks
         ]
 
     async def similarity_search(
@@ -841,6 +882,7 @@ class FakeVectorRepository:
         query_embedding: list[float],
         *,
         top_k: int = 5,
+        embedding_identity: EmbeddingIdentity | None = None,
     ) -> list[VectorSearchResult]:
         self.search_calls += 1
         candidates = [
@@ -848,6 +890,23 @@ class FakeVectorRepository:
             for chunk in self._chunks.values()
             if chunk.tenant_id == tenant_id and chunk.website_id == website_id
         ]
+        if embedding_identity is not None:
+            candidates = [
+                chunk
+                for chunk in candidates
+                if (
+                    chunk.embedding_provider,
+                    chunk.embedding_model,
+                    chunk.embedding_dimensions,
+                    chunk.embedding_version,
+                )
+                == (
+                    embedding_identity.provider,
+                    embedding_identity.model,
+                    embedding_identity.dimensions,
+                    embedding_identity.version,
+                )
+            ]
         results = [
             VectorSearchResult(chunk=chunk, score=0.9 - chunk.chunk_index / 100.0)
             for chunk in candidates
@@ -900,6 +959,27 @@ class FakeKnowledgeChunkRepository:
                 for chunk in self._all()
                 if chunk.tenant_id == tenant_id and chunk.website_id == website_id
             }
+        )
+
+    async def has_incompatible_identity(
+        self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
+    ) -> bool:
+        return any(
+            chunk.tenant_id == tenant_id
+            and chunk.website_id == website_id
+            and (
+                chunk.embedding_provider,
+                chunk.embedding_model,
+                chunk.embedding_dimensions,
+                chunk.embedding_version,
+            )
+            != (
+                identity.provider,
+                identity.model,
+                identity.dimensions,
+                identity.version,
+            )
+            for chunk in self._all()
         )
 
 
@@ -1895,6 +1975,14 @@ class FakeCacheStore:
     async def delete(self, namespace: str, key: str) -> None:
         self._data.pop(f"{namespace}:{key}", None)
 
+    async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
+        """Delete all keys matching ``{namespace}:{prefix}*``."""
+        full_prefix = f"{namespace}:{prefix}"
+        keys_to_delete = [k for k in self._data if k.startswith(full_prefix)]
+        for k in keys_to_delete:
+            del self._data[k]
+        return len(keys_to_delete)
+
 
 class FakeBrokenCacheStore:
     """Cache store that always raises — tests the DB fallback path."""
@@ -1913,4 +2001,7 @@ class FakeBrokenCacheStore:
         raise ConnectionError("Redis unavailable")
 
     async def delete(self, namespace: str, key: str) -> None:
+        raise ConnectionError("Redis unavailable")
+
+    async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
         raise ConnectionError("Redis unavailable")

@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from backend.ai.gemini import GenerationUsage
 from backend.core.config import get_settings
-from backend.services.knowledge.embedding import EmbeddingUsage
+from backend.services.knowledge.embedding import EmbeddingIdentity, EmbeddingUsage
 
 # Fixed answer streamed to every mock request. Deterministic and short so load
 # tests measure the pipeline rather than generation.
@@ -123,6 +123,15 @@ class MockEmbeddingClient:
     def dimensions(self) -> int:
         """Vector length (registry dimension-compatibility check)."""
         return self._dimensions
+
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        return EmbeddingIdentity(
+            provider=self.name,
+            model="mock-embedding",
+            dimensions=self._dimensions,
+            version=getattr(get_settings(), "embedding_version", "1"),
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         vectors = [self._vector(text) for text in texts]

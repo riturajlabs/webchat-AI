@@ -138,6 +138,12 @@ class EmbeddingUnavailableError(EmbeddingError):
     code = "EMBEDDING_UNAVAILABLE"
 
 
+class EmbeddingCompatibilityError(EmbeddingError):
+    """Stored and query vectors belong to incompatible embedding spaces."""
+
+    code = "EMBEDDING_INCOMPATIBLE"
+
+
 class InsufficientContentError(AppError):
     """Cleaned page text is too short to embed usefully (pipeline stage).
 

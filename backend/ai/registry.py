@@ -183,6 +183,29 @@ def build_embedding_fallback(
     return FallbackEmbeddingClient(_registry.build_embedding_chain(order, max_retries=max_retries))
 
 
+def build_ingestion_embedding_client() -> EmbeddingClient:
+    """Build the single embedding provider ingestion writes with (BUG-1 fix).
+
+    Ingestion must never switch embedding spaces mid-corpus: providers that
+    agree on `EMBEDDING_DIMENSIONS` still live in incompatible vector spaces,
+    so a Gemini->Jina failover while storing chunks stamps a website with two
+    identities and makes one of them invisible to every identity-filtered
+    `$vectorSearch`. This resolves the configured order exactly like
+    `build_embedding_fallback` (keyless providers are skipped) but returns only
+    the first available provider. If it fails, the provider's own retries and
+    the processor's document-level backoff retry the SAME provider; exhausted
+    retries quarantine the document instead of corrupting the corpus.
+    """
+    order = get_settings().embedding_provider_order
+    chain = _registry.build_embedding_chain(order)
+    if not chain:
+        raise ProviderConfigurationError(
+            "No embedding provider is available for ingestion; configure at "
+            "least one keyed provider in EMBEDDING_PROVIDER_ORDER."
+        )
+    return chain[0]
+
+
 def _instantiate(factory: EmbeddingFactory, max_retries: int | None) -> EmbeddingClient:
     """Build a provider, forwarding `max_retries` only when it accepts it."""
     if max_retries is None or "max_retries" not in inspect.signature(factory).parameters:
@@ -195,4 +218,5 @@ __all__ = [
     "build_embedding_fallback",
     "build_generation_fallback",
     "build_generation_providers",
+    "build_ingestion_embedding_client",
 ]

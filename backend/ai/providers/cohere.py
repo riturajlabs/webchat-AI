@@ -28,6 +28,7 @@ from backend.core.config import get_settings
 from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
 from backend.services.knowledge.chunker import count_tokens
 from backend.services.knowledge.embedding import (
+    EmbeddingIdentity,
     EmbeddingUsage,
     ensure_vector_dimensions,
 )
@@ -71,6 +72,15 @@ class CohereEmbeddingClient:
     def dimensions(self) -> int:
         """Embedding vector length (registry dimension-compatibility check)."""
         return self._dimensions
+
+    @property
+    def embedding_identity(self) -> EmbeddingIdentity:
+        return EmbeddingIdentity(
+            provider=self.name,
+            model=self._model,
+            dimensions=self._dimensions,
+            version=getattr(get_settings(), "embedding_version", "1"),
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Embed `texts` (one vector per input, in order)."""

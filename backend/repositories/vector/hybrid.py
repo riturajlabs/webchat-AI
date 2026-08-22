@@ -14,12 +14,15 @@ References
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 
 from backend.repositories.vector.base import VectorSearchResult
+
+logger = logging.getLogger("webchat_ai")
 
 # ---------------------------------------------------------------------------
 # RRF core
@@ -259,9 +262,8 @@ class HybridSearcher:
     """Orchestrates vector + keyword search with RRF fusion.
 
     Wraps any ``VectorRepository``-like object (protocol-compatible) and adds
-    keyword ranking on top.  The caller provides all candidate chunks —
-    ``HybridSearcher`` does not perform its own vector search; it expects the
-    vector results as input.
+    keyword ranking on top of the supplied vector results. It does not perform
+    a second retrieval over the website's full chunk set.
 
     Attributes
     ----------
@@ -291,8 +293,8 @@ class HybridSearcher:
         vector_results:
             Pre-computed vector search results (the current pipeline output).
         all_chunks:
-            All candidate chunks for keyword scoring.  When ``None``, only the
-            vector results are used for keyword scoring.
+            Deprecated compatibility parameter. Keyword scoring is always
+            restricted to ``vector_results``.
         top_k:
             Maximum results to return.
 
@@ -301,8 +303,10 @@ class HybridSearcher:
         list[HybridSearchResult]
             Top-k results sorted by descending RRF score with per-source rank info.
         """
-        candidates = all_chunks or vector_results
-        kw_results = keyword_search(query, candidates, top_k=top_k)
+        # Keyword matching is a reranking signal, not a second retrieval
+        # source. Restricting it to vector hits prevents generic exact-term
+        # matches elsewhere in the website from entering the result set.
+        kw_results = keyword_search(query, vector_results, top_k=top_k)
 
         # Build rank maps (1-indexed)
         vector_ranks: dict[str, int] = {
@@ -316,6 +320,14 @@ class HybridSearcher:
             k=self.rrf_k,
         )
 
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "hybrid_retrieval_debug vector_top5=%s keyword_top5=%s final_top5=%s",
+                _debug_results(vector_results[:5]),
+                _debug_results(kw_results[:5]),
+                _debug_results(fused[:5]),
+            )
+
         return [
             HybridSearchResult(
                 chunk=result,
@@ -325,6 +337,19 @@ class HybridSearcher:
             )
             for result in fused[:top_k]
         ]
+
+
+def _debug_results(results: list[VectorSearchResult]) -> list[dict[str, object]]:
+    """Return safe retrieval diagnostics without including chunk text."""
+    return [
+        {
+            "chunk_id": result.chunk.id,
+            "score": round(result.score, 4),
+            "url": result.chunk.metadata.get("source_url"),
+            "title": result.chunk.metadata.get("title"),
+        }
+        for result in results
+    ]
 
 
 __all__ = [
