@@ -31,7 +31,7 @@ from backend.core.security import create_widget_session_token, utcnow
 from backend.models.website import WEBSITE_STATUS_READY
 from backend.repositories import TenantRepository, WebsiteRepository, WidgetRepository
 from backend.schemas.widget import WidgetPublicConfig
-from backend.utils.origin import origin_allowed, origin_hostname
+from backend.utils.origin import looks_like_browser, origin_allowed, origin_hostname
 
 logger = logging.getLogger("webchat_ai")
 
@@ -80,12 +80,28 @@ class WidgetService:
 
     # ------------------------------------------------------------ config
 
-    async def validate_origin(self, widget_id: str, origin: str | None) -> None:
+    async def validate_origin(
+        self,
+        widget_id: str,
+        origin: str | None,
+        *,
+        user_agent: str | None = None,
+        require_origin: bool = False,
+    ) -> None:
         """Reject browser embeds from origins outside the widget allowlist.
 
-        Policy (production hardening):
-          * no `Origin` header → allowed (non-browser clients; curl/SSE are
-            not an embed and cannot be validated anyway);
+        Policy (production hardening, P0-1):
+          * `POST /sessions` (`require_origin=True`): the `Origin` header is
+            mandatory - a browser-initiated cross-origin POST always carries
+            it, so a request without one is not a widget embed and can never
+            mint a session token (server-to-server/CLI clients are explicitly
+            not the audience of the public widget surface);
+          * chat/feedback/config with no `Origin` header: allowed only for
+            non-browser clients (empty or non-Mozilla `User-Agent`). A
+            browser-shaped request without an Origin (sandboxed iframe,
+            privacy extension, stripped header) is rejected with
+            `WIDGET_ORIGIN_NOT_ALLOWED` instead of silently bypassing the
+            allowlist;
           * widget has an empty allowlist → browser embeds are blocked with
             `WIDGET_DOMAIN_NOT_CONFIGURED` until the tenant configures at
             least one domain (or opts into open embedding with the literal
@@ -97,6 +113,10 @@ class WidgetService:
             iframe) is never allowed.
         """
         if origin is None:
+            if require_origin or looks_like_browser(user_agent):
+                raise WidgetOriginNotAllowedError(
+                    "A valid Origin header is required to use this widget."
+                )
             return
         widget = await self._widgets.find_by_widget_id(widget_id)
         if widget is None:

@@ -222,9 +222,12 @@ async def test_widget_config_reports_enabled_false_for_disabled_widget(monkeypat
 
 async def test_widget_sessions_mints_token(client) -> None:
     test_client, _, _, _ = client
+    # Session minting requires an Origin header (P0-1): browser embeds always
+    # send one on cross-origin POSTs.
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+        headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -237,6 +240,7 @@ async def test_widget_sessions_rejects_unknown_widget(client) -> None:
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": "nope", "visitor_id": "visitor-1"},
+        headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "WIDGET_NOT_FOUND"
@@ -255,6 +259,7 @@ async def test_widget_sessions_rejects_disabled_widget(monkeypatch) -> None:
         response = test_client.post(
             "/api/widget/v1/sessions",
             json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+            headers={"Origin": "https://customer.example"},
         )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "WIDGET_DISABLED"

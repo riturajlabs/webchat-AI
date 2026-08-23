@@ -31,6 +31,26 @@ _INVALID_HOST_CHARS = set(" /\\?#@:")
 # Loopback host accepted without a suffix (local development).
 _LOOPBACK_HOSTS = {"localhost"}
 
+# Every real browser UA starts with the `Mozilla/` product token (Chrome,
+# Firefox, Safari, Edge - kept for legacy compat). Non-browser clients
+# (curl, python-requests, Go-http-client, server-side SDKs) do not.
+_BROWSER_UA_PREFIX = "mozilla/"
+
+
+def looks_like_browser(user_agent: str | None) -> bool:
+    """Heuristic browser detection from the `User-Agent` header.
+
+    Used by the widget origin policy (P0-1): when the `Origin` header is
+    absent, a Mozilla-family User-Agent means the request very likely comes
+    from a browser that stripped or never sent its origin (sandboxed iframe,
+    privacy extension) and must not be trusted as "not an embed". Empty or
+    non-Mozilla signatures are treated as non-browser clients (curl /
+    server-to-server), which stay permitted but rate-limited per IP.
+    """
+    if not user_agent:
+        return False
+    return user_agent.strip().lower().startswith(_BROWSER_UA_PREFIX)
+
 
 def origin_hostname(origin: str) -> str | None:
     """Extract the normalized lowercase hostname from an `Origin` header.

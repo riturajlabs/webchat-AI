@@ -793,9 +793,21 @@ async def _widget_origin_guard(
     request: Request,
     widget_id: str,
     service: Annotated[WidgetService, Depends(get_widget_service)],
+    *,
+    require_origin: bool = False,
 ) -> None:
-    """Reject browser embeds from origins outside the widget allowlist."""
-    await service.validate_origin(widget_id, request.headers.get("origin"))
+    """Reject browser embeds from origins outside the widget allowlist.
+
+    The `User-Agent` rides along so the service can distinguish a browser
+    that dropped its `Origin` header (rejected - P0-1) from a genuine
+    non-browser client such as curl or a server-to-server caller.
+    """
+    await service.validate_origin(
+        widget_id,
+        request.headers.get("origin"),
+        user_agent=request.headers.get("user-agent"),
+        require_origin=require_origin,
+    )
 
 
 async def widget_config_origin_guard(
@@ -812,8 +824,13 @@ async def widget_session_origin_guard(
     body: CreateWidgetSessionRequest,
     service: Annotated[WidgetService, Depends(get_widget_service)],
 ) -> None:
-    """Origin guard for `POST /api/widget/v1/sessions` (widget_id in body)."""
-    await _widget_origin_guard(request, body.widget_id, service)
+    """Origin guard for `POST /api/widget/v1/sessions` (widget_id in body).
+
+    Session minting unconditionally requires an `Origin` header (P0-1): a
+    browser cross-origin POST always carries one, so headerless requests
+    cannot mint widget-session tokens at all.
+    """
+    await _widget_origin_guard(request, body.widget_id, service, require_origin=True)
 
 
 async def widget_claims_origin_guard(
