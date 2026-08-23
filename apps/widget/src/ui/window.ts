@@ -59,7 +59,7 @@ export interface ChatWindow {
 }
 
 const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
 export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const root = document.createElement('section');

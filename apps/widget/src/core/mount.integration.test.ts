@@ -304,15 +304,20 @@ describe('mount integration', () => {
       apiBaseUrl: API_BASE,
       fetchImpl,
       host,
-      intentReplyDelayMs: 25,
+      // Long enough that the "thinking" phase outlasts a waitFor poll
+      // interval, so the transient typing indicator is observable.
+      intentReplyDelayMs: 400,
     });
     await controller.ready();
     controller.open();
     controller.sendMessage('hello');
 
-    // Typing indicator shows while the local turn "thinks"…
+    // Typing indicator shows while the local turn "thinks"… (renders land on
+    // the next animation frame — streaming renders are coalesced.)
     const shadow = host.shadowRoot as ShadowRoot;
-    expect(shadow.querySelector('.wc-typing')).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(shadow.querySelector('.wc-typing')).toBeTruthy();
+    });
     // …and the Stop button is NOT offered for a non-streaming turn.
     expect((shadow.querySelector('.wc-stop') as HTMLButtonElement)?.hidden).toBe(true);
 

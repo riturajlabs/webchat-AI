@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_CONNECT_TIMEOUT_MS, streamChat } from './client';
+import { CHAT_CONNECT_TIMEOUT_MS, CHAT_STALL_TIMEOUT_MS, streamChat } from './client';
 import type { SessionToken } from '../core/session';
 
 const API_BASE = 'http://api.example.com/api/widget/v1';
@@ -371,6 +371,40 @@ describe('streamChat', () => {
     expect(result.aborted).toBe(true);
     expect(result.error).toBeUndefined();
     expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('ends a turn with a retryable timeout when an established stream stalls', async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(encoder.encode('event: message\ndata: {"delta":"par"}\n\n'));
+              // No further chunks and no FIN: a dead/stalled connection.
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const resultPromise = streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    // Attach the rejection handler before the watchdog fires so the rejection
+    // is never unhandled while fake timers advance.
+    const stallAssertion = expect(resultPromise).rejects.toMatchObject({
+      code: 'timeout',
+      retryable: true,
+      message: 'Stream stalled',
+    });
+    await vi.advanceTimersByTimeAsync(CHAT_STALL_TIMEOUT_MS);
+    await stallAssertion;
+    // The partial delta delivered before the stall is not lost.
+    expect(h.onDelta).toHaveBeenCalledWith('par');
   });
 
   it('includes timing measurements in StreamResult', async () => {

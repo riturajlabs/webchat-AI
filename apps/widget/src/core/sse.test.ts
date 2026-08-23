@@ -84,3 +84,113 @@ describe('readSseStream', () => {
     await expect(promise).rejects.toMatchObject({ code: 'timeout' });
   });
 });
+
+describe('readSseStream stall watchdog', () => {
+  /** A stream that emits one frame and then hangs (server stall, no FIN). */
+  function stalledStream(firstChunk: string): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(firstChunk));
+      },
+    });
+  }
+
+  /** A stream that dribbles chunks with delays, then closes (slow but alive). */
+  function delayedStream(chunks: string[], delayMs: number): ReadableStream<Uint8Array> {
+    const encoder = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        chunks.forEach((chunk, index) => {
+          setTimeout(
+            () => {
+              try {
+                controller.enqueue(encoder.encode(chunk));
+              } catch {
+                // Stream was cancelled before this chunk fired.
+              }
+              if (index === chunks.length - 1) {
+                controller.close();
+              }
+            },
+            delayMs * (index + 1),
+          );
+        });
+      },
+    });
+  }
+
+  it('raises a retryable timeout when no bytes arrive within stallTimeoutMs', async () => {
+    const events: unknown[] = [];
+    await expect(
+      readSseStream(
+        stalledStream('event: message\ndata: {"delta":"Hel"}\n\n'),
+        (e) => events.push(e),
+        undefined,
+        25,
+      ),
+    ).rejects.toMatchObject({ code: 'timeout', retryable: true, message: 'Stream stalled' });
+    // Events delivered before the stall are not lost.
+    expect(events).toHaveLength(1);
+  });
+
+  it('re-arms the watchdog per chunk so slow-but-alive streams complete', async () => {
+    const events: { event: string }[] = [];
+    await readSseStream(
+      delayedStream(
+        [
+          'event: message\ndata: {"delta":"a"}\n\n',
+          'event: message\ndata: {"delta":"b"}\n\n',
+          'event: done\ndata: {}\n\n',
+        ],
+        15,
+      ),
+      (e) => events.push(e),
+      undefined,
+      60,
+    );
+    expect(events.map((e) => e.event)).toEqual(['message', 'message', 'done']);
+  });
+
+  it('without a stallTimeoutMs even slow streams are never cut off', async () => {
+    // Gaps far longer than any watchdog used elsewhere in this suite; with no
+    // stallTimeoutMs there is no deadline, so the stream completes.
+    const events: { event: string }[] = [];
+    await readSseStream(
+      delayedStream(['event: message\ndata: {"delta":"a"}\n\n', 'event: done\ndata: {}\n\n'], 120),
+      (e) => events.push(e),
+    );
+    expect(events.map((e) => e.event)).toEqual(['message', 'done']);
+  });
+
+  it('parses CRLF-terminated frames (proxy line endings)', async () => {
+    const chunks = [
+      'event: message\r\ndata: {"delta":"hi"}\r\n\r\n',
+      'event: done\r\ndata: {}\r\n\r\n',
+    ];
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    const events: { event: string }[] = [];
+    await readSseStream(body, (e) => events.push(e));
+    expect(events.map((e) => e.event)).toEqual(['message', 'done']);
+  });
+
+  it('abort still wins over the stall watchdog', async () => {
+    const controller = new AbortController();
+    const promise = readSseStream(
+      stalledStream('event: message\ndata: {"delta":"x"}\n\n'),
+      () => {},
+      controller.signal,
+      20,
+    );
+    controller.abort();
+    await expect(promise).rejects.toMatchObject({ message: 'Stream aborted' });
+  });
+});

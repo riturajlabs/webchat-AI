@@ -53,10 +53,13 @@ export function formatTime(timestamp?: number): string {
 }
 
 /**
- * Host-provided feedback submit handler, injected by `wireMessageActions`
- * (same delegation pattern as copy/retry/show-more).
+ * Host-provided feedback submit handlers, injected by `wireMessageActions`,
+ * keyed by message list so multiple widgets on one page never route each
+ * other's submissions (production hardening).
  */
-let feedbackSubmit: (messageId: string, payload: FeedbackSubmitPayload) => void = () => {};
+type FeedbackSubmitHandler = (messageId: string, payload: FeedbackSubmitPayload) => void;
+
+const feedbackHandlers = new WeakMap<HTMLElement, FeedbackSubmitHandler>();
 
 function isSafeSourceUrl(href: string): boolean {
   return /^(https?:\/\/|#|\/|mailto:)/i.test(href);
@@ -212,7 +215,7 @@ export function renderSources(sources: ChatSource[]): HTMLElement {
   return block;
 }
 
-export function createBubble(message: ChatMessage): HTMLElement {
+export function createBubble(message: ChatMessage, list?: HTMLElement): HTMLElement {
   const bubble = document.createElement('div');
   bubble.className = `wc-bubble wc-role-${message.role}`;
   bubble.dataset.messageId = message.id;
@@ -227,13 +230,13 @@ export function createBubble(message: ChatMessage): HTMLElement {
     bubble.appendChild(content);
   }
 
-  syncBubble(bubble, message);
+  syncBubble(bubble, message, list);
   renderedContent.set(bubble, message.content);
   return bubble;
 }
 
 /** Update an existing bubble to match `message` (skips work when unchanged). */
-function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
+function syncBubble(bubble: HTMLElement, message: ChatMessage, list?: HTMLElement): void {
   const isAssistant = message.role === 'assistant';
   bubble.classList.toggle('wc-role-user', message.role === 'user');
   bubble.classList.toggle('wc-role-assistant', isAssistant);
@@ -273,7 +276,7 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage): void {
   syncRetry(bubble, message);
 
   // Visitor feedback (Phase 12.4): only for completed assistant answers.
-  syncFeedback(bubble, message);
+  syncFeedback(bubble, message, list);
 }
 
 /** Small muted timestamp under completed messages (optional polish). */
@@ -391,7 +394,7 @@ function syncRetry(bubble: HTMLElement, message: ChatMessage): void {
  * answer. The control is created once per bubble and re-synced on feedback
  * status transitions; the visitor's in-form input is never lost.
  */
-function syncFeedback(bubble: HTMLElement, message: ChatMessage): void {
+function syncFeedback(bubble: HTMLElement, message: ChatMessage, list?: HTMLElement): void {
   const rateable =
     message.role === 'assistant' &&
     !message.streaming &&
@@ -408,8 +411,13 @@ function syncFeedback(bubble: HTMLElement, message: ChatMessage): void {
   }
 
   if (!control) {
+    // Resolve the submit handler at click time from the owning list so a
+    // second widget mounting later can't hijack this bubble's submissions.
     const next = createFeedbackControl({
-      onSubmit: (payload) => feedbackSubmit(message.id, payload),
+      onSubmit: (payload) => {
+        const handler = list ? feedbackHandlers.get(list) : undefined;
+        handler?.(message.id, payload);
+      },
     });
     renderedFeedback.set(bubble, next);
     bubble.appendChild(next.element);
@@ -496,13 +504,22 @@ export function renderMessages(list: HTMLElement, messages: ChatMessage[]): void
     existing.set(bubble.dataset.messageId ?? '', bubble);
   }
 
+  // During streaming this runs per animation frame; only move nodes whose
+  // position actually changed (append-only conversations never do) instead of
+  // re-inserting every bubble on each pass.
+  let prevElement: Element | null = null;
   for (const message of messages) {
     const bubble = existing.get(message.id);
     if (bubble) {
-      syncBubble(bubble, message);
-      list.appendChild(bubble); // keeps order if the list shrank/edited
+      syncBubble(bubble, message, list);
+      if (bubble.previousElementSibling !== prevElement) {
+        list.appendChild(bubble); // keeps order if the list shrank/edited
+      }
+      prevElement = bubble;
     } else {
-      list.appendChild(createBubble(message));
+      const created = createBubble(message, list);
+      list.appendChild(created);
+      prevElement = created;
     }
   }
 
@@ -527,7 +544,7 @@ export function renderMessages(list: HTMLElement, messages: ChatMessage[]): void
 /** Append a single message bubble, keeping the view pinned to the bottom. */
 export function appendMessage(list: HTMLElement, message: ChatMessage): void {
   const stickToBottom = isNearBottom(list);
-  list.appendChild(createBubble(message));
+  list.appendChild(createBubble(message, list));
   if (stickToBottom) {
     list.scrollTop = list.scrollHeight;
   }
@@ -537,7 +554,7 @@ export function appendMessage(list: HTMLElement, message: ChatMessage): void {
 export function updateMessage(list: HTMLElement, message: ChatMessage): void {
   const bubble = list.querySelector<HTMLElement>(`[data-message-id="${message.id}"]`);
   if (bubble) {
-    syncBubble(bubble, message);
+    syncBubble(bubble, message, list);
   }
 }
 
@@ -565,7 +582,7 @@ export function wireMessageActions(
     onFeedbackSubmit?: (messageId: string, payload: FeedbackSubmitPayload) => void;
   },
 ): () => void {
-  feedbackSubmit = handlers.onFeedbackSubmit ?? (() => {});
+  feedbackHandlers.set(list, handlers.onFeedbackSubmit ?? (() => {}));
   const onBubbleClick = (event: MouseEvent): void => {
     const target = event.target as HTMLElement | null;
     if (!target) {

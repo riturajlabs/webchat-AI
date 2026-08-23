@@ -104,12 +104,23 @@ export function createComposer(options: ComposerOptions): ChatComposer {
   let locked = false;
   let streaming = false;
 
+  /** Grow the textarea with its content, up to the CSS max-height. */
+  const autogrow = (): void => {
+    // jsdom (and collapsed layouts) report scrollHeight 0; skip so the
+    // inline height never collapses the field.
+    if (input.scrollHeight > 0) {
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(input.scrollHeight, 88)}px`;
+    }
+  };
+
   const updateSend = (): void => {
     sendButton.disabled = locked || options.isDisabled() || input.value.trim().length === 0;
   };
 
   const reset = (): void => {
     input.value = '';
+    input.style.height = '';
     updateSend();
   };
 
@@ -122,7 +133,10 @@ export function createComposer(options: ComposerOptions): ChatComposer {
     reset();
   };
 
-  input.addEventListener('input', updateSend);
+  input.addEventListener('input', () => {
+    autogrow();
+    updateSend();
+  });
   input.addEventListener('keydown', (event: KeyboardEvent) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -148,12 +162,17 @@ export function createComposer(options: ComposerOptions): ChatComposer {
     if (next === streaming) {
       return;
     }
+    const stopWasFocused = document.activeElement === stopButton;
     streaming = next;
     input.disabled = next;
     sendButton.hidden = next;
     stopButton.hidden = !next;
     if (next) {
       stopButton.focus();
+    } else if (stopWasFocused) {
+      // The Stop button just left the DOM-visible state (which would drop
+      // focus to <body>); keep it inside the composer instead.
+      input.focus();
     }
   };
 

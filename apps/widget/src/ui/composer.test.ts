@@ -74,6 +74,25 @@ describe('createComposer', () => {
     expect(composer.input.disabled).toBe(false);
   });
 
+  it('returns focus to the input when streaming ends while Stop is focused', () => {
+    const { composer } = setup();
+    composer.setStreaming(true);
+    expect(document.activeElement).toBe(composer.stopButton);
+    composer.setStreaming(false);
+    // Focus must not fall out of the composer to <body> when Stop disappears.
+    expect(document.activeElement).toBe(composer.input);
+  });
+
+  it('clears the auto-grow height on reset', () => {
+    const { composer } = setup();
+    composer.input.style.height = '88px';
+    composer.input.value = 'hello';
+    composer.input.dispatchEvent(new Event('input'));
+    composer.sendButton.click();
+    expect(composer.input.value).toBe('');
+    expect(composer.input.style.height).toBe('');
+  });
+
   it('calls onStop when the Stop button is pressed', () => {
     const onStop = vi.fn();
     const composer = createComposer({

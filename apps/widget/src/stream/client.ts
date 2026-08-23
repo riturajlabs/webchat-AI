@@ -17,6 +17,14 @@ import type { SessionToken } from '../core/session';
 /** Connect + first-token timeout for a chat stream (plan §9). */
 export const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
 
+/**
+ * Inactivity watchdog for an established stream (production hardening): when
+ * no bytes arrive within this window — stalled server, dead connection without
+ * FIN — the reader is cancelled and a retryable `timeout` error ends the turn
+ * instead of "AI is typing" forever. Re-armed on every chunk.
+ */
+export const CHAT_STALL_TIMEOUT_MS = 30 * 1000;
+
 export interface ChatRequest {
   question: string;
   sessionId?: string | null;
@@ -196,6 +204,7 @@ async function consumeStream(
   handlers: ChatHandlers,
   signal?: AbortSignal,
   streamStartTime?: number,
+  stallTimeoutMs = CHAT_STALL_TIMEOUT_MS,
 ): Promise<StreamResult> {
   let terminalReached = false;
   let result: StreamResult = { completed: false };
@@ -257,6 +266,7 @@ async function consumeStream(
         }
       },
       signal,
+      stallTimeoutMs,
     );
   } catch (cause) {
     // The SSE reader raises a WidgetError when `signal` aborts (sse.ts).

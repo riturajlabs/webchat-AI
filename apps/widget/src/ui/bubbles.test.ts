@@ -312,6 +312,42 @@ describe('renderMessages / appendMessage', () => {
     expect(list.querySelector('.wc-welcome')).toBeNull();
     expect(list.querySelectorAll('.wc-bubble').length).toBe(1);
   });
+
+  it('skips DOM moves for bubbles whose position is unchanged', () => {
+    const list = createMessageList();
+    const first = message('user', 'one', { id: 'u1' });
+    renderMessages(list, [first, message('assistant', '', { id: 'a1' })]);
+
+    const appendSpy = vi.spyOn(list, 'appendChild');
+    try {
+      // Streaming pass: same order plus one new bubble at the end.
+      renderMessages(list, [
+        first,
+        message('assistant', 'He', { id: 'a1', streaming: true }),
+        message('assistant', '', { id: 'a2' }),
+      ]);
+      // Only the new bubble is appended; existing nodes are not re-inserted.
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      expect(list.querySelector('[data-message-id="a2"]')).toBeTruthy();
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
+  it('restores order by moving nodes when the sequence changes', () => {
+    const list = createMessageList();
+    renderMessages(list, [
+      message('user', 'one', { id: 'u1' }),
+      message('assistant', 'two', { id: 'a1' }),
+    ]);
+    const userBubble = list.querySelector('[data-message-id="u1"]') as HTMLElement;
+
+    renderMessages(list, [
+      message('assistant', 'two', { id: 'a1' }),
+      message('user', 'one', { id: 'u1' }),
+    ]);
+    expect(list.lastElementChild).toBe(userBubble);
+  });
 });
 
 describe('wireMessageActions', () => {

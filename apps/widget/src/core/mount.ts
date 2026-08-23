@@ -49,7 +49,7 @@ import {
 } from '../conversation/intent';
 
 /** Banner shown while the browser reports itself offline (plan §9). */
-export const OFFLINE_BANNER = "You're offline. Messages will be sent once your connection returns.";
+export const OFFLINE_BANNER = "You're offline. Reconnect to send messages.";
 
 /** Banner shown when the backend reports the widget as disabled/suspended. */
 export const WIDGET_UNAVAILABLE_BANNER = 'This assistant is currently unavailable.';
@@ -505,10 +505,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
       clearTimeout(statusTimer);
     }
     statusTimer = setTimeout(() => {
-      if (currentStatus === text) {
-        currentStatus = '';
-        windowElement.setStatus('');
+      if (destroyed || currentStatus !== text) {
+        return;
       }
+      currentStatus = '';
+      windowElement.setStatus('');
     }, 2500);
   }
 
@@ -657,6 +658,10 @@ export function mount(options: WidgetHostOptions): WidgetController {
       open = false;
       activeAbort?.abort();
       activeAbort = null;
+      if (statusTimer) {
+        clearTimeout(statusTimer);
+        statusTimer = null;
+      }
       window.removeEventListener('online', onConnectivityChange);
       window.removeEventListener('offline', onConnectivityChange);
       windowElement.releaseFocus();
@@ -694,7 +699,35 @@ export function mount(options: WidgetHostOptions): WidgetController {
   }
 
   defineWidgetElement();
-  conversation.onChange = () => syncRenderer();
+
+  /**
+   * Streaming renders are coalesced to one render per animation frame
+   * (production hardening): each SSE delta bumps the conversation revision,
+   * and re-parsing the full markdown of the growing answer on every token is
+   * O(n²) over a long reply. Coalescing keeps the stream visually identical
+   * while capping DOM/markdown work at frame rate. Terminal transitions pay
+   * at most one frame of delay (<16ms, imperceptible).
+   */
+  let renderScheduled = false;
+  const scheduleFrame: (cb: () => void) => void =
+    typeof window.requestAnimationFrame === 'function'
+      ? (cb) => window.requestAnimationFrame(() => cb())
+      : (cb) => window.setTimeout(cb, 16);
+
+  function scheduleRender(): void {
+    if (renderScheduled || destroyed) {
+      return;
+    }
+    renderScheduled = true;
+    scheduleFrame(() => {
+      renderScheduled = false;
+      if (!destroyed) {
+        syncRenderer();
+      }
+    });
+  }
+
+  conversation.onChange = () => scheduleRender();
   syncRenderer();
   if (options.autoStart ?? true) {
     void start();

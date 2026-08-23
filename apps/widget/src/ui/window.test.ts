@@ -105,6 +105,27 @@ describe('createChatWindow', () => {
     windowApi.releaseFocus();
   });
 
+  it('keeps links in the Tab cycle instead of trapping on them', () => {
+    const { windowApi, messagesElement } = setup();
+    // Assistant markdown/citation links are natively tabbable; the focus trap
+    // must treat them as focusables (WCAG 2.1.2 — no keyboard trap).
+    const link = document.createElement('a');
+    link.href = 'https://example.com/docs';
+    link.textContent = 'Docs';
+    messagesElement.appendChild(link);
+    windowApi.trapFocus();
+
+    link.focus();
+    pressKey(link, 'Tab');
+    expect(document.activeElement).not.toBe(windowApi.element.querySelector('.wc-close'));
+    expect(windowApi.element.contains(document.activeElement)).toBe(true);
+
+    // Shift+Tab from the link cycles back inside the window too.
+    pressKey(link, 'Tab', { shift: true });
+    expect(windowApi.element.contains(document.activeElement)).toBe(true);
+    windowApi.releaseFocus();
+  });
+
   it('releaseFocus stops intercepting Tab', () => {
     const { windowApi } = setup();
     const outside = document.createElement('button');
