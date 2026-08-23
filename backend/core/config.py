@@ -142,6 +142,15 @@ class Settings(BaseSettings):
     # `visitor_id` is client-supplied - so an IP-shaped budget that a bot farm
     # cannot trivially rotate backs them up.
     widget_ip_limit: int = 120
+    # Dedicated per-IP burst budgets (P0-4) for the two most expensive widget
+    # endpoints. Anonymous token minting (`/sessions`) and SSE generation
+    # (`/chat`) previously shared the generic `widget_ip_limit` bucket, so an
+    # attacker rotating both visitor_id and target widget_id kept fresh entity
+    # budgets while blending into that 120/min pool. These tighter IP-shaped
+    # windows fire regardless of rotation; both stay configurable and honor
+    # the `WIDGET_RATE_LIMIT_ENABLED` master switch (localhost dev unaffected).
+    widget_session_issue_ip_limit: int = 30
+    widget_chat_ip_limit: int = 60
     widget_max_messages_per_session: int = 50
     # Master switch for the widget rate limits; `None` inherits the global
     # `rate_limit_enabled` (resolved in the validator below).

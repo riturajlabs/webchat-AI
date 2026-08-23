@@ -128,6 +128,75 @@ async def test_widget_ip_limiter_disabled_by_switch(monkeypatch) -> None:
 
 
 # -----------------------------------------------------------------------
+# P0-4: dedicated per-IP burst budgets on /sessions and /chat
+# -----------------------------------------------------------------------
+
+
+async def test_widget_session_ip_limiter_bounds_minting(monkeypatch) -> None:
+    """Anonymous token minting gets its own tight IP budget (P0-4): rotating
+    the body `widget_id` (which resets the entity key) cannot escape it."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_SESSION_ISSUE_IP_LIMIT", "3")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+
+    for _ in range(3):
+        await deps.widget_session_ip_limiter(_fake_request("/api/widget/v1/sessions"))
+    with pytest.raises(RateLimitExceededError):
+        await deps.widget_session_ip_limiter(_fake_request("/api/widget/v1/sessions"))
+
+    # A different IP has a fresh budget.
+    other = _fake_request("/api/widget/v1/sessions")
+    other.client.host = "203.0.113.9"
+    await deps.widget_session_ip_limiter(other)
+    get_settings.cache_clear()
+
+
+async def test_widget_chat_ip_limiter_is_independent_of_sessions(monkeypatch) -> None:
+    """The chat burst budget is a separate window: exhausting session minting
+    does not consume the chat budget on the same IP."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_SESSION_ISSUE_IP_LIMIT", "1")
+    monkeypatch.setenv("WIDGET_CHAT_IP_LIMIT", "2")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+
+    sessions_req = _fake_request("/api/widget/v1/sessions")
+    await deps.widget_session_ip_limiter(sessions_req)
+    with pytest.raises(RateLimitExceededError):
+        await deps.widget_session_ip_limiter(sessions_req)
+
+    chat_req = _fake_request("/api/widget/v1/chat")
+    await deps.widget_chat_ip_limiter(chat_req)
+    await deps.widget_chat_ip_limiter(chat_req)
+    with pytest.raises(RateLimitExceededError):
+        await deps.widget_chat_ip_limiter(chat_req)
+    get_settings.cache_clear()
+
+
+async def test_widget_burst_limiters_disabled_by_switch(monkeypatch) -> None:
+    """Both dedicated budgets honor WIDGET_RATE_LIMIT_ENABLED (localhost dev)."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("WIDGET_SESSION_ISSUE_IP_LIMIT", "1")
+    monkeypatch.setenv("WIDGET_CHAT_IP_LIMIT", "1")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    for _ in range(5):
+        await deps.widget_session_ip_limiter(_fake_request("/api/widget/v1/sessions"))
+        await deps.widget_chat_ip_limiter(_fake_request("/api/widget/v1/chat"))
+    get_settings.cache_clear()
+
+
+# -----------------------------------------------------------------------
 # SEC-7: refresh_limiter (per-session-token sliding window)
 # -----------------------------------------------------------------------
 

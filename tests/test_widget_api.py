@@ -500,6 +500,74 @@ async def test_widget_chat_unknown_session_still_not_found(client) -> None:
     assert grouped["error"][0]["code"] == "SESSION_NOT_FOUND"
 
 
+# ------------------------------------------- per-IP burst budgets (P0-4)
+
+
+async def test_widget_sessions_http_429_over_ip_burst_budget(monkeypatch, client) -> None:
+    """P0-4 end-to-end: with the widget limiter enabled and a tight
+    WIDGET_SESSION_ISSUE_IP_LIMIT, minting beyond the IP budget is a 429,
+    and disabling the switch (localhost dev) restores access."""
+    import backend.api.deps as deps
+
+    from tests.test_rate_limit import FakeRateLimitStore
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_SESSION_ISSUE_IP_LIMIT", "2")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    test_client, _, _, _ = client
+
+    payload = {"widget_id": WIDGET_ID, "visitor_id": "visitor-burst"}
+    headers = {"Origin": "https://customer.example"}
+    for _ in range(2):
+        response = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+        assert response.status_code == 200
+
+    limited = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+    # Localhost development: master switch off -> no Redis needed, no 429.
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    restored = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+    assert restored.status_code == 200
+    get_settings.cache_clear()
+
+
+async def test_widget_chat_http_429_over_ip_burst_budget(monkeypatch, client) -> None:
+    """P0-4 end-to-end: SSE generation is bounded by its own per-IP burst
+    window; exceeding it fails fast with an HTTP 429 before any streaming."""
+    import backend.api.deps as deps
+
+    from tests.test_rate_limit import FakeRateLimitStore
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_CHAT_IP_LIMIT", "1")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    first = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers("visitor-burst"),
+    )
+    assert first.status_code == 200
+
+    limited = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers("visitor-burst"),
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+    get_settings.cache_clear()
+
+
 # --------------------------------------------------------------- CORS
 
 

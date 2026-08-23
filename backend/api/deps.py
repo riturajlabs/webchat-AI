@@ -751,6 +751,9 @@ async def _session_issue_rate_limit_key(request: Request) -> str:
 #  * per-widget: WIDGET_PER_WIDGET_LIMIT / min (60)
 #  * per-visitor: WIDGET_PER_VISITOR_LIMIT / min (20)
 #  * session issue: WIDGET_SESSION_ISSUE_LIMIT / min (30)
+# P0-4 dedicated per-IP burst budgets:
+#  * session issue / IP: WIDGET_SESSION_ISSUE_IP_LIMIT / min (30)
+#  * chat / IP: WIDGET_CHAT_IP_LIMIT / min (60)
 widget_chat_limiter = WidgetRateLimitDependency(
     key_factory=_widget_rate_limit_key,
     window_seconds=60,
@@ -788,6 +791,31 @@ widget_ip_limiter = WidgetRateLimitDependency(
     key_factory=_widget_ip_rate_limit_key,
     window_seconds=60,
     limit_setting="widget_ip_limit",
+)
+
+
+# Dedicated per-IP burst budgets (P0-4): anonymous token minting and SSE
+# generation are the two most expensive public surfaces, and both of their
+# entity keys (`visitor_id`, target `widget_id`) are attacker-chosen. These
+# tighter IP-shaped windows survive that rotation instead of blending into
+# the generic per-endpoint `widget_ip_limiter` bucket above.
+def _widget_chat_ip_rate_limit_key(request: Request) -> str:
+    return f"rl:ip:chat:{client_ip(request)}"
+
+
+def _widget_session_ip_rate_limit_key(request: Request) -> str:
+    return f"rl:ip:sessions:{client_ip(request)}"
+
+
+widget_chat_ip_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_chat_ip_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_chat_ip_limit",
+)
+widget_session_ip_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_session_ip_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_session_issue_ip_limit",
 )
 
 

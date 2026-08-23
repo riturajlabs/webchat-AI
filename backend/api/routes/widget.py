@@ -26,12 +26,14 @@ from backend.api.deps import (
     get_rag_service,
     get_usage_service,
     get_widget_service,
+    widget_chat_ip_limiter,
     widget_chat_limiter,
     widget_claims_origin_guard,
     widget_config_origin_guard,
     widget_feedback_limiter,
     widget_ip_limiter,
     widget_session_claims,
+    widget_session_ip_limiter,
     widget_session_issue_limiter,
     widget_session_origin_guard,
     widget_visitor_limiter,
@@ -83,11 +85,14 @@ async def create_widget_session(
     _: Annotated[None, Depends(widget_session_origin_guard)],
     __: Annotated[None, Depends(widget_session_issue_limiter)],
     ___: Annotated[None, Depends(widget_ip_limiter)],
+    ____: Annotated[None, Depends(widget_session_ip_limiter)],
 ) -> WidgetSessionResponse:
     """Mint a short-lived widget-session token for an anonymous visitor.
 
     `visitor_id` is the non-PII anonymous cookie id (ADR-004); the token is
-    kept in memory by the SDK and never persisted client-side.
+    kept in memory by the SDK and never persisted client-side. Beyond the
+    per-widget issue budget, a dedicated per-IP burst budget (P0-4) bounds
+    minting even when both entity keys are attacker-rotated.
     """
     token, expires_at = await service.create_session(
         widget_id=body.widget_id,
@@ -108,6 +113,7 @@ async def widget_chat(
     __: Annotated[None, Depends(widget_visitor_limiter)],
     ___: Annotated[None, Depends(widget_claims_origin_guard)],
     ____: Annotated[None, Depends(widget_ip_limiter)],
+    _____: Annotated[None, Depends(widget_chat_ip_limiter)],
 ) -> StreamingResponse:
     """Stream an answer for the visitor's question (SSE).
 
