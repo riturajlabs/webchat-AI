@@ -129,6 +129,15 @@ async def widget_chat(
                 tenant_id=claims["tenant_id"],
                 website_id=claims["website_id"],
             )
+            # P0-2 visitor binding: the client-supplied session_id may only
+            # resume a conversation owned by this token's tenant+website+
+            # visitor triple (same SESSION_NOT_FOUND code as unknown ids).
+            await service.validate_session_access(
+                tenant_id=claims["tenant_id"],
+                website_id=claims["website_id"],
+                visitor_id=claims.get("visitor_id"),
+                session_id=body.session_id,
+            )
             if is_spam(body.question):
                 raise SpamRejectedError("This message looks like spam.")
             await service.check_message_cap(
@@ -177,6 +186,7 @@ async def submit_feedback(
     body: WidgetFeedbackRequest,
     claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
     service: Annotated[FeedbackService, Depends(get_feedback_service)],
+    widgets: Annotated[WidgetService, Depends(get_widget_service)],
     _: Annotated[None, Depends(widget_feedback_limiter)],
     __: Annotated[None, Depends(widget_claims_origin_guard)],
     ___: Annotated[None, Depends(widget_ip_limiter)],
@@ -185,11 +195,21 @@ async def submit_feedback(
 
     Requires `Authorization: Bearer <widget_session_token>`. The token's
     tenant/website are authoritative: the untrusted `message_id`/`session_id`
-    are validated against them before anything is persisted (the service
-    verifies the message exists and belongs to this tenant/website/session).
-    A repeat rating for the same message is idempotent. A per-visitor
-    sliding-window budget (`WIDGET_FEEDBACK_LIMIT`) bounds abuse.
+    are validated against them before anything is persisted - P0-2 visitor
+    binding first (the conversation must belong to this token's visitor), then
+    the feedback service verifies the message exists and belongs to this
+    tenant/website/session. A repeat rating for the same message is
+    idempotent. A per-visitor sliding-window budget (`WIDGET_FEEDBACK_LIMIT`)
+    bounds abuse.
     """
+    # P0-2: reject conversations that belong to a different visitor before
+    # touching the message store (404 SESSION_NOT_FOUND, no existence oracle).
+    await widgets.validate_session_access(
+        tenant_id=claims["tenant_id"],
+        website_id=claims["website_id"],
+        visitor_id=claims.get("visitor_id"),
+        session_id=body.session_id,
+    )
     await service.submit(
         tenant_id=claims["tenant_id"],
         website_id=claims["website_id"],

@@ -372,6 +372,8 @@ def get_widget_service(
         tenants=MongoTenantRepository(db),
         websites=MongoWebsiteRepository(db),
         store=_RedisWidgetStore(get_redis()),
+        # Chat-session lookup powers the P0-2 visitor-binding check.
+        sessions=MongoChatSessionRepository(db),
     )
 
 

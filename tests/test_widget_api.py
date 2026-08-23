@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.fakes import (
+    FakeChatSessionRepository,
     FakeFeedbackRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
@@ -45,6 +46,7 @@ def _build_widget_service(
     widget_enabled: bool = True,
     allowed_domains: list[str] | None = None,
     tenants: FakeTenantRepository | None = None,
+    sessions: FakeChatSessionRepository | None = None,
 ) -> WidgetService:
     widgets = FakeWidgetRepository()
     tenants = tenants or FakeTenantRepository()
@@ -69,6 +71,8 @@ def _build_widget_service(
         tenants=tenants,
         websites=websites,
         store=store,
+        # P0-2 visitor binding reads chat sessions through this lookup.
+        sessions=sessions,
     )
 
 
@@ -101,7 +105,9 @@ def client(monkeypatch):
     get_settings.cache_clear()
     chat_env = build_chat_env()
     tenants = FakeTenantRepository()
-    widget_service = _build_widget_service(chat_env.websites, tenants=tenants)
+    widget_service = _build_widget_service(
+        chat_env.websites, tenants=tenants, sessions=chat_env.sessions
+    )
     billing_env = build_billing_env(tenants)
     # The feedback service shares the chat message repo so a visitor can rate a
     # message the chat flow actually produced.
@@ -372,6 +378,128 @@ async def test_widget_chat_rejects_spam(client) -> None:
     assert grouped["error"][0]["code"] == "SPAM_REJECTED"
 
 
+# ------------------------------------------------- visitor binding (P0-2)
+
+
+async def _start_conversation(test_client, visitor_id: str) -> tuple[str, str]:
+    """Ask one question as `visitor_id`; return (session_id, message_id)."""
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(visitor_id),
+    )
+    assert response.status_code == 200
+    grouped = _event_map(_sse_events(response.text))
+    done = grouped["done"][0]
+    return str(done["session_id"]), str(done.get("message_id"))
+
+
+async def test_widget_chat_rejects_foreign_visitor_session(client) -> None:
+    """P0-2: a valid token for the same widget cannot resume another
+    visitor's conversation by replaying its session_id."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    session_id, _ = await _start_conversation(test_client, "visitor-a")
+    messages_before = len(chat_env.messages.messages)
+
+    intruder = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What else can you tell me?", "session_id": session_id},
+        headers=_chat_headers("visitor-b"),
+    )
+
+    assert intruder.status_code == 200
+    grouped = _event_map(_sse_events(intruder.text))
+    # Same code an unknown session produces - no existence oracle.
+    assert grouped["error"][0]["code"] == "SESSION_NOT_FOUND"
+    assert "message" not in grouped
+    # The victim conversation was neither read nor extended.
+    assert len(chat_env.messages.messages) == messages_before
+
+
+async def test_widget_chat_owner_can_resume_own_session(client) -> None:
+    """Positive control: the legitimate owner keeps full access (P0-2 must
+    not break the normal continue-conversation flow)."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    session_id, _ = await _start_conversation(test_client, "visitor-a")
+
+    followup = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "And what about support?", "session_id": session_id},
+        headers=_chat_headers("visitor-a"),
+    )
+
+    assert followup.status_code == 200
+    grouped = _event_map(_sse_events(followup.text))
+    assert "error" not in grouped
+    assert grouped["done"][0]["session_id"] == session_id
+    assert grouped["done"][0].get("status", "completed") != "failed"
+    # Two turns persisted: 2 messages per turn.
+    assert len(chat_env.messages.messages) == 4
+
+
+async def test_widget_feedback_rejects_foreign_visitor_session(client) -> None:
+    """P0-2: feedback cannot be attached to another visitor's conversation,
+    even when the message exists and matches tenant/website/session."""
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    session_id, message_id = await _start_conversation(test_client, "visitor-a")
+
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 1,
+            "category": "wrong",
+        },
+        headers=_feedback_headers("visitor-b"),
+    )
+
+    assert result.status_code == 404
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
+    assert feedback_service._feedback.feedback == []  # noqa: SLF001
+
+
+async def test_widget_feedback_owner_can_rate_own_message(client) -> None:
+    """Positive control: the conversation owner can still rate answers."""
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    session_id, message_id = await _start_conversation(test_client, "visitor-a")
+
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 5,
+            "category": "helpful",
+        },
+        headers=_feedback_headers("visitor-a"),
+    )
+
+    assert result.status_code == 204
+    stored = feedback_service._feedback.feedback  # noqa: SLF001
+    assert len(stored) == 1
+    assert stored[0].message_id == message_id
+
+
+async def test_widget_chat_unknown_session_still_not_found(client) -> None:
+    """Unknown session ids keep the exact pre-P0-2 behavior/code."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi there", "session_id": "does-not-exist"},
+        headers=_chat_headers("visitor-a"),
+    )
+
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["error"][0]["code"] == "SESSION_NOT_FOUND"
+
+
 # --------------------------------------------------------------- CORS
 
 
@@ -520,7 +648,9 @@ async def test_widget_feedback_rejects_unknown_message(client) -> None:
         headers=_feedback_headers(),
     )
     assert result.status_code == 404
-    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    # P0-2 visitor binding rejects the unknown session before the message
+    # lookup runs (still 404, now with the session-scoped code).
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
     assert feedback_service._feedback.feedback == []  # noqa: SLF001
 
 
@@ -554,7 +684,9 @@ async def test_widget_feedback_rejects_foreign_website_token(client) -> None:
     )
 
     assert result.status_code == 404
-    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    # The foreign-website token is rejected by P0-2 session binding before
+    # the message lookup (website mismatch under the same tenant).
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
     assert feedback_service._feedback.feedback == []  # noqa: SLF001
 
 

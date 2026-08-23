@@ -38,6 +38,7 @@ from fastapi.testclient import TestClient
 from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import ChatEnv, build_chat_env, make_chunk, make_website
 from tests.fakes import (
+    FakeChatSessionRepository,
     FakeFeedbackRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
@@ -95,6 +96,9 @@ def _build_widget_service(
         websites=websites,
         store=store,
         settings=settings,
+        # P0-2 visitor binding lookup (unused by origin tests but wired the
+        # same way production builds the service).
+        sessions=FakeChatSessionRepository(),
     )
 
 
