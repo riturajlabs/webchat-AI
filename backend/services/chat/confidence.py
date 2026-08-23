@@ -41,8 +41,11 @@ def assess_confidence(
         else average
     )
     confidence = 0.50 * average + 0.30 * hit_ratio + 0.20 * peak
+    # Clamp to [0, 1]: reranker cosine scores can be negative (dissimilar
+    # chunks), which would otherwise emit negative confidence telemetry.
+    confidence = max(0.0, min(confidence, 1.0))
     return ConfidenceMetrics(
-        confidence=round(min(confidence, 1.0), 4),
+        confidence=round(confidence, 4),
         minimum_score=round(min(scores), 4),
         average_score=round(average, 4),
         rejected_chunks_count=rejected,

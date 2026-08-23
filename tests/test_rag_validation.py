@@ -705,3 +705,45 @@ class TestFaithfulnessValidation:
             context,
         )
         assert 0.3 <= score <= 0.8
+
+    def test_numeric_token_grounding_counts(self) -> None:
+        """A sentence grounded only through a numeric token gets credit.
+
+        The old alpha-only tokenizer dropped tokens containing digits or
+        symbols, so numeric-only overlap scored as unsupported.
+        """
+        context = [
+            ContextItem(
+                url="https://example.com", title="A", heading=None,
+                text="Batch jobs run nightly at 0300 utc.",
+            ),
+        ]
+        score = _check_faithfulness(
+            "Scheduled maintenance happens 0300 daily.", context
+        )
+        assert score == 1.0
+
+    def test_ungrounded_numeric_claim_stays_unsupported(self) -> None:
+        context = [
+            ContextItem(
+                url="https://example.com", title="A", heading=None,
+                text="Batch jobs run nightly at 0300 utc.",
+            ),
+        ]
+        score = _check_faithfulness(
+            "Scheduled maintenance happens 0530 daily.", context
+        )
+        assert score == 0.0
+
+    def test_currency_and_percent_tokens_ground_pricing_answers(self) -> None:
+        context = [
+            ContextItem(
+                url="https://example.com", title="A", heading=None,
+                text="We guarantee 99.9% uptime and $500 in credits.",
+            ),
+        ]
+        score = _check_faithfulness(
+            "Customers receive $500 in credits with a 99.9% uptime guarantee.",
+            context,
+        )
+        assert score == 1.0

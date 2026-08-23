@@ -8,9 +8,11 @@ Metrics
 **Retrieval**
 - ``retrieved_chunk_count``: number of source chunks returned by the pipeline.
 - ``avg_relevance_score``: mean of the per-chunk similarity scores.
-- ``context_coverage``: fraction of retrieved chunks whose URL or title
-  appears in the answer text (0.0-1.0).  Higher means the answer
-  actually uses the retrieved context.
+- ``context_coverage``: fraction of retrieved sources the answer uses
+  (0.0-1.0).  Counts distinct valid ``[N]`` citation markers when present
+  (out-of-range citations are ignored), else falls back to matching
+  source URL/title substrings in the answer text.  Higher means the
+  answer actually uses the retrieved context.
 
 **Answer**
 - ``response_length``: character count of the full answer.
@@ -125,12 +127,23 @@ def _avg_score(sources: list[SourceInfo]) -> float:
 
 
 def _context_coverage(answer: str, sources: list[SourceInfo]) -> float:
-    """Fraction of source URLs or titles that appear in the answer text.
+    """Fraction of retrieved sources the answer actually uses.
 
-    Returns a value between 0.0 and 1.0.  An empty source list returns 0.0.
+    Production answers cite sources via ``[N]`` markers rather than by URL
+    or title, so when any valid ``[N]`` marker is present coverage counts
+    distinct in-range citations over the source count; out-of-range markers
+    (hallucinated references) are ignored.  Answers without citation
+    markers fall back to legacy URL/title substring matching.
     """
     if not sources or not answer:
         return 0.0
+    cited = {
+        number
+        for marker in _CITATION.findall(answer)
+        if 1 <= (number := int(marker[1:-1])) <= len(sources)
+    }
+    if cited:
+        return round(len(cited) / len(sources), 4)
     answer_lower = answer.lower()
     hits = 0
     for src in sources:

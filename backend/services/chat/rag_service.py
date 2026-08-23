@@ -678,6 +678,27 @@ class RagService:
                 results, max_context_chars=adaptive_max_context_chars
             )
         context_ms = (time.perf_counter() - t_context) * 1000.0
+        # Context-empty guard: min_score filtering can drop every retrieved
+        # chunk even when raw retrieval returned hits (e.g. the confidence
+        # gate is disabled, or its threshold sits below ~0.7 * min_score).
+        # Calling the model with an empty context block would rely purely on
+        # prompt compliance to avoid hallucination, so emit the safe
+        # fallback instead — the model is never called without context.
+        if not context_items:
+            history_task.cancel()
+            async for event in self._emit_fallback(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session=session,
+                started=started,
+                vector_queries=1,
+                reason="context_empty",
+                query=question,
+                scores=retrieval_scores,
+                confidence_metrics=confidence_metrics,
+            ):
+                yield event
+            return
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "chat_context_build question=%r context_count=%d",
@@ -1350,13 +1371,30 @@ def _safe_message(exc: Exception) -> str:
     return "An unexpected error occurred. Please try again later."
 
 
+def _significant_words(text: str) -> set[str]:
+    """Normalized significant tokens: alphanumeric runs longer than 3 chars.
+
+    Stripping non-alphanumeric characters (instead of dropping tokens that
+    contain them) keeps numeric and currency-bearing words — "$19", "99.9%",
+    "200ms" — eligible as grounding evidence.  The previous alpha-only rule
+    silently discarded them, systematically under-scoring pricing and
+    metric-heavy answers.
+    """
+    words: set[str] = set()
+    for token in text.lower().split():
+        normalized = "".join(char for char in token if char.isalnum())
+        if len(normalized) > 3:
+            words.add(normalized)
+    return words
+
+
 def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> float:
     """Score answer faithfulness by checking if each sentence is grounded in context.
 
     Returns a value between 0.0 (no support) and 1.0 (fully grounded).
     Each sentence in the answer is checked for significant word overlap
-    (>3 chars, alpha-only) with the context chunks.  Sentences with no
-    significant words (trivial fragments) are counted as *unsupported*
+    (>3 alphanumeric characters) with the context chunks.  Sentences with
+    no significant words (trivial fragments) are counted as *unsupported*
     since they contribute no verifiable content.  An empty answer is
     scored 0.0 because there is nothing to be faithful *to*.
     """
@@ -1367,15 +1405,11 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
         return 0.0
 
     context_lower = " ".join(item.text.lower() for item in context_items)
-    context_words = {
-        w for w in context_lower.split() if len(w) > 3 and w.isalpha()
-    }
+    context_words = _significant_words(context_lower)
 
     supported = 0
     for sentence in sentences:
-        words = {
-            w for w in sentence.lower().split() if len(w) > 3 and w.isalpha()
-        }
+        words = _significant_words(sentence)
         if not words:
             continue
         overlap = words & context_words

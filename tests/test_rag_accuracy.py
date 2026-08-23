@@ -533,6 +533,10 @@ async def test_reranker_passes_query_embedding_in_rag_flow() -> None:
     """Integration: RagService passes query_embedding to the reranker."""
     env = build_chat_env(reranker=True)
     env.rag._confidence_check_enabled = False
+    # Chunks made by make_chunk carry no stored embeddings, so the reranker
+    # scores them 0.0; disable min_score so they are not all filtered out
+    # (an empty context must fall back instead of reaching the model).
+    env.rag._min_score = 0.0
     env.rag._timing_enabled = True
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
@@ -1748,3 +1752,111 @@ async def test_non_blank_generation_keeps_fallback_false() -> None:
     )
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["fallback"] is False
+
+
+# ---------------------------------------------------------------------------
+# 8. Empty-context guard: the model is never called without retrieved context
+# ---------------------------------------------------------------------------
+
+
+def _constant_score_search(env, score: float):  # type: ignore[no-untyped-def]
+    """Replace similarity_search so every hit carries a fixed low/high score."""
+
+    async def search(
+        tenant_id: str,
+        website_id: str,
+        query_embedding: list[float],
+        *,
+        top_k: int = 5,
+        embedding_identity: object = None,
+    ) -> list[VectorSearchResult]:
+        hits = [
+            VectorSearchResult(chunk=chunk, score=score)
+            for chunk in env.vector.chunks
+            if chunk.tenant_id == tenant_id and chunk.website_id == website_id
+        ]
+        return hits[:top_k]
+
+    return search
+
+
+async def test_all_chunks_below_min_score_falls_back_without_model_call() -> None:
+    """min_score filtering can empty the context even when retrieval hit.
+
+    With the confidence gate disabled (a supported configuration), chunks
+    scoring below `chat_context_min_score` are all filtered out by
+    `_build_context`.  The pipeline must emit the safe fallback instead of
+    asking the model to answer from an empty context block.
+    """
+    with (
+        patch.object(get_settings(), "chat_context_min_score", 0.5),
+        patch.object(get_settings(), "enable_rag_confidence_check", False),
+    ):
+        env = build_chat_env(reranker=False)
+        await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+        await make_chunk(
+            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
+        )
+        env.vector.similarity_search = _constant_score_search(env, 0.3)  # type: ignore[method-assign]
+
+        events = await consume(
+            env.rag.stream_answer(
+                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
+            )
+        )
+
+    deltas = [e["data"]["delta"] for e in events if e["event"] == "message"]
+    done = next(e for e in events if e["event"] == "done")
+    sources_event = next(e for e in events if e["event"] == "sources")
+    assert env.generation.calls == []
+    assert done["data"]["fallback"] is True
+    assert deltas[-1] == UNKNOWN_ANSWER_FALLBACK
+    assert sources_event["data"]["sources"] == []
+
+
+async def test_some_chunks_above_min_score_still_generate() -> None:
+    """The guard only fires when *every* chunk is filtered out."""
+    with patch.object(get_settings(), "chat_context_min_score", 0.5):
+        env = build_chat_env(reranker=False)
+        await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+        await make_chunk(
+            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
+        )
+        env.vector.similarity_search = _constant_score_search(env, 0.6)  # type: ignore[method-assign]
+
+        events = await consume(
+            env.rag.stream_answer(
+                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
+            )
+        )
+
+    done = next(e for e in events if e["event"] == "done")
+    assert len(env.generation.calls) == 1
+    assert done["data"]["fallback"] is False
+
+
+async def test_context_empty_guard_reports_confidence_telemetry() -> None:
+    """The fallback done event still carries confidence signals when available."""
+    with (
+        patch.object(get_settings(), "chat_context_min_score", 0.5),
+        patch.object(get_settings(), "rag_confidence_threshold", 0.2),
+    ):
+        env = build_chat_env(reranker=False)
+        await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+        await make_chunk(
+            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
+        )
+        env.vector.similarity_search = _constant_score_search(env, 0.3)  # type: ignore[method-assign]
+
+        events = await consume(
+            env.rag.stream_answer(
+                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
+            )
+        )
+
+    # Scores {0.3}: avg=0.3, hit_ratio=0, peak=0.3 → confidence=0.21 >= 0.2,
+    # so the confidence gate passes but min_score filters the only chunk.
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is True
+    assert done["data"]["confidence_score"] == 0.21
+    assert env.generation.calls == []

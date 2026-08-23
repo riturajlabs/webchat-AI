@@ -70,3 +70,20 @@ class TestCalculateConfidence:
         assert metrics.minimum_score == 0.1
         assert metrics.average_score == 0.4
         assert metrics.rejected_chunks_count == 2
+
+    def test_negative_scores_clamped_to_zero(self) -> None:
+        # Reranker cosine scores can be negative; confidence telemetry must
+        # stay within [0, 1].
+        assert calculate_confidence([-0.5], min_score=0.25) == 0.0
+
+    def test_negative_scores_metrics_clamped_but_raw_min_kept(self) -> None:
+        metrics = assess_confidence([-0.4, -0.2], min_score=0.25)
+        assert metrics.confidence == 0.0
+        # Raw aggregate scores stay truthful for debugging.
+        assert metrics.minimum_score == -0.4
+        assert metrics.average_score == -0.3
+
+    def test_mixed_negative_positive_scores_not_distorted(self) -> None:
+        # avg=0.35, hit_ratio=0.5 (one of two >= 0.25), peak=0.9.
+        expected = round(0.50 * 0.35 + 0.30 * 0.5 + 0.20 * 0.9, 4)
+        assert calculate_confidence([-0.2, 0.9], min_score=0.25) == expected
