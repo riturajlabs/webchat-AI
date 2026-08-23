@@ -6,15 +6,18 @@ filters + satisfaction summary windowing). No FastAPI involvement: the
 service depends only on repository Protocols.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from backend.core.errors import FeedbackMessageNotFoundError
 from backend.models.chat_message import CHAT_ROLE_USER
 from backend.models.feedback import Feedback
+from backend.services.feedback.feedback_service import FeedbackService
 from pydantic import ValidationError
 
-from tests.feedback_helpers import build_feedback_env, seed_assistant_message
+from tests.fakes import FakeChatMessageRepository, FakeFeedbackRepository
+from tests.feedback_helpers import FeedbackEnv, build_feedback_env, seed_assistant_message
 
 
 async def test_submit_persists_rating_for_known_message() -> None:
@@ -127,6 +130,66 @@ async def test_submit_is_idempotent_per_message() -> None:
 
     assert len(env.feedback.feedback) == 1
     assert env.feedback.feedback[0].rating == 4
+
+
+async def test_submit_sequential_duplicate_succeeds_with_single_record() -> None:
+    env = build_feedback_env()
+    await seed_assistant_message(env, tenant_id="tenant-a", message_id="msg-1")
+
+    first = await env.service.submit(
+        tenant_id="tenant-a",
+        website_id="web-1",
+        session_id="session-1",
+        message_id="msg-1",
+        rating=5,
+        category="helpful",
+    )
+    second = await env.service.submit(
+        tenant_id="tenant-a",
+        website_id="web-1",
+        session_id="session-1",
+        message_id="msg-1",
+        rating=5,
+        category="helpful",
+    )
+
+    assert first is None
+    assert second is None
+    assert len(env.feedback.feedback) == 1
+    assert env.feedback.feedback[0].rating == 5
+
+
+async def test_submit_concurrent_duplicate_creates_single_record() -> None:
+    class InterleavedFindFeedback(FakeFeedbackRepository):
+        """Yields to the loop inside the dedup check so both gathered submits
+        pass `find_by_message` before either insert runs — reproducing the
+        TOCTOU window the unique index + DuplicateKeyError swallow closes."""
+
+        async def find_by_message(self, tenant_id: str, message_id: str) -> Feedback | None:
+            await asyncio.sleep(0)
+            return await super().find_by_message(tenant_id, message_id)
+
+    messages = FakeChatMessageRepository()
+    feedback = InterleavedFindFeedback()
+    service = FeedbackService(feedback=feedback, messages=messages)
+    env = FeedbackEnv(messages=messages, feedback=feedback, service=service)
+    await seed_assistant_message(env, tenant_id="tenant-a", message_id="msg-1")
+
+    async def _submit() -> None:
+        await service.submit(
+            tenant_id="tenant-a",
+            website_id="web-1",
+            session_id="session-1",
+            message_id="msg-1",
+            rating=5,
+            category="helpful",
+        )
+
+    results = await asyncio.gather(_submit(), _submit())
+
+    assert results == [None, None]
+    assert len(feedback.feedback) == 1
+    assert feedback.feedback[0].rating == 5
 
 
 async def test_submit_isolates_tenants() -> None:

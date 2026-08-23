@@ -308,6 +308,9 @@ class MongoDB:
         await db["feedback"].create_index("tenant_id")
         await db["feedback"].create_index([("tenant_id", 1), ("created_at", -1)])
         await db["feedback"].create_index("rating")
+        await db["feedback"].create_index(
+            [("tenant_id", 1), ("message_id", 1)], unique=True, name="uniq_tenant_message"
+        )
         await db["feedback"].create_index("created_at", expireAfterSeconds=_FEEDBACK_TTL_SECONDS)
 
     @classmethod

@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 from backend.models.feedback import Feedback
 from backend.repositories.feedback_repository import MongoFeedbackRepository
+from pymongo.errors import DuplicateKeyError
 
 TENANT = "tenant-a"
 
@@ -70,6 +71,16 @@ class _FakeFeedbackCollection:
         return True
 
     async def insert_one(self, doc: dict) -> None:
+        """Enforce the unique (tenant_id, message_id) index like MongoDB."""
+        for existing in self._docs:
+            if (
+                existing.get("tenant_id") == doc.get("tenant_id")
+                and existing.get("message_id") == doc.get("message_id")
+            ):
+                raise DuplicateKeyError(
+                    "E11000 duplicate key error collection: feedback index: "
+                    "uniq_tenant_message"
+                )
         self._docs.append(doc)
 
     async def find_one(self, query: dict) -> dict | None:
@@ -194,6 +205,30 @@ def test_find_by_message_scopes_to_tenant() -> None:
     repo, _ = _make_repo([other])
 
     assert _run(repo.find_by_message(TENANT, "msg-1")) is None
+
+
+def test_create_is_idempotent_on_duplicate_tenant_message() -> None:
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    repo, _ = _make_repo([])
+
+    _run(repo.create(_feedback("msg-1", 5, "helpful", base)))
+    _run(repo.create(_feedback("msg-1", 3, "wrong", base + timedelta(days=1))))
+
+    items = _run(repo.list_by_tenant(TENANT))
+    assert len(items) == 1
+    assert items[0].rating == 5
+    assert items[0].message_id == "msg-1"
+
+
+def test_create_still_persists_distinct_messages_for_same_tenant() -> None:
+    base = datetime(2026, 8, 1, tzinfo=UTC)
+    repo, _ = _make_repo([])
+
+    _run(repo.create(_feedback("msg-1", 5, "helpful", base)))
+    _run(repo.create(_feedback("msg-2", 2, "wrong", base)))
+
+    items = _run(repo.list_by_tenant(TENANT))
+    assert {item.message_id for item in items} == {"msg-1", "msg-2"}
 
 
 def _run(coro) -> object:

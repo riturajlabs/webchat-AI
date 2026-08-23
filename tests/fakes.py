@@ -1226,6 +1226,11 @@ class FakeFeedbackRepository:
         return list(self._feedback.values())
 
     async def create(self, feedback: Feedback) -> None:
+        """Mirror MongoFeedbackRepository.create: idempotent on the unique
+        (tenant_id, message_id) index, so racing duplicate submits converge
+        to a single stored row instead of duplicating."""
+        if await self.find_by_message(feedback.tenant_id, feedback.message_id) is not None:
+            return
         self._feedback[feedback.id] = feedback
 
     async def find_by_message(self, tenant_id: str, message_id: str) -> Feedback | None:
