@@ -23,6 +23,7 @@ buffered and flushed as a single SSE frame every `buffer_ms` milliseconds
 changing the client-visible streaming semantics.
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -41,6 +42,78 @@ logger = logging.getLogger("webchat_ai")
 def sse(event: str, data: dict[str, Any]) -> str:
     """Serialize one SSE frame: `event: <name>\ndata: <json>\n\n`."""
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _failed_done(failure: dict[str, Any]) -> dict[str, Any]:
+    """Build the terminal `done` frame for a stream that did not complete."""
+    data = dict(failure)
+    data["status"] = "failed"
+    return {"event": "done", "data": data}
+
+
+async def ensure_terminal_done(
+    events: AsyncGenerator[dict[str, Any]],
+) -> AsyncGenerator[dict[str, Any]]:
+    """Guarantee every event stream ends with an explicit terminal `done` frame.
+
+    Success `done` frames gain the additive field `status: "completed"`
+    (unknown fields are ignored by older clients). A handled failure - a
+    yielded `error` frame - is followed by `done {"status": "failed", ...}`,
+    as is a silent generator close or an unexpected exception (which also gets
+    its own `error` frame first, mirroring `_error_event`). This closes audit
+    P0-5: clients can always distinguish a finished stream from a dropped
+    connection, so partial answers are never mislabeled as network errors.
+
+    `GeneratorExit` (client disconnect cleanup via `aclose()`) and
+    `CancelledError` propagate unchanged - disconnect handling must never grow
+    extra frames.
+    """
+    failure: dict[str, Any] | None = None
+    saw_done = False
+    try:
+        async for event in events:
+            name = event["event"]
+            if name == "done":
+                saw_done = True
+                data = event.setdefault("data", {})
+                data.setdefault("status", "completed")
+            elif name == "error" and failure is None:
+                failure = dict(event.get("data") or {})
+                failure.setdefault("code", "INTERNAL_ERROR")
+                failure.setdefault(
+                    "message", "An unexpected error occurred. Please try again later."
+                )
+            yield event
+    except GeneratorExit:
+        # Disconnect cleanup: close the inner generator so its persistence /
+        # usage bookkeeping `finally` blocks run now, not at GC time.
+        await events.aclose()
+        raise
+    except asyncio.CancelledError:
+        await events.aclose()
+        raise
+    except Exception as exc:
+        # Unexpected generator death: mirror RagService._safe_message so
+        # internals never leak, then close with the failed terminal state.
+        if isinstance(exc, AppError):
+            code, message = exc.code, exc.message
+        else:
+            code = "INTERNAL_ERROR"
+            message = "An unexpected error occurred. Please try again later."
+        logger.exception(
+            "chat stream failed without terminal event (request_id=%s)", get_request_id()
+        )
+        yield {"event": "error", "data": {"code": code, "message": message}}
+        yield _failed_done({"code": code, "message": message})
+        return
+    if saw_done:
+        return
+    if failure is None:
+        failure = {
+            "code": "INTERNAL_ERROR",
+            "message": "Chat stream ended unexpectedly.",
+        }
+    yield _failed_done(failure)
 
 
 async def stream_with_disconnect(
@@ -151,6 +224,7 @@ async def stream_answer_with_usage(
         await usage.check_limit(tenant_id, event_type="messages_sent")
     except AppError as exc:
         yield sse("error", {"code": exc.code, "message": exc.message})
+        yield sse("done", {"status": "failed", "code": exc.code, "message": exc.message})
         return
 
     recording_gen = _recording_events(events, usage, tenant_id, user_id, website_id)
@@ -206,6 +280,11 @@ async def _recording_events(
             )
         elif event["event"] == "done":
             data = event["data"]
+            if data.get("status") == "failed":
+                # Terminal failure frame from `ensure_terminal_done`: the turn
+                # did not complete, so no ai_responses/tokens are billed.
+                yield event
+                continue
             tokens = int(data.get("input_tokens", 0) or 0) + int(data.get("output_tokens", 0) or 0)
             await _record(
                 usage,
@@ -250,6 +329,7 @@ async def _record(
 
 __all__ = [
     "buffered_stream_with_disconnect",
+    "ensure_terminal_done",
     "sse",
     "stream_answer_with_usage",
     "stream_with_disconnect",

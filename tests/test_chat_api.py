@@ -224,11 +224,15 @@ async def test_chat_stream_rejects_when_message_limit_reached(client) -> None:
 
     assert response.status_code == 200
     events = _sse_events(response.text)
-    assert len(events) == 1
+    # Gate failure: error frame + terminal done(status=failed).
+    assert len(events) == 2
     event, data = events[0]
     assert event == "error"
     assert data["code"] == "LIMIT_REACHED"
     assert "messages_sent" in data["message"]
+    terminal_event, terminal_data = events[1]
+    assert terminal_event == "done"
+    assert terminal_data["status"] == "failed"
     # The pipeline must never run past the gate.
     assert chat_env.generation.calls == []
     assert len(chat_env.messages.messages) == 0

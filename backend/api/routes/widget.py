@@ -36,7 +36,7 @@ from backend.api.deps import (
     widget_session_origin_guard,
     widget_visitor_limiter,
 )
-from backend.api.sse import sse, stream_answer_with_usage
+from backend.api.sse import ensure_terminal_done, sse, stream_answer_with_usage
 from backend.core.config import get_settings
 from backend.core.errors import AppError, SpamRejectedError
 from backend.schemas.feedback import WidgetFeedbackRequest
@@ -140,13 +140,15 @@ async def widget_chat(
             yield sse("error", {"code": exc.code, "message": exc.message})
             return
 
-        stream = rag.stream_answer(
-            tenant_id=claims["tenant_id"],
-            website_id=claims["website_id"],
-            question=body.question,
-            session_id=body.session_id,
-            visitor_id=claims.get("visitor_id"),
-            user_id=None,
+        stream = ensure_terminal_done(
+            rag.stream_answer(
+                tenant_id=claims["tenant_id"],
+                website_id=claims["website_id"],
+                question=body.question,
+                session_id=body.session_id,
+                visitor_id=claims.get("visitor_id"),
+                user_id=None,
+            )
         )
         buffer_ms = get_settings().sse_buffer_ms
         async for frame in stream_answer_with_usage(

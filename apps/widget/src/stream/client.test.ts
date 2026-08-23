@@ -130,6 +130,85 @@ describe('streamChat', () => {
     expect(h.onDone).not.toHaveBeenCalled();
   });
 
+  it('treats a legacy done event without status as success (backward compatible)', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse(['event: done\ndata: {"session_id":"s1","message_id":"m1"}\n\n']),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.done?.session_id).toBe('s1');
+    expect(h.onDone).toHaveBeenCalledTimes(1);
+    expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('completes successfully on done with status completed', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"Hi"}\n\n',
+        'event: done\ndata: {"status":"completed","session_id":"s1"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(h.onDone).toHaveBeenCalledTimes(1);
+    expect(h.onDone.mock.calls[0][0].status).toBe('completed');
+    expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('reports failure exactly once when error is followed by the failed terminal done', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"par"}\n\n',
+        'event: error\ndata: {"code":"GENERATION_FAILED","message":"provider down"}\n\n',
+        'event: done\ndata: {"status":"failed","code":"GENERATION_FAILED","message":"provider down"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('ai_unavailable');
+    // One failure transition only: the trailing failed done must not
+    // produce a duplicate onError (no double error banner in the UI).
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onDone).not.toHaveBeenCalled();
+  });
+
+  it('maps a standalone failed-status done onto the error path', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"par"}\n\n',
+        'event: done\ndata: {"status":"failed","code":"MESSAGE_LIMIT_REACHED","message":"cap hit"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('limit');
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onDone).not.toHaveBeenCalled();
+  });
+
   it('maps AI availability SSE errors to a retryable user-facing error', async () => {
     const fetchImpl = vi.fn(async () =>
       sseResponse([

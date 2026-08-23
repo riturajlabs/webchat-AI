@@ -33,6 +33,8 @@ export interface ChatSource {
 export interface DonePayload {
   session_id?: string;
   message_id?: string;
+  /** Final stream state: "completed" | "failed" (absent on legacy servers). */
+  status?: string;
   [key: string]: unknown;
 }
 
@@ -224,9 +226,22 @@ async function consumeStream(
           }
           case 'done': {
             terminalReached = true;
-            const done = (event.data ?? {}) as DonePayload;
-            result = { completed: true, done };
-            handlers.onDone?.(done);
+            const payload = (event.data ?? {}) as DonePayload;
+            // Terminal-state protocol: the server always closes with `done`
+            // carrying a final `status`. A failed status maps onto the same
+            // error path as a bare `error` frame; anything else - including
+            // servers that predate the `status` field - is a success, and the
+            // terminal-idempotency guard above keeps exactly one outcome.
+            if (payload.status === 'failed') {
+              const code = typeof payload.code === 'string' ? payload.code : undefined;
+              const message = typeof payload.message === 'string' ? payload.message : 'Chat failed';
+              const error = errorFromSseCode(code, message);
+              result = { completed: false, error };
+              handlers.onError?.(error);
+              break;
+            }
+            result = { completed: true, done: payload };
+            handlers.onDone?.(payload);
             break;
           }
           case 'error': {
