@@ -14,10 +14,16 @@ from unittest.mock import patch
 
 import pytest
 from backend.core.config import get_settings
+from backend.models.chat_message import CHAT_ROLE_ASSISTANT
 from backend.models.knowledge_chunk import KnowledgeChunk
-from backend.prompts.rag import ContextItem
+from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK, ContextItem
 from backend.repositories.vector.base import VectorSearchResult
 from backend.repositories.vector.reranker import EmbeddingReranker, _cosine_similarity
+from backend.services.chat.query_rewrite import (
+    DEFAULT_REWRITE_CONTEXT_CHARS,
+    build_search_query,
+    needs_conversation_context,
+)
 from backend.services.chat.rag_service import _check_faithfulness
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
@@ -599,6 +605,7 @@ def _make_adaptive_settings(**overrides):  # type: ignore[no-untyped-def]
         adaptive_complex_max_context_chars=30000,
         enable_rag_confidence_check=False,
         rag_confidence_threshold=0.3,
+        enable_conversational_query_rewrite=True,
         enable_context_optimization=False,
     )
     defaults.update(overrides)
@@ -836,6 +843,7 @@ def _make_confidence_settings(**overrides):  # type: ignore[no-untyped-def]
         adaptive_complex_max_context_chars=30000,
         enable_rag_confidence_check=True,
         rag_confidence_threshold=0.3,
+        enable_conversational_query_rewrite=True,
         enable_context_optimization=False,
     )
     defaults.update(overrides)
@@ -1104,6 +1112,7 @@ def _make_opt_settings(**overrides):  # type: ignore[no-untyped-def]
         adaptive_complex_max_context_chars=30000,
         enable_rag_confidence_check=False,
         rag_confidence_threshold=0.3,
+        enable_conversational_query_rewrite=True,
         enable_context_optimization=True,
     )
     defaults.update(overrides)
@@ -1421,3 +1430,321 @@ async def test_stale_retrieval_prevented_after_cache_invalidation() -> None:
     assert any("pricing-v2" in u for u in urls_2), (
         f"Expected fresh v2 chunk after cache invalidation, got: {urls_2}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Conversational query rewriting (multi-turn retrieval accuracy)
+# ---------------------------------------------------------------------------
+
+REWRITE_TENANT = "rewrite-tenant"
+REWRITE_WEB = "rewrite-web"
+
+
+def _last_embedded_text(env):  # type: ignore[no-untyped-def]
+    """The most recent text the fake embedder embedded."""
+    return env.embedder.calls[-1][-1]
+
+
+def test_rewrite_config_default() -> None:
+    """Conversational query rewriting ships enabled."""
+    assert get_settings().enable_conversational_query_rewrite is True
+
+
+def test_needs_context_pronoun_start() -> None:
+    assert needs_conversation_context("it supports SSO?") is True
+    assert needs_conversation_context("That plan sounds good.") is True
+    assert needs_conversation_context("their pricing") is True
+
+
+def test_needs_context_continuation_start() -> None:
+    assert needs_conversation_context("what about refunds?") is True
+    assert needs_conversation_context("how about enterprise?") is True
+    assert needs_conversation_context("and the team plan?") is True
+    assert needs_conversation_context("tell me more") is True
+    assert needs_conversation_context("anything else?") is True
+
+
+def test_needs_context_standalone_questions_untouched() -> None:
+    assert needs_conversation_context("How do I reset my password?") is False
+    assert needs_conversation_context("What plans do you offer?") is False
+    assert needs_conversation_context("pricing") is False
+    assert needs_conversation_context("") is False
+
+
+def test_build_search_query_combines_last_user_turn() -> None:
+    history = [
+        ("user", "Tell me about Acme pricing plans."),
+        ("assistant", "Acme has Pro and Team plans."),
+        ("user", "What does the Team plan include?"),
+        ("assistant", "Team includes SSO and audit logs."),
+    ]
+    combined = build_search_query("what about refunds?", history)
+    assert combined == (
+        "What does the Team plan include? what about refunds?"
+    )
+
+
+def test_build_search_query_truncates_long_context() -> None:
+    long_turn = "x" * 500
+    combined = build_search_query("what about refunds?", [("user", long_turn)])
+    context, _, question = combined.partition(" ")
+    assert len(context) == DEFAULT_REWRITE_CONTEXT_CHARS
+    assert question == "what about refunds?"
+
+
+def test_build_search_query_without_prior_user_turn() -> None:
+    question = "what about refunds?"
+    assert build_search_query(question, []) == question
+    assert build_search_query(question, [("assistant", "hi")]) == question
+
+
+async def test_followup_retrieval_uses_contextualized_query() -> None:
+    """A context-dependent follow-up embeds the previous turn + question."""
+    env = build_chat_env()
+    await make_website(
+        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=REWRITE_TENANT,
+        website_id=REWRITE_WEB,
+        text="Acme offers a 30-day full refund policy on annual plans.",
+        chunk_index=0,
+    )
+
+    events_first = await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT,
+            website_id=REWRITE_WEB,
+            question="Tell me about Acme plans.",
+        )
+    )
+    session_id = _done_event(events_first)["data"]["session_id"]
+    first_embedded = _last_embedded_text(env)
+    assert first_embedded == "Tell me about Acme plans."
+
+    events = await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT,
+            website_id=REWRITE_WEB,
+            question="what about refunds?",
+            session_id=session_id,
+        )
+    )
+    # The search query must carry the conversation subject.
+    assert _last_embedded_text(env) == (
+        "Tell me about Acme plans. what about refunds?"
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False
+
+    # The model still receives the original question verbatim.
+    prompt = env.generation.calls[-1]["messages"][0][1]
+    assert "Question: what about refunds?" in prompt
+
+
+async def test_standalone_followup_is_not_rewritten() -> None:
+    """Self-contained questions embed exactly as asked."""
+    env = build_chat_env()
+    await make_website(
+        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=REWRITE_TENANT,
+        website_id=REWRITE_WEB,
+        text="We offer Pro and Team plans.",
+        chunk_index=0,
+    )
+
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, question="Tell me about plans."
+        )
+    )
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT,
+            website_id=REWRITE_WEB,
+            question="How do I reset my password?",
+        )
+    )
+    assert _last_embedded_text(env) == "How do I reset my password?"
+
+
+async def test_rewrite_disabled_uses_raw_question(monkeypatch) -> None:
+    """Flag off restores the exact pre-rewrite retrieval behavior."""
+    monkeypatch.setattr(get_settings(), "enable_conversational_query_rewrite", False)
+    env = build_chat_env()
+    assert env.rag._query_rewrite_enabled is False
+    await make_website(
+        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
+    )
+    await make_chunk(
+        env,
+        tenant_id=REWRITE_TENANT,
+        website_id=REWRITE_WEB,
+        text="We offer Pro and Team plans.",
+        chunk_index=0,
+    )
+
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, question="Tell me about plans."
+        )
+    )
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=REWRITE_TENANT,
+            website_id=REWRITE_WEB,
+            question="what about refunds?",
+        )
+    )
+    assert _last_embedded_text(env) == "what about refunds?"
+
+
+async def test_rewritten_queries_get_distinct_cache_keys() -> None:
+    """The same follow-up text in different conversations must not collide."""
+    env_a = build_chat_env()
+    env_b = build_chat_env()
+    for env, subject in ((env_a, "Acme"), (env_b, "Globex")):
+        await make_website(
+            env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
+        )
+        await make_chunk(
+            env,
+            tenant_id=REWRITE_TENANT,
+            website_id=REWRITE_WEB,
+            text=f"{subject} ships a 30-day refund policy.",
+            document_id=f"doc-{subject}",
+            chunk_index=0,
+        )
+
+    for env, subject in ((env_a, "Acme"), (env_b, "Globex")):
+        first = await consume(
+            env.rag.stream_answer(
+                tenant_id=REWRITE_TENANT,
+                website_id=REWRITE_WEB,
+                question=f"Tell me about {subject}.",
+            )
+        )
+        await consume(
+            env.rag.stream_answer(
+                tenant_id=REWRITE_TENANT,
+                website_id=REWRITE_WEB,
+                question="what about refunds?",
+                session_id=_done_event(first)["data"]["session_id"],
+            )
+        )
+
+    # Each conversation embedded its own contextualized query.
+    assert _last_embedded_text(env_a) == "Tell me about Acme. what about refunds?"
+    assert _last_embedded_text(env_b) == "Tell me about Globex. what about refunds?"
+
+
+# ---------------------------------------------------------------------------
+# Conversation memory: current turn excluded
+# ---------------------------------------------------------------------------
+
+
+async def test_history_excludes_current_user_turn() -> None:
+    """The prompt must not contain the current question twice."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
+
+    first = await consume(
+        env.rag.stream_answer(
+            tenant_id=TENANT, website_id=WEBSITE, question="First question?"
+        )
+    )
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=TENANT,
+            website_id=WEBSITE,
+            question="Second question?",
+            session_id=_done_event(first)["data"]["session_id"],
+        )
+    )
+
+    prompt = env.generation.calls[-1]["messages"][0][1]
+    # Prior turns are present as memory...
+    assert "[user] First question?" in prompt
+    assert "[assistant] Hello world!" in prompt
+    # ...but the current question appears only once, as the Question line.
+    assert prompt.count("Second question?") == 1
+    assert "Question: Second question?" in prompt
+
+
+async def test_memory_window_preserved_after_excluding_current_turn() -> None:
+    """Excluding the current message must not shrink the memory window."""
+    env = build_chat_env(memory_turns=2)
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
+
+    first = await consume(
+        env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="Q1?")
+    )  # U1 -> A1
+    session_id = _done_event(first)["data"]["session_id"]
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=TENANT, website_id=WEBSITE, question="Q2?", session_id=session_id
+        )
+    )  # U2 -> A2
+    await consume(
+        env.rag.stream_answer(
+            tenant_id=TENANT, website_id=WEBSITE, question="Q3?", session_id=session_id
+        )
+    )
+
+    prompt = env.generation.calls[-1]["messages"][0][1]
+    # The two most recent PRIOR turns fill the memory window completely:
+    # without the exclusion the window would hold [A2, duplicate Q3].
+    assert "[user] Q2?" in prompt
+    assert "[assistant] Hello world!" in prompt
+    assert prompt.count("[assistant] Hello world!") == 1
+    # Current question never leaks into the memory block.
+    assert prompt.count("Q3?") == 1
+
+
+# ---------------------------------------------------------------------------
+# Blank-generation guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("blank_deltas", [[""], ["   "]])
+async def test_blank_generation_substitutes_fallback(blank_deltas) -> None:
+    """An empty provider stream must not persist or emit an empty answer."""
+    env = build_chat_env(deltas=blank_deltas)
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
+
+    events = await consume(
+        env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="Hi?")
+    )
+    deltas = [e["data"]["delta"] for e in events if e["event"] == "message"]
+    # The widget renders joined deltas: the fallback delta is always
+    # appended (a whitespace-only provider stream contributes only noise).
+    assert deltas[-1] == UNKNOWN_ANSWER_FALLBACK
+    assert "".join(deltas).strip() == UNKNOWN_ANSWER_FALLBACK
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is True
+
+    assistant = [
+        m for m in env.messages.messages if m.role == CHAT_ROLE_ASSISTANT
+    ]
+    assert len(assistant) == 1
+    assert assistant[0].content == UNKNOWN_ANSWER_FALLBACK
+
+
+async def test_non_blank_generation_keeps_fallback_false() -> None:
+    """Normal generations still report fallback=False."""
+    env = build_chat_env()  # default deltas ["Hello", " world!"]
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
+
+    events = await consume(
+        env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="Hi?")
+    )
+    done = next(e for e in events if e["event"] == "done")
+    assert done["data"]["fallback"] is False

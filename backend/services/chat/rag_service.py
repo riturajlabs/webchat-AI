@@ -62,6 +62,11 @@ from backend.services.chat.context_optimizer import (
     remove_near_duplicates,
 )
 from backend.services.chat.query_classifier import QueryComplexity, classify_query
+from backend.services.chat.query_rewrite import (
+    DEFAULT_REWRITE_CONTEXT_CHARS,
+    build_search_query,
+    needs_conversation_context,
+)
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
     RetrievalMetricsInfo,
@@ -164,6 +169,8 @@ class RagService:
         self._adaptive_complex_top_k = settings.adaptive_complex_top_k
         self._adaptive_complex_rerank_top_k = settings.adaptive_complex_rerank_top_k
         self._adaptive_complex_max_context_chars = settings.adaptive_complex_max_context_chars
+        # Conversational query rewriting (multi-turn retrieval accuracy).
+        self._query_rewrite_enabled = settings.enable_conversational_query_rewrite
         # Retrieval strategy: explicit override or config-driven default.
         if retrieval_strategy is not None:
             self._retrieval_strategy = retrieval_strategy
@@ -231,6 +238,7 @@ class RagService:
         tenant_id: str,
         website_id: str,
         question: str,
+        history_task: asyncio.Task[list[tuple[str, str]]] | None = None,
     ) -> tuple[
         list[float],
         list[VectorSearchResult],
@@ -253,6 +261,12 @@ class RagService:
         load_chunks_ms, rerank_ms, rerank_embedding_ms,
         rerank_input_count, hybrid_candidate_count,
         adaptive_max_context_chars)`.
+
+        When *history_task* is supplied and the question looks
+        context-dependent, the most recent user turn is prepended before
+        embedding so follow-up questions keep their conversation subject
+        (`enable_conversational_query_rewrite`).  Cache keys derive from the
+        final search query, so rewrites never collide with standalone asks.
         """
         # Adaptive retrieval: classify query complexity and determine params.
         complexity = classify_query(question)
@@ -265,8 +279,45 @@ class RagService:
             elif complexity == QueryComplexity.COMPLEX:
                 effective_top_k = self._adaptive_complex_top_k
                 adaptive_max_context_chars = self._adaptive_complex_max_context_chars
+
+        # Conversational query rewrite: retrieval-only contextualization.
+        search_query = question
+        if (
+            self._query_rewrite_enabled
+            and history_task is not None
+            and needs_conversation_context(question)
+        ):
+            try:
+                history = await history_task
+                rewritten = build_search_query(
+                    question,
+                    history,
+                    max_context_chars=DEFAULT_REWRITE_CONTEXT_CHARS,
+                )
+            except Exception:
+                # History load failed: fall back to the raw question.  The
+                # later history await still surfaces the error downstream.
+                logger.exception(
+                    "query rewrite skipped: conversation memory unavailable "
+                    "(tenant=%s website=%s)",
+                    tenant_id,
+                    website_id,
+                )
+            else:
+                if rewritten != question:
+                    search_query = rewritten
+                    logger.info(
+                        "rag_query_rewritten tenant=%s website=%s "
+                        "original_hash=%s search_hash=%s search_length=%d",
+                        tenant_id,
+                        website_id,
+                        content_hash(question),
+                        content_hash(search_query),
+                        len(search_query),
+                    )
+
         cache = self._cache
-        cache_key = f"{website_id}:{question.strip().lower()}"
+        cache_key = f"{website_id}:{search_query.strip().lower()}"
         now = _now()
         retrieval_enabled = (
             cache is not None and self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0
@@ -303,7 +354,7 @@ class RagService:
                         ) else 0
                         all_chunks = None
                         results, metrics = self._retrieval_strategy.search(
-                            query=question,
+                            query=search_query,
                             vector_results=raw_results,
                             all_chunks=all_chunks,
                             top_k=effective_top_k,
@@ -315,7 +366,7 @@ class RagService:
                         if self._reranker is not None and results:
                             rerank_input_count = len(results)
                             results, rerank_metrics = await self._reranker.rerank(
-                                question, results, query_embedding=vector
+                                search_query, results, query_embedding=vector
                             )
                             rerank_ms = rerank_metrics.rerank_ms
                             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
@@ -338,7 +389,9 @@ class RagService:
                     pass
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
-            query_vector, embedding_cache_hit, query_identity = await self._embed_question(question)
+            query_vector, embedding_cache_hit, query_identity = await self._embed_question(
+                search_query
+            )
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
         async with chat_stage("retrieval.vector_search"):
@@ -352,7 +405,7 @@ class RagService:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "mongodb_vector_search_debug question=%r vector_result_count=%d",
-                question,
+                search_query,
                 len(raw_results),
             )
             for result in raw_results:
@@ -391,7 +444,7 @@ class RagService:
         ) else 0
         all_chunks = None
         results, metrics = self._retrieval_strategy.search(
-            query=question,
+            query=search_query,
             vector_results=raw_results,
             all_chunks=all_chunks,
             top_k=effective_top_k,
@@ -403,7 +456,7 @@ class RagService:
         if self._reranker is not None and results:
             rerank_input_count = len(results)
             results, rerank_metrics = await self._reranker.rerank(
-                question, results, query_embedding=query_vector
+                search_query, results, query_embedding=query_vector
             )
             rerank_ms = rerank_metrics.rerank_ms
             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
@@ -503,12 +556,19 @@ class RagService:
         # Start the conversation-memory read up front so the Mongo query
         # overlaps the embedding + vector search (both are usually slower than a
         # recent-messages read).
-        history_task = asyncio.create_task(self._load_history(tenant_id, session.session_id))
+        history_task = asyncio.create_task(
+            self._load_history(
+                tenant_id,
+                session.session_id,
+                exclude_message_id=user_message.id,
+            )
+        )
         try:
             retrieval = await self._retrieve(
                 tenant_id=tenant_id,
                 website_id=website_id,
                 question=question,
+                history_task=history_task,
             )
             (
                 query_vector,
@@ -726,6 +786,22 @@ class RagService:
             return
 
         answer = "".join(deltas)
+        # Blank-generation guard: a provider can close the stream without
+        # emitting anything (no exception). Persisting an empty assistant
+        # turn and reporting success would leave the widget with nothing to
+        # render, so substitute the canonical fallback instead.
+        substituted_fallback = False
+        if not answer.strip():
+            logger.warning(
+                "rag_empty_generation tenant=%s website=%s session=%s delta_count=%d",
+                tenant_id,
+                website_id,
+                session.session_id,
+                delta_count,
+            )
+            answer = UNKNOWN_ANSWER_FALLBACK
+            substituted_fallback = True
+            yield {"event": "message", "data": {"delta": answer}}
         output_issues = validate_response(answer)
         if output_issues:
             logger.warning(
@@ -737,7 +813,12 @@ class RagService:
             )
         # Faithfulness check: verify answer is grounded in retrieved context.
         faithfulness_score: float | None = None
-        if self._enable_faithfulness_check and context_items and answer:
+        if (
+            self._enable_faithfulness_check
+            and context_items
+            and answer
+            and not substituted_fallback
+        ):
             faithfulness_score = _check_faithfulness(answer, context_items)
             if faithfulness_score < self._faithfulness_warning_threshold:
                 logger.warning(
@@ -816,7 +897,10 @@ class RagService:
             "response_time_ms": int(response_time * 1000),
             "created_at": assistant.created_at.isoformat(),
             "prompt_version": self._prompt_version,
-            "fallback": False,
+            # True when the safe fallback replaced the answer (empty
+            # knowledge base, retrieval miss, low confidence, or a blank
+            # generation).
+            "fallback": substituted_fallback,
             # Confidence telemetry is always emitted (mirrors the fallback
             # path); the timing block below duplicates it for perf logs.
             "confidence_score": (
@@ -1009,8 +1093,25 @@ class RagService:
             raise SessionNotFoundError("Chat session not found.")
         return existing
 
-    async def _load_history(self, tenant_id: str, session_id: str) -> list[tuple[str, str]]:
-        recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
+    async def _load_history(
+        self,
+        tenant_id: str,
+        session_id: str,
+        *,
+        exclude_message_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Recent turns (oldest first), excluding the current user message.
+
+        The current turn is persisted before retrieval so failures still
+        leave a complete log; excluding it here keeps the prompt free of a
+        duplicated question and preserves the full `memory_turns` window for
+        genuinely prior context.
+        """
+        limit = self._memory_turns + 1 if exclude_message_id else self._memory_turns
+        recent = await self._messages.list_recent(tenant_id, session_id, limit=limit)
+        if exclude_message_id:
+            recent = [message for message in recent if message.id != exclude_message_id]
+            recent = recent[-self._memory_turns :]
         return [(message.role, message.content) for message in recent]
 
     async def _load_all_chunks(

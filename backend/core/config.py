@@ -387,6 +387,14 @@ class Settings(BaseSettings):
     # Scores below this threshold trigger the fallback response.
     rag_confidence_threshold: float = 0.3
 
+    # Conversational query rewriting (multi-turn retrieval accuracy).
+    # Follow-up questions ("what about refunds?") embed poorly without their
+    # subject.  When enabled AND the question looks context-dependent, the
+    # most recent user turn is prepended to form the *search* query used for
+    # embedding + vector search.  The model still receives the original
+    # question verbatim; no LLM call is added.  Set false to disable.
+    enable_conversational_query_rewrite: bool = True
+
     # Context optimization (opt-in, disabled by default). When enabled,
     # near-duplicate chunks are removed and context text is compressed
     # (redundant sentences stripped) before prompt construction.  This
