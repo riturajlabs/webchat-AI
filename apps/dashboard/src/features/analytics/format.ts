@@ -1,8 +1,13 @@
 /**
  * Display helpers for the analytics feature (Phase 11.3).
+ *
+ * Generic formatters live in `@/lib/format` and are re-exported here so
+ * existing `./format` imports keep working.
  */
 
 import type { AnalyticsRange } from './types';
+
+export { formatCompact, formatNumber } from '@/lib/format';
 
 export const RANGE_OPTIONS: { value: AnalyticsRange; label: string }[] = [
   { value: 7, label: '7 days' },
@@ -17,18 +22,6 @@ export function formatDay(date: string): string {
     return date;
   }
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
-}
-
-/** 1234 -> "1,234"; compact for very large values. */
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined).format(value);
-}
-
-/** 1500 -> "1.5K"; 2.3M etc. */
-export function formatCompact(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-    .format(value)
-    .toLowerCase();
 }
 
 /** 0.00105 -> "$0.001" (USD, per-million-token list prices). */

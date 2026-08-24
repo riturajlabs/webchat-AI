@@ -8,6 +8,7 @@ import { BarChart3, CircleDollarSign, Gauge, MessagesSquare, Star, Timer } from 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/layout/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { useWebsites } from '@/features/websites/hooks';
@@ -451,11 +452,9 @@ function PerformanceCard({
 
 function Header() {
   return (
-    <div>
-      <h1 className="font-sans text-2xl font-bold tracking-tight">Analytics</h1>
-      <p className="text-sm text-muted-foreground">
-        Chat, token, and assistant-performance usage statistics.
-      </p>
-    </div>
+    <PageHeader
+      title="Analytics"
+      description="Chat, token, and assistant-performance usage statistics."
+    />
   );
 }

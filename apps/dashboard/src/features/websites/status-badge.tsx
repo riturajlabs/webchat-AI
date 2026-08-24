@@ -1,4 +1,4 @@
-import { cn } from '@/lib/utils';
+import { StatusBadge as StatusBadgeBase } from '@/components/ui/status-badge';
 
 import type { WebsiteStatus } from './types';
 
@@ -11,14 +11,5 @@ const STATUS_STYLES: Record<WebsiteStatus, string> = {
 };
 
 export function StatusBadge({ status }: { status: WebsiteStatus }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-        STATUS_STYLES[status],
-      )}
-    >
-      {status}
-    </span>
-  );
+  return <StatusBadgeBase className={STATUS_STYLES[status]}>{status}</StatusBadgeBase>;
 }

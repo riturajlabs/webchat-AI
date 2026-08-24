@@ -24,18 +24,9 @@ import type { Website } from '@/features/websites/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/layout/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
-
-function formatDate(value: string | null): string {
-  if (!value) {
-    return '—';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '—';
-  }
-  return date.toLocaleDateString();
-}
+import { formatDate } from '@/lib/format';
 
 function StatCard({
   label,
@@ -236,12 +227,10 @@ export function DashboardHome() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Welcome{user ? `, ${user.name}` : ''} — here is what is happening across your assistants.
-        </p>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        description={`Welcome${user ? `, ${user.name}` : ''} — here is what is happening across your assistants.`}
+      />
 
       {isPending ? <StatGridSkeleton /> : null}
 

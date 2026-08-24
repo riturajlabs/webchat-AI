@@ -1,6 +1,11 @@
 /**
  * Display helpers for the admin feature (Phase 12.5, ADR-006).
+ *
+ * Generic formatters live in `@/lib/format` and are re-exported here so
+ * existing `./format` imports keep working.
  */
+
+export { formatDate, formatCompact, formatNumber } from '@/lib/format';
 
 const STATUS_LABELS: Record<string, string> = {
   active: 'Active',
@@ -32,30 +37,6 @@ export function formatDateTime(value: string | null | undefined): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(date);
-}
-
-/** `2026-08-11T12:00:00Z` -> short date only. */
-export function formatDate(value: string | null | undefined): string {
-  if (!value) {
-    return '—';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return '—';
-  }
-  return date.toLocaleDateString();
-}
-
-/** 1234 -> "1,234"; compact for very large values. */
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined).format(value);
-}
-
-/** 1500 -> "1.5K". */
-export function formatCompact(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-    .format(value)
-    .toLowerCase();
 }
 
 /** Minor units (cents) -> localized currency, e.g. 2900 -> "$29.00". */

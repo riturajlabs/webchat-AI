@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PageHeader } from '@/components/layout/page-header';
 
 import { AddWebsiteDialog } from './add-website-dialog';
 import {
@@ -155,18 +156,16 @@ export function WebsiteList() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">Websites</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect a website to build its AI assistant.
-          </p>
-        </div>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden="true" />
-          Add website
-        </Button>
-      </div>
+      <PageHeader
+        title="Websites"
+        description="Connect a website to build its AI assistant."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden="true" />
+            Add website
+          </Button>
+        }
+      />
 
       {crawlError ? (
         <div
