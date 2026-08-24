@@ -34,6 +34,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-muted/30">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+      >
+        Skip to content
+      </a>
       <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
         <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
@@ -63,7 +69,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           })}
         </nav>
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex min-w-0 flex-1 flex-col overflow-hidden"
+      >
         <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
           <div className="flex min-w-0 items-center gap-2">
             <MobileNav />

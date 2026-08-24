@@ -42,6 +42,41 @@ export function MobileNav() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         close();
+        return;
+      }
+      // Trap keyboard focus inside the drawer while it is open.
+      if (event.key !== 'Tab') {
+        return;
+      }
+      const panel = panelRef.current;
+      if (!panel) {
+        return;
+      }
+      const focusable = Array.from(
+        panel.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const current = document.activeElement;
+      const inside = current instanceof HTMLElement && panel.contains(current);
+      if (!inside) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+      if (event.shiftKey) {
+        if (current === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (current === last) {
+        event.preventDefault();
+        first.focus();
       }
     }
     document.addEventListener('keydown', onKeyDown);
