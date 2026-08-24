@@ -174,6 +174,8 @@ def get_website_service(
         widgets=MongoWidgetRepository(db),
         audit=MongoAuditLogRepository(db),
         usage=usage,
+        documents=MongoDocumentRepository(db),
+        vector=get_vector_repository(db),
     )
 
 

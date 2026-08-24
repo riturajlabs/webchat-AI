@@ -2,8 +2,9 @@
 
 Routes validate and translate; this service owns every workflow: create
 (website + widget + embed script), list/get, update (URL changes reset
-crawl state), and delete (cascades to the widget). All database access is
-tenant-scoped by the caller-provided `tenant_id`, never by request input.
+crawl state), and delete (cascades to widgets, documents and vector
+chunks). All database access is tenant-scoped by the caller-provided
+`tenant_id`, never by request input.
 """
 
 from dataclasses import dataclass
@@ -25,11 +26,13 @@ from backend.models.website import WEBSITE_STATUS_PENDING, Website
 from backend.models.widget import Widget
 from backend.repositories import (
     AuditLogRepository,
+    DocumentRepository,
     WebsiteRepository,
     WebsiteSortField,
     WebsiteSortOrder,
     WidgetRepository,
 )
+from backend.repositories.vector.base import VectorRepository
 from backend.services.auth import Principal
 from backend.services.billing import UsageService
 from backend.utils.url_validator import normalize_url
@@ -63,6 +66,8 @@ class WebsiteService:
         audit: AuditLogRepository,
         settings: Settings | None = None,
         usage: UsageService | None = None,
+        documents: DocumentRepository | None = None,
+        vector: VectorRepository | None = None,
     ) -> None:
         self._websites = websites
         self._widgets = widgets
@@ -72,6 +77,10 @@ class WebsiteService:
         # exceed `max_websites`. Optional so pre-existing call sites/tests keep
         # working without a usage service.
         self._usage = usage
+        # Audit R-02/A-06: deletion cascades to the crawled pages and their
+        # embedded chunks. Optional so pre-existing call sites keep working.
+        self._documents = documents
+        self._vector = vector
 
     # ------------------------------------------------------------------ flows
 
@@ -234,6 +243,13 @@ class WebsiteService:
         if website is None:
             raise WebsiteNotFoundError("Website not found.")
         await self._widgets.delete_by_website_id(principal.tenant_id, website_id)
+        # Audit R-02/A-06: without this purge the crawled documents and their
+        # embedded chunks outlive the website indefinitely (storage growth and
+        # retention exposure).
+        if self._documents is not None:
+            await self._documents.delete_by_website(principal.tenant_id, website_id)
+        if self._vector is not None:
+            await self._vector.delete_by_website(principal.tenant_id, website_id)
         await self._websites.delete(principal.tenant_id, website_id)
         await self._audit.create(
             AuditLog.new(

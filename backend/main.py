@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend import __version__
 from backend.api.middleware import (
+    MetricsMiddleware,
     RequestIDMiddleware,
     RequestTimingMiddleware,
     SecurityHeadersMiddleware,
@@ -28,6 +29,7 @@ from backend.api.routes.crawl_jobs import router as crawl_jobs_router
 from backend.api.routes.feedback import router as feedback_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.knowledge import router as knowledge_router
+from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.webhooks import router as webhooks_router
 from backend.api.routes.websites import router as websites_router
 from backend.api.routes.widget import router as widget_router
@@ -35,6 +37,7 @@ from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import AppError
 from backend.core.logging import configure_logging
+from backend.core.metrics import attach_metrics_log_collector
 from backend.core.redis import close_redis
 
 logger = logging.getLogger("webchat_ai")
@@ -137,6 +140,9 @@ def create_app() -> FastAPI:
     """Build the application with all routers and middleware registered."""
     settings = get_settings()
     configure_logging()
+    # Phase 3: derive fallback-reason and TTFT metrics from log events the
+    # services already emit (no service call sites change).
+    attach_metrics_log_collector()
 
     app = FastAPI(
         title="WebChat AI API",
@@ -164,6 +170,9 @@ def create_app() -> FastAPI:
     # Outermost: measures the full request (incl. the middlewares above). No-op
     # unless PERF_TIMING_LOG_ENABLED=true (Phase 12.1 instrumentation).
     app.add_middleware(RequestTimingMiddleware)
+    # Always-on Prometheus observation of every HTTP request (Phase 3). Sits
+    # inside TrustedHost so host-rejected requests are not counted as traffic.
+    app.add_middleware(MetricsMiddleware)
     # Outermost: rejects requests with an unknown Host header before any app
     # middleware or handler runs (Phase 16, `ALLOWED_HOSTS`).
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.effective_allowed_hosts())
@@ -221,6 +230,8 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(health_router, prefix="/api")
+    # Root-level scrape endpoint (no /api prefix): conventional Prometheus path.
+    app.include_router(metrics_router)
     app.include_router(auth_router, prefix="/api")
     app.include_router(websites_router, prefix="/api")
     app.include_router(crawl_jobs_router, prefix="/api")

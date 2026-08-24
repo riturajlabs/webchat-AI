@@ -54,3 +54,21 @@ export async function fetchWithTimeout(
 export function isOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
+
+/**
+ * Request correlation id (Phase 2 tracing): one UUID per chat turn, sent as
+ * `X-Request-ID` so browser and backend logs can be joined end-to-end.
+ * Prefers the platform UUID; falls back to an RFC-4122 v4-shaped string when
+ * `crypto.randomUUID` is unavailable (same posture as visitor ids).
+ */
+export function newRequestId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') {
+    return cryptoApi.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (char) => {
+    const random = (Math.random() * 16) | 0;
+    const value = char === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}

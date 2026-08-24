@@ -38,6 +38,14 @@ class ChatMessage(BaseModel):
     response_time: float | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+    # AI cost tracking (Phase 1). `estimated_cost` is the USD estimate from
+    # the configured rate card for the model in `model_name` ("" when the
+    # serving provider could not be resolved); `total_tokens` is the sum of
+    # input + output tokens. Daily rollups live in `usage_records`, where the
+    # same cost accrues as integer micro-dollars (`estimated_cost_micros`).
+    total_tokens: int = 0
+    estimated_cost: float = 0.0
+    model_name: str = ""
     # Per-stage latency breakdown (milliseconds, Phase 12.6). Assistant
     # messages record where the response time went so the performance dashboard
     # can report average embedding/retrieval/generation latency per window.

@@ -115,6 +115,18 @@ export function profileTurn(widgetId: string) {
   };
 }
 
+/**
+ * Surface the correlation id of a failed turn via `console.debug` (Phase 2
+ * tracing): the id joins the widget's error report with the backend logs for
+ * the exact request (`X-Request-ID`). Silent unless debug logging is enabled.
+ */
+export function reportTurnErrorId(widgetId: string, error: WidgetError): void {
+  if (!error.requestId) {
+    return;
+  }
+  console.debug(`[webchat:${widgetId}] turn failed (request_id=${error.requestId})`);
+}
+
 export interface WidgetController {
   readonly widgetId: string;
   readonly apiBaseUrl: string;
@@ -383,6 +395,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
       onError: (error: WidgetError) => {
         lastFailedQuestion = question;
         lastError = error;
+        reportTurnErrorId(widgetId, error);
         windowElement.setBanner(error.userMessage, error.retryable);
         conversation.failTurn(turnId, error.userMessage);
       },
@@ -420,6 +433,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
             : new WidgetError({ code: 'network', message: 'Chat stream failed', cause });
         lastFailedQuestion = question;
         lastError = error;
+        reportTurnErrorId(widgetId, error);
         windowElement.setBanner(error.userMessage, error.retryable);
         conversation.failTurn(turnId, error.userMessage);
       }

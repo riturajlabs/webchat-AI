@@ -30,6 +30,12 @@ export interface WidgetErrorOptions {
   retryable?: boolean;
   status?: number;
   cause?: unknown;
+  /**
+   * Backend correlation id for the failed request (Phase 2 tracing): the
+   * `X-Request-ID` the widget generated for the turn, echoed by SSE error
+   * frames. Null when unknown (e.g. failures before a request was built).
+   */
+  requestId?: string | null;
 }
 
 const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
@@ -68,6 +74,7 @@ export class WidgetError extends Error {
   readonly code: WidgetErrorCode;
   readonly status: number | null;
   readonly retryable: boolean;
+  readonly requestId: string | null;
   readonly cause?: unknown;
 
   constructor(options: WidgetErrorOptions) {
@@ -76,6 +83,7 @@ export class WidgetError extends Error {
     this.code = options.code;
     this.status = options.status ?? null;
     this.retryable = options.retryable ?? isRetryable(options.code);
+    this.requestId = options.requestId ?? null;
     if (options.cause !== undefined) {
       this.cause = options.cause;
     }
@@ -87,7 +95,11 @@ export class WidgetError extends Error {
 }
 
 /** Map an HTTP status to a widget error code (plan §9 error taxonomy). */
-export function errorFromStatus(status: number, message: string): WidgetError {
+export function errorFromStatus(
+  status: number,
+  message: string,
+  requestId?: string | null,
+): WidgetError {
   let code: WidgetErrorCode;
   switch (status) {
     case 401:
@@ -108,7 +120,7 @@ export function errorFromStatus(status: number, message: string): WidgetError {
       code = status >= 500 ? 'server' : 'network';
       break;
   }
-  return new WidgetError({ code, message, status });
+  return new WidgetError({ code, message, status, requestId: requestId ?? null });
 }
 
 /**
@@ -148,21 +160,29 @@ export function errorFromBackendCode(
   code: string | undefined,
   message: string,
   status?: number,
+  requestId?: string | null,
 ): WidgetError {
   const mapped = code ? BACKEND_CODE_MAP[code] : undefined;
   return new WidgetError({
     code: mapped ?? 'server',
     message,
     status,
+    requestId: requestId ?? null,
   });
 }
 
 /**
  * Map a backend SSE `error` event code onto the stable taxonomy.
  * Unknown codes fall back to `server` so internals are never leaked.
+ * `requestId` is the correlation id echoed by the backend error frame
+ * (Phase 2 tracing) and is surfaced on the resulting {@link WidgetError}.
  */
-export function errorFromSseCode(code: string | undefined, message: string): WidgetError {
-  return errorFromBackendCode(code, message);
+export function errorFromSseCode(
+  code: string | undefined,
+  message: string,
+  requestId?: string | null,
+): WidgetError {
+  return errorFromBackendCode(code, message, undefined, requestId);
 }
 
 /** Shape of the backend JSON error envelope (`AppError` handler in main.py). */
@@ -182,7 +202,11 @@ interface ErrorEnvelope {
  * sees a meaningful, actionable message; otherwise it falls back to a
  * status-code guess. Unknown backend codes never leak: they become `server`.
  */
-export function errorFromApiBody(status: number, body: unknown): WidgetError {
+export function errorFromApiBody(
+  status: number,
+  body: unknown,
+  requestId?: string | null,
+): WidgetError {
   const envelope = (body ?? {}) as ErrorEnvelope;
   const code = envelope?.error?.code;
   if (code) {
@@ -190,7 +214,8 @@ export function errorFromApiBody(status: number, body: unknown): WidgetError {
       code,
       envelope.error?.message ?? `Request failed (${status})`,
       status,
+      requestId,
     );
   }
-  return errorFromStatus(status, `Request failed (${status})`);
+  return errorFromStatus(status, `Request failed (${status})`, requestId);
 }

@@ -164,6 +164,53 @@ class _FakeDb:
 
 
 @pytest.mark.asyncio
+async def test_brute_force_scoring_runs_off_the_event_loop(monkeypatch) -> None:
+    """Audit A-02: brute-force cosine scoring must not block the event loop.
+
+    While the scoring pass is running, another coroutine must be able to make
+    progress. With the pre-fix inline implementation the loop would stall
+    inside the first cosine call and this test would time out.
+    """
+    import asyncio
+    import threading
+
+    from backend.repositories.vector import mongodb as mongodb_module
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_cosine(_a: list[float], _b: list[float]) -> float:
+        started.set()
+        release.wait(timeout=5)
+        return 1.0
+
+    monkeypatch.setattr(mongodb_module, "_cosine_similarity", blocking_cosine)
+    docs = [
+        _chunk("first", [1.0, 0.0], index=0),
+        _chunk("second", [1.0, 0.0], index=1),
+    ]
+    collection = FakeCollection(docs)
+    collection.aggregate_error = RuntimeError(
+        "$vectorSearch stage is only allowed on MongoDB Atlas"
+    )
+    repo = MongoVectorRepository(_FakeDb(collection))
+
+    search = asyncio.create_task(repo.similarity_search("tenant-a", "site-a", [1.0, 0.0], top_k=2))
+    for _ in range(500):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.01)
+    assert started.is_set(), "scoring never started"
+
+    # The event loop stayed responsive while cosine scoring ran in its thread.
+    await asyncio.wait_for(asyncio.sleep(0), timeout=1)
+
+    release.set()
+    results = await asyncio.wait_for(search, timeout=5)
+    assert [r.chunk.chunk_text for r in results] == ["first", "second"]
+
+
+@pytest.mark.asyncio
 async def test_falls_back_to_brute_force_when_atlas_vector_search_is_unavailable() -> None:
     query = [1.0, 0.0]
     docs = [

@@ -389,6 +389,107 @@ async def test_crawl_pages_is_tenant_scoped(patch_dns) -> None:
     assert usage.get_record("tenant-b", job.website_id, usage_date_key()) is None
 
 
+async def test_worker_purges_documents_removed_from_site(patch_dns) -> None:
+    """Audit R-02: pages no longer on the site are purged with their chunks."""
+    from backend.models.document import Document
+    from backend.models.knowledge_chunk import KnowledgeChunk
+
+    from tests.fakes import FakeVectorRepository
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    vector = FakeVectorRepository()
+
+    # A page stored by a previous crawl but gone from the site now.
+    stale_doc = Document.new(
+        tenant_id="tenant-a",
+        website_id=job.website_id,
+        url="https://acme.example/old-plan",
+        title="Old plan",
+        content="legacy pricing content",
+        checksum="a" * 64,
+    )
+    await documents.upsert(stale_doc)
+    await vector.insert_chunks(
+        [
+            KnowledgeChunk.new(
+                tenant_id="tenant-a",
+                website_id=job.website_id,
+                document_id=stale_doc.id,
+                chunk_text="legacy pricing content",
+                embedding=[0.1, 0.2, 0.3, 0.4],
+                chunk_index=0,
+            )
+        ]
+    )
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        vector=vector,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    assert result["status"] == "completed"
+
+    remaining_urls = {doc.url for doc in documents.documents.values()}
+    assert "https://acme.example/old-plan" not in remaining_urls
+    assert vector.by_document("tenant-a", stale_doc.id) == []
+
+    # Second crawl of the unchanged site: the live URLs must survive.
+    second = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        vector=vector,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+    assert second["status"] == "completed"
+    assert {doc.url for doc in documents.documents.values()} == {
+        SEED,
+        "https://acme.example/about",
+    }
+    assert len(vector.chunks) == 0  # nothing re-embedded here; stale chunks stay gone
+
+
+async def test_worker_reconciliation_forgives_errored_urls(patch_dns) -> None:
+    """Audit R-02: a transient fetch failure must not purge a good page."""
+    from backend.models.document import Document
+    from backend.services.ingestion.crawler import FetchError
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    existing = Document.new(
+        tenant_id="tenant-a",
+        website_id=job.website_id,
+        url="https://acme.example/about",
+        title="About",
+        content="about page content",
+        checksum="b" * 64,
+    )
+    await documents.upsert(existing)
+    ctx["crawler_fetcher"].fail("https://acme.example/about", FetchError("timeout"))
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result["status"] == "completed"
+    remaining_urls = {doc.url for doc in documents.documents.values()}
+    # The errored page is forgiven; only genuinely crawled pages were refreshed.
+    assert "https://acme.example/about" in remaining_urls
+
+
 async def test_usage_increment_failure_does_not_fail_crawl(patch_dns) -> None:
     """A broken usage repo must not fail the crawl (best-effort rollups)."""
 

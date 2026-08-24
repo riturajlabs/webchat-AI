@@ -80,6 +80,115 @@ describe('streamChat', () => {
     );
   });
 
+  // -- Phase 2 tracing: X-Request-ID ---------------------------------------
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  type MockFetch = { mock: { calls: unknown[][] } };
+
+  function sentHeaders(fetchImpl: MockFetch, call = 0): Record<string, string> {
+    const init = fetchImpl.mock.calls[call][1] as RequestInit;
+    return init.headers as Record<string, string>;
+  }
+
+  it('sends a UUID X-Request-ID header and echoes it on the result', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse([]));
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    const header = sentHeaders(fetchImpl)['X-Request-ID'];
+    expect(header).toMatch(UUID_RE);
+    expect(result.requestId).toBe(header);
+  });
+
+  it('generates a fresh request id per turn (never reused)', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse([]));
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const first = await streamChat(OPTIONS, { question: 'q1' }, h, client, fetchImpl);
+    const second = await streamChat(OPTIONS, { question: 'q2' }, h, client, fetchImpl);
+    expect(first.requestId).not.toBe(second.requestId);
+  });
+
+  it('reuses one request id across the 401 re-mint retry', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      return sseResponse(['event: done\ndata: {"session_id":"s2"}\n\n']);
+    });
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sentHeaders(fetchImpl, 0)['X-Request-ID']).toBe(result.requestId);
+    expect(sentHeaders(fetchImpl, 1)['X-Request-ID']).toBe(result.requestId);
+  });
+
+  it('attaches the backend-echoed request id from SSE error frames', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: error\ndata: {"code":"GENERATION_FAILED","message":"boom","request_id":"rid-backend"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onError.mock.calls[0][0].requestId).toBe('rid-backend');
+    expect(result.error?.requestId).toBe('rid-backend');
+    // The turn-level correlation id stays the widget-generated one.
+    expect(result.requestId).toMatch(UUID_RE);
+  });
+
+  it('carries the failed done frame request id onto the error', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: done\ndata: {"status":"failed","code":"AI_UNAVAILABLE","request_id":"rid-done"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onError.mock.calls[0][0].requestId).toBe('rid-done');
+  });
+
+  it('attaches the generated request id to pre-stream/network failures', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('network down');
+    });
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('network');
+    expect(result.error?.requestId).toBe(result.requestId);
+    expect(result.requestId).toMatch(UUID_RE);
+  });
+
   it('re-mints the token and retries exactly once on a 401', async () => {
     let call = 0;
     const fetchImpl = vi.fn(async () => {

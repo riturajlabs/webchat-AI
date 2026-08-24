@@ -10,7 +10,7 @@
 
 import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
 import { WidgetError, errorFromApiBody, errorFromSseCode } from '../core/errors';
-import { fetchWithTimeout } from '../core/network';
+import { fetchWithTimeout, newRequestId } from '../core/network';
 import { readSseStream, type SseEvent } from '../core/sse';
 import type { SessionToken } from '../core/session';
 
@@ -69,6 +69,11 @@ export interface StreamResult {
   error?: WidgetError;
   /** Client-side timing measurements for latency analysis. */
   timing?: StreamTiming;
+  /**
+   * Correlation id sent as `X-Request-ID` for this turn (Phase 2 tracing);
+   * also echoed by backend `done`/`error` frames and attached to errors.
+   */
+  requestId?: string;
 }
 
 /** Client-side latency measurements for a chat stream. */
@@ -108,6 +113,9 @@ export async function streamChat(
 ): Promise<StreamResult> {
   const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
   const streamStartTime = performance.now();
+  // One correlation id per chat turn (Phase 2 tracing): generated once and
+  // reused across the 401 re-mint retry so backend logs join the whole turn.
+  const requestId = newRequestId();
 
   let token: SessionToken;
   try {
@@ -116,9 +124,14 @@ export async function streamChat(
     const error =
       cause instanceof WidgetError
         ? cause
-        : new WidgetError({ code: 'network', message: 'Session unavailable', cause });
+        : new WidgetError({
+            code: 'network',
+            message: 'Session unavailable',
+            cause,
+            requestId,
+          });
     handlers.onError?.(error);
-    return { completed: false, error };
+    return { completed: false, error, requestId };
   }
 
   for (let attempt = 0; ; attempt += 1) {
@@ -132,6 +145,7 @@ export async function streamChat(
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token.token}`,
             Accept: 'text/event-stream',
+            'X-Request-ID': requestId,
           },
           body: JSON.stringify({
             question: request.question,
@@ -142,15 +156,16 @@ export async function streamChat(
       );
     } catch (cause) {
       if (signal?.aborted) {
-        return { completed: false, aborted: true };
+        return { completed: false, aborted: true, requestId };
       }
       const error = new WidgetError({
         code: cause && (cause as Error).name === 'RequestTimeoutError' ? 'timeout' : 'network',
         message: 'Chat request failed',
         cause,
+        requestId,
       });
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     if (response.status === 401 && attempt === 0) {
@@ -162,9 +177,14 @@ export async function streamChat(
         const error =
           cause instanceof WidgetError
             ? cause
-            : new WidgetError({ code: 'network', message: 'Session renewal failed', cause });
+            : new WidgetError({
+                code: 'network',
+                message: 'Session renewal failed',
+                cause,
+                requestId,
+              });
         handlers.onError?.(error);
-        return { completed: false, error };
+        return { completed: false, error, requestId };
       }
     }
 
@@ -173,26 +193,40 @@ export async function streamChat(
       // the JSON error envelope; parse it so the visitor gets a meaningful
       // message rather than a generic status guess.
       const body = await readErrorEnvelope(response);
-      const error = errorFromApiBody(response.status, body);
+      const error = errorFromApiBody(response.status, body, requestId);
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     if (!response.body) {
-      const error = new WidgetError({ code: 'invalid', message: 'Chat stream missing body' });
+      const error = new WidgetError({
+        code: 'invalid',
+        message: 'Chat stream missing body',
+        requestId,
+      });
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     try {
-      return await consumeStream(response.body, handlers, signal, streamStartTime);
+      return await consumeStream(response.body, handlers, signal, streamStartTime, {
+        stallTimeoutMs: CHAT_STALL_TIMEOUT_MS,
+        requestId,
+      });
     } catch (cause) {
       if (signal?.aborted) {
-        return { completed: false, aborted: true };
+        return { completed: false, aborted: true, requestId };
       }
       throw cause;
     }
   }
+}
+
+/** Options for {@link consumeStream} beyond the raw stream body. */
+interface ConsumeOptions {
+  stallTimeoutMs?: number;
+  /** Correlation id for this turn (Phase 2 tracing), attached to errors. */
+  requestId?: string;
 }
 
 /**
@@ -204,10 +238,11 @@ async function consumeStream(
   handlers: ChatHandlers,
   signal?: AbortSignal,
   streamStartTime?: number,
-  stallTimeoutMs = CHAT_STALL_TIMEOUT_MS,
+  options: ConsumeOptions = {},
 ): Promise<StreamResult> {
+  const { stallTimeoutMs = CHAT_STALL_TIMEOUT_MS, requestId } = options;
   let terminalReached = false;
-  let result: StreamResult = { completed: false };
+  let result: StreamResult = { completed: false, ...(requestId ? { requestId } : {}) };
   let firstTokenTime: number | null = null;
   let deltaCount = 0;
 
@@ -244,20 +279,32 @@ async function consumeStream(
             if (payload.status === 'failed') {
               const code = typeof payload.code === 'string' ? payload.code : undefined;
               const message = typeof payload.message === 'string' ? payload.message : 'Chat failed';
-              const error = errorFromSseCode(code, message);
-              result = { completed: false, error };
+              const error = errorFromSseCode(
+                code,
+                message,
+                typeof payload.request_id === 'string' ? payload.request_id : requestId,
+              );
+              result = { completed: false, error, ...(requestId ? { requestId } : {}) };
               handlers.onError?.(error);
               break;
             }
-            result = { completed: true, done: payload };
+            result = { completed: true, done: payload, ...(requestId ? { requestId } : {}) };
             handlers.onDone?.(payload);
             break;
           }
           case 'error': {
             terminalReached = true;
-            const payload = (event.data ?? {}) as { code?: string; message?: string };
-            const error = errorFromSseCode(payload.code, payload.message ?? 'Chat failed');
-            result = { completed: false, error };
+            const payload = (event.data ?? {}) as {
+              code?: string;
+              message?: string;
+              request_id?: string;
+            };
+            const error = errorFromSseCode(
+              payload.code,
+              payload.message ?? 'Chat failed',
+              typeof payload.request_id === 'string' ? payload.request_id : requestId,
+            );
+            result = { completed: false, error, ...(requestId ? { requestId } : {}) };
             handlers.onError?.(error);
             break;
           }
@@ -282,8 +329,9 @@ async function consumeStream(
     const error = new WidgetError({
       code: 'network',
       message: 'Chat stream ended unexpectedly',
+      requestId: requestId ?? null,
     });
-    result = { completed: false, error };
+    result = { completed: false, error, ...(requestId ? { requestId } : {}) };
     handlers.onError?.(error);
   }
   if (streamStartTime !== undefined) {

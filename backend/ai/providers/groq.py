@@ -54,6 +54,11 @@ class GroqGenerationClient:
     def usage(self) -> GenerationUsage:
         return self._usage
 
+    @property
+    def model_name(self) -> str:
+        """Model id used for generation (rate-card key, Phase 1 cost tracking)."""
+        return self._model
+
     async def stream_generate(
         self,
         *,

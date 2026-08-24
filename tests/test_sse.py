@@ -17,6 +17,7 @@ from backend.api.sse import (
     stream_with_disconnect,
 )
 from backend.core.errors import AppError
+from backend.core.logging import request_id_var
 
 
 class FakeRequest:
@@ -137,6 +138,8 @@ async def test_terminal_done_appends_failed_status_after_handled_error() -> None
         "status": "failed",
         "code": "GENERATION_FAILED",
         "message": "boom",
+        # No HTTP context in a direct unit call: the log-formatter default.
+        "request_id": "-",
     }
 
 
@@ -161,6 +164,7 @@ async def test_terminal_done_emits_error_and_failed_done_on_unexpected_exception
         "status": "failed",
         "code": "INTERNAL_ERROR",
         "message": "An unexpected error occurred. Please try again later.",
+        "request_id": "-",
     }
 
 
@@ -198,7 +202,75 @@ async def test_terminal_done_preserves_existing_failed_status() -> None:
     events = [event async for event in ensure_terminal_done(gen())]
 
     assert len(events) == 1
-    assert events[0]["data"] == {"status": "completed", "custom": 1}
+    assert events[0]["data"] == {
+        "status": "completed",
+        "custom": 1,
+        "request_id": "-",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 tracing: done/error frames carry the current request id
+# ---------------------------------------------------------------------------
+
+
+async def test_terminal_done_stamps_request_id_on_done_and_error_frames() -> None:
+    """The middleware-set request id lands on every terminal frame."""
+    token = request_id_var.set("trace-42")
+    try:
+
+        async def success_gen():
+            yield {"event": "message", "data": {"delta": "Hi"}}
+            yield {"event": "done", "data": {"session_id": "s1"}}
+
+        events = [event async for event in ensure_terminal_done(success_gen())]
+        assert events[-1]["data"]["request_id"] == "trace-42"
+        assert events[-1]["data"]["session_id"] == "s1"
+
+        async def error_gen():
+            yield {
+                "event": "error",
+                "data": {"code": "GENERATION_FAILED", "message": "boom"},
+            }
+
+        events = [event async for event in ensure_terminal_done(error_gen())]
+        assert [event["event"] for event in events] == ["error", "done"]
+        assert events[0]["data"]["request_id"] == "trace-42"
+        assert events[1]["data"]["status"] == "failed"
+        assert events[1]["data"]["request_id"] == "trace-42"
+    finally:
+        request_id_var.reset(token)
+
+
+async def test_terminal_done_stamps_request_id_on_unexpected_failure_frames() -> None:
+    token = request_id_var.set("trace-9")
+    try:
+
+        async def gen():
+            yield {"event": "message", "data": {"delta": "partial"}}
+            raise RuntimeError("socket exploded")
+
+        events = [event async for event in ensure_terminal_done(gen())]
+
+        assert [event["event"] for event in events] == ["message", "error", "done"]
+        assert events[1]["data"]["request_id"] == "trace-9"
+        assert events[2]["data"]["request_id"] == "trace-9"
+    finally:
+        request_id_var.reset(token)
+
+
+async def test_terminal_done_never_overwrites_producer_request_id() -> None:
+    token = request_id_var.set("trace-from-middleware")
+    try:
+
+        async def gen():
+            yield {"event": "done", "data": {"status": "completed", "request_id": "mine"}}
+
+        events = [event async for event in ensure_terminal_done(gen())]
+
+        assert events[0]["data"]["request_id"] == "mine"
+    finally:
+        request_id_var.reset(token)
 
 
 async def test_terminal_done_generator_exit_propagates_without_extra_frames() -> None:
@@ -486,6 +558,39 @@ async def test_stream_answer_with_usage_gate_emits_failed_terminal() -> None:
     assert events[0][1]["code"] == "APP_ERROR"
     assert events[1][1]["status"] == "failed"
     assert usage.recorded == []
+
+
+async def test_stream_answer_with_usage_gate_frames_include_request_id() -> None:
+    """Pre-stream LIMIT_REACHED frames carry the request id (Phase 2)."""
+    token = request_id_var.set("trace-7")
+    try:
+        request = FakeRequest()
+        usage = _RecordingUsageService(
+            limit_error=AppError("Monthly messages_sent limit reached.")
+        )
+
+        async def _never_called():  # pragma: no cover - pipeline must not start
+            yield {"event": "done", "data": {}}
+
+        frames = [
+            frame
+            async for frame in stream_answer_with_usage(
+                request,
+                _never_called(),
+                usage=usage,
+                tenant_id="t1",
+                user_id=None,
+                website_id="w1",
+            )
+        ]
+        events = _parse_frames(frames)
+
+        assert [name for name, _ in events] == ["error", "done"]
+        assert events[0][1]["request_id"] == "trace-7"
+        assert events[1][1]["status"] == "failed"
+        assert events[1][1]["request_id"] == "trace-7"
+    finally:
+        request_id_var.reset(token)
 
 
 async def test_recording_skips_failed_done_but_bills_completed_done() -> None:

@@ -55,6 +55,12 @@ from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
 from backend.repositories.vector.reranker import EmbeddingReranker
 from backend.repositories.website_repository import WebsiteRepository
+from backend.services.billing.pricing import (
+    dollars_to_micros,
+    estimate_generation_cost,
+    get_model_price,
+    load_rate_card,
+)
 from backend.services.chat.confidence import ConfidenceMetrics, assess_confidence
 from backend.services.chat.context_optimizer import (
     OptimizationMetrics,
@@ -102,6 +108,20 @@ def _error_code(exc: Exception) -> str:
     if isinstance(exc, AppError):
         return exc.code
     return "INTERNAL_ERROR"
+
+
+def _generation_model_name(generation: Any) -> str:
+    """Rate-card key for the model that served the last request.
+
+    Prefers the router's ``active_model`` (the serving provider's id after a
+    fallback chain), then a concrete client's ``model_name``. Returns "" when
+    neither is available so cost accrues at 0 rather than misattributing.
+    """
+    for attr in ("active_model", "model_name"):
+        value = getattr(generation, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 class RagService:
@@ -191,6 +211,11 @@ class RagService:
             )
         else:
             self._reranker = None
+        # AI cost rate card (Phase 1). Parsed once at construction so a
+        # malformed AI_MODEL_PRICING_JSON fails fast instead of silently
+        # producing zero-cost traffic. Unpriced models warn once per process.
+        self._rate_card = load_rate_card(settings.ai_model_pricing_json)
+        self._warned_unpriced_models: set[str] = set()
 
     async def _embed_question(
         self, question: str
@@ -854,6 +879,31 @@ class RagService:
         response_time = time.monotonic() - started
         usage = self._generation.usage
 
+        # AI cost estimate (Phase 1 cost tracking). Computed from the serving
+        # model's reported token counts and the configured rate card; models
+        # without a rate accrue zero cost and warn once. Failed generations
+        # never reach this line, so errors stay non-billable by construction.
+        model_name = _generation_model_name(self._generation)
+        price = get_model_price(self._rate_card, model_name) if model_name else None
+        if price is None and model_name:
+            if model_name not in self._warned_unpriced_models:
+                self._warned_unpriced_models.add(model_name)
+                logger.warning(
+                    "cost_unpriced_model model=%s tenant=%s website=%s",
+                    model_name,
+                    tenant_id,
+                    website_id,
+                )
+        estimated_cost = (
+            estimate_generation_cost(
+                price,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            if price is not None
+            else 0.0
+        )
+
         assistant = ChatMessage.new(
             tenant_id=tenant_id,
             website_id=website_id,
@@ -865,6 +915,9 @@ class RagService:
         assistant.response_time = response_time
         assistant.input_tokens = usage.input_tokens
         assistant.output_tokens = usage.output_tokens
+        assistant.total_tokens = usage.input_tokens + usage.output_tokens
+        assistant.estimated_cost = round(estimated_cost, 6)
+        assistant.model_name = model_name
         # Persist the per-stage latency breakdown for the performance
         # dashboard (Phase 12.6). Durations only - never content or secrets.
         assistant.latency_embedding_ms = _round_ms(embedding_ms)
@@ -896,6 +949,7 @@ class RagService:
                     "messages": 2,
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
+                    "estimated_cost_micros": dollars_to_micros(estimated_cost),
                     "vector_queries": 1,
                 },
             ),
@@ -915,6 +969,9 @@ class RagService:
             "session_id": session.session_id,
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
+            "total_tokens": assistant.total_tokens,
+            "estimated_cost": assistant.estimated_cost,
+            "model_name": model_name,
             "response_time_ms": int(response_time * 1000),
             "created_at": assistant.created_at.isoformat(),
             "prompt_version": self._prompt_version,
@@ -963,6 +1020,8 @@ class RagService:
                 "rerank_input_count": rerank_input_count,
                 "total_ms": round(total_ms, 2),
                 "provider": provider_name,
+                "model_name": model_name,
+                "estimated_cost": assistant.estimated_cost,
                 "embedding_cache": "hit" if embedding_cache_hit else "miss",
                 "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
                 "context_chars": context_chars,

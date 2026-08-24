@@ -481,6 +481,8 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "rerank_input_count",
         "total_ms",
         "provider",
+        "model_name",
+        "estimated_cost",
         "embedding_cache",
         "retrieval_cache",
         "context_chars",

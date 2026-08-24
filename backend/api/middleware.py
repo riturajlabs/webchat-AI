@@ -15,6 +15,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend.core.config import get_settings
 from backend.core.logging import request_id_var
+from backend.core.metrics import record_http_request
 
 logger = logging.getLogger("webchat_ai")
 
@@ -196,6 +197,50 @@ class RequestTimingMiddleware:
                     "status": status,
                     "duration_ms": round(duration_ms, 2),
                 },
+            )
+
+
+class MetricsMiddleware:
+    """Pure-observation HTTP metrics (Phase 3): counts, statuses, latency.
+
+    Mirrors the timing pattern of RequestTimingMiddleware but is always on
+    and writes to the Prometheus registry instead of logs. The route label
+    uses the matched route template (`scope["route"].path`) so dynamic
+    segments never enter label cardinality; unmatched requests record "-".
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        method = str(scope.get("method", "-"))
+        status_holder: dict[str, int] = {"status": 0}
+
+        async def send_for_metrics(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "http.response.start" and status_holder["status"] == 0:
+                status_holder["status"] = int(message.get("status", 0) or 0)
+            await send(message)
+
+        started = time.perf_counter()
+        try:
+            await self.app(scope, receive, send_for_metrics)
+        finally:
+            duration_seconds = time.perf_counter() - started
+            route = scope.get("route")
+            template = getattr(route, "path", None)
+            path_label = template if isinstance(template, str) and template else "-"
+            # status 0 means no response start was observed (e.g. client
+            # disconnect before headers); keep it distinct from HTTP codes.
+            status_label = str(status_holder["status"]) if status_holder["status"] else "aborted"
+            record_http_request(
+                method=method,
+                path=path_label,
+                status=status_label,
+                duration_seconds=duration_seconds,
             )
 
 

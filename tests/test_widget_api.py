@@ -321,6 +321,53 @@ async def test_widget_chat_streams_answer(client) -> None:
     assert grouped["done"][0]["session_id"]
 
 
+async def test_widget_chat_done_event_carries_client_request_id(client) -> None:
+    """Phase 2 tracing: the inbound X-Request-ID flows into the done frame.
+
+    Proves the middleware-set id reaches the SSE generator context, and that
+    no second id is generated server-side when the client supplies one.
+    """
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers={**_chat_headers(), "X-Request-ID": "trace-e2e-done"},
+    )
+
+    assert response.status_code == 200
+    # Existing middleware behavior: the client-supplied id is echoed back.
+    assert response.headers["x-request-id"] == "trace-e2e-done"
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["done"][0]["request_id"] == "trace-e2e-done"
+
+
+async def test_widget_chat_error_event_carries_client_request_id(client) -> None:
+    """Pre-stream validation rejections are traceable too (Phase 2)."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    foreign_token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id="other-website",
+        visitor_id="visitor-1",
+    )
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi"},
+        headers={
+            "Authorization": f"Bearer {foreign_token}",
+            "X-Request-ID": "trace-e2e-error",
+        },
+    )
+
+    assert response.status_code == 200
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["error"][0]["code"] == "WIDGET_NOT_FOUND"
+    assert grouped["error"][0]["request_id"] == "trace-e2e-error"
+
+
 async def test_widget_chat_requires_bearer_token(client) -> None:
     test_client, _, chat_env, _ = client
     await _ready_website(chat_env)

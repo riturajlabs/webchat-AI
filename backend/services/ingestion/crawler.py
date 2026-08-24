@@ -90,6 +90,9 @@ class CrawlSession:
         self._on_extracting = on_extracting
         self._settings = settings or get_settings()
         self.errors: list[CrawlJobError] = []
+        # URLs successfully persisted during run(); consumed by post-crawl
+        # reconciliation so pages removed from the site can be purged (R-02).
+        self.stored_urls: list[str] = []
 
     async def run(self) -> int:
         """Crawl the site and persist cleaned pages. Returns pages stored."""
@@ -156,6 +159,7 @@ class CrawlSession:
                 self._record_error(final_url, INSUFFICIENT_CONTENT_REASON)
             await self._documents.upsert(document)
             stored += 1
+            self.stored_urls.append(final_url)
             if self._on_progress is not None:
                 await self._on_progress(stored, max_pages)
 

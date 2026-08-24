@@ -204,6 +204,25 @@ class Settings(BaseSettings):
     # on instead of stalling the chat for a minute (Phase 12.6 latency work).
     ai_provider_timeout_seconds: float = 10.0
 
+    # Per-provider circuit breaker (Phase 4 resilience). After
+    # `ai_circuit_failure_threshold` consecutive provider failures the circuit
+    # opens and the provider is skipped for `ai_circuit_cooldown_seconds`;
+    # after the cooldown exactly one probe request is allowed (HALF_OPEN):
+    # success closes the circuit, failure reopens it. Generation and
+    # embedding circuits are tracked separately per provider. Disable to
+    # restore unconditional try-in-order fallback.
+    ai_circuit_breaker_enabled: bool = True
+    ai_circuit_failure_threshold: int = 3
+    ai_circuit_cooldown_seconds: float = 30.0
+
+    # AI cost rate card (Phase 1 cost tracking). JSON object keyed by model
+    # name, merged over built-in defaults; a "*" entry prices any unlisted
+    # model. Rates are USD per 1 million tokens. Example:
+    #   AI_MODEL_PRICING_JSON={"gemini-2.5-flash":
+    #     {"input_per_million": 0.30, "output_per_million": 2.50},
+    #    "*": {"input_per_million": 0.50, "output_per_million": 1.00}}
+    ai_model_pricing_json: str = ""
+
     # Cloud embedding fallbacks (ADR-009). Keys are optional: a provider in
     # `EMBEDDING_PROVIDER_ORDER` whose key is missing is skipped gracefully at
     # registry build time (the next provider is tried). `embedding_dimensions`

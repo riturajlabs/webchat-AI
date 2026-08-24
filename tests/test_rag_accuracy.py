@@ -611,6 +611,7 @@ def _make_adaptive_settings(**overrides):  # type: ignore[no-untyped-def]
         rag_confidence_threshold=0.3,
         enable_conversational_query_rewrite=True,
         enable_context_optimization=False,
+        ai_model_pricing_json="",
     )
     defaults.update(overrides)
 
@@ -849,6 +850,7 @@ def _make_confidence_settings(**overrides):  # type: ignore[no-untyped-def]
         rag_confidence_threshold=0.3,
         enable_conversational_query_rewrite=True,
         enable_context_optimization=False,
+        ai_model_pricing_json="",
     )
     defaults.update(overrides)
 
@@ -1118,6 +1120,7 @@ def _make_opt_settings(**overrides):  # type: ignore[no-untyped-def]
         rag_confidence_threshold=0.3,
         enable_conversational_query_rewrite=True,
         enable_context_optimization=True,
+        ai_model_pricing_json="",
     )
     defaults.update(overrides)
 

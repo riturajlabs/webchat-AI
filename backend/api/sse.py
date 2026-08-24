@@ -34,6 +34,7 @@ from fastapi import Request
 
 from backend.core.errors import AppError
 from backend.core.logging import get_request_id
+from backend.core.metrics import observe_done, observe_sources, observe_sse_error
 from backend.services.billing import UsageService
 
 logger = logging.getLogger("webchat_ai")
@@ -44,10 +45,23 @@ def sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
 
 
+def _stamp_request_id(data: dict[str, Any]) -> dict[str, Any]:
+    """Attach the current request ID to an event payload (Phase 2 tracing).
+
+    `setdefault` semantics: never overwrite an id already on the frame.
+    Mirrors the log formatter's convention of carrying `-` when no request
+    context exists (direct unit invocation); under HTTP the middleware always
+    provides a real id.
+    """
+    data.setdefault("request_id", get_request_id())
+    return data
+
+
 def _failed_done(failure: dict[str, Any]) -> dict[str, Any]:
     """Build the terminal `done` frame for a stream that did not complete."""
     data = dict(failure)
     data["status"] = "failed"
+    _stamp_request_id(data)
     return {"event": "done", "data": data}
 
 
@@ -77,12 +91,14 @@ async def ensure_terminal_done(
                 saw_done = True
                 data = event.setdefault("data", {})
                 data.setdefault("status", "completed")
+                _stamp_request_id(data)
             elif name == "error" and failure is None:
                 failure = dict(event.get("data") or {})
                 failure.setdefault("code", "INTERNAL_ERROR")
                 failure.setdefault(
                     "message", "An unexpected error occurred. Please try again later."
                 )
+                _stamp_request_id(event.setdefault("data", {}))
             yield event
     except GeneratorExit:
         # Disconnect cleanup: close the inner generator so its persistence /
@@ -103,7 +119,10 @@ async def ensure_terminal_done(
         logger.exception(
             "chat stream failed without terminal event (request_id=%s)", get_request_id()
         )
-        yield {"event": "error", "data": {"code": code, "message": message}}
+        yield {
+            "event": "error",
+            "data": _stamp_request_id({"code": code, "message": message}),
+        }
         yield _failed_done({"code": code, "message": message})
         return
     if saw_done:
@@ -223,11 +242,21 @@ async def stream_answer_with_usage(
     try:
         await usage.check_limit(tenant_id, event_type="messages_sent")
     except AppError as exc:
-        yield sse("error", {"code": exc.code, "message": exc.message})
-        yield sse("done", {"status": "failed", "code": exc.code, "message": exc.message})
+        # Pre-stream rejection frames also carry the request id so a blocked
+        # turn is traceable exactly like a streamed one (Phase 2 tracing).
+        yield sse(
+            "error",
+            _stamp_request_id({"code": exc.code, "message": exc.message}),
+        )
+        yield sse(
+            "done",
+            _stamp_request_id({"status": "failed", "code": exc.code, "message": exc.message}),
+        )
         return
 
-    recording_gen = _recording_events(events, usage, tenant_id, user_id, website_id)
+    recording_gen = _recording_events(
+        _metrics_events(events), usage, tenant_id, user_id, website_id
+    )
     if buffer_ms > 0:
         stream_fn = buffered_stream_with_disconnect(request, recording_gen, buffer_ms=buffer_ms)
     else:
@@ -257,6 +286,32 @@ async def stream_answer_with_usage(
             "first_token_ms": round(first_token_ms, 2) if first_token_ms is not None else None,
         },
     )
+
+
+async def _metrics_events(
+    events: AsyncGenerator[dict[str, Any]],
+) -> AsyncGenerator[dict[str, Any]]:
+    """Observe SSE frames for Phase 3 metrics without altering them.
+
+    Pure pass-through: every value recorded here was already computed by the
+    pipeline (source counts, confidence, tokens, timing block). Observation
+    errors are swallowed so metrics can never break a chat stream.
+    """
+    async for event in events:
+        try:
+            name = event.get("event")
+            data = event.get("data")
+            payload = data if isinstance(data, dict) else {}
+            if name == "sources":
+                sources = payload.get("sources")
+                observe_sources(len(sources) if isinstance(sources, list) else 0)
+            elif name == "error":
+                observe_sse_error(str(payload.get("code") or "UNKNOWN"))
+            elif name == "done" and payload.get("status") != "failed":
+                observe_done(payload)
+        except Exception:  # pragma: no cover - observation must never break streaming
+            pass
+        yield event
 
 
 async def _recording_events(

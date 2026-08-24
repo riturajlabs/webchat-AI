@@ -130,6 +130,16 @@ describe('errorFromSseCode', () => {
     expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').retryable).toBe(true);
   });
 
+  it('carries the optional request id (Phase 2 tracing)', () => {
+    expect(errorFromSseCode('AI_UNAVAILABLE', 'm').requestId).toBeNull();
+    expect(errorFromSseCode('AI_UNAVAILABLE', 'm', 'rid-1').requestId).toBe('rid-1');
+    const direct = new WidgetError({ code: 'network', message: 'm' });
+    expect(direct.requestId).toBeNull();
+    expect(new WidgetError({ code: 'network', message: 'm', requestId: 'rid-2' }).requestId).toBe(
+      'rid-2',
+    );
+  });
+
   it('surfaces an invalid widget id with an actionable message', () => {
     const error = errorFromSseCode('WIDGET_NOT_FOUND', 'Widget not found.');
     expect(error.code).toBe('widget_not_found');

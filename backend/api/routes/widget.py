@@ -41,6 +41,7 @@ from backend.api.deps import (
 from backend.api.sse import ensure_terminal_done, sse, stream_answer_with_usage
 from backend.core.config import get_settings
 from backend.core.errors import AppError, SpamRejectedError
+from backend.core.logging import get_request_id
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
     CreateWidgetSessionRequest,
@@ -152,7 +153,16 @@ async def widget_chat(
                 session_id=body.session_id,
             )
         except AppError as exc:
-            yield sse("error", {"code": exc.code, "message": exc.message})
+            # Pre-stream rejection: the frame still carries the request id so
+            # a blocked turn is traceable like a streamed one (Phase 2).
+            yield sse(
+                "error",
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": get_request_id(),
+                },
+            )
             return
 
         stream = ensure_terminal_done(
