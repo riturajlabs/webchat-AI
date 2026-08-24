@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import nextDynamic from 'next/dynamic';
 import { Banknote, CalendarRange, Receipt, TrendingUp } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,6 +11,20 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 import { formatCents, formatDateTime, formatNumber } from './format';
 import { useAdminRevenue } from './hooks';
+
+/**
+ * Chart rendering is code-split into `revenue-chart.tsx` so recharts stays
+ * out of the main revenue panel bundle. Loads client-side only with a
+ * matching skeleton placeholder.
+ */
+const RevenueChart = nextDynamic(() => import('./revenue-chart').then((mod) => mod.RevenueChart), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-72 items-center justify-center" role="status" aria-label="Loading chart">
+      <Skeleton className="h-4 w-40" />
+    </div>
+  ),
+});
 
 function StatCard({
   label,
@@ -35,10 +49,6 @@ function StatCard({
       </CardContent>
     </Card>
   );
-}
-
-function AxisLabelStyle() {
-  return { fill: 'var(--muted-foreground)', fontSize: 12 } as const;
 }
 
 /** Revenue report (Phase 15 `/api/admin/revenue`). */
@@ -136,37 +146,7 @@ export function RevenuePanel() {
                   description="Paid subscriptions will appear here."
                 />
               ) : mounted ? (
-                <div className="h-72 w-full" data-testid="revenue-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-                      <CartesianGrid
-                        stroke="var(--border)"
-                        strokeDasharray="3 3"
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="period"
-                        tick={AxisLabelStyle()}
-                        tickLine={false}
-                        axisLine={false}
-                      />
-                      <YAxis
-                        tick={AxisLabelStyle()}
-                        tickLine={false}
-                        axisLine={false}
-                        tickFormatter={(value) => formatCents(Number(value), data.currency)}
-                      />
-                      <Tooltip
-                        formatter={(value, name) => [
-                          formatCents(Number(value), data.currency),
-                          String(name),
-                        ]}
-                        contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }}
-                      />
-                      <Bar dataKey="revenue" name="Revenue" fill="#10b981" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <RevenueChart data={chartData} currency={data.currency} />
               ) : null}
             </CardContent>
           </Card>
