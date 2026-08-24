@@ -63,7 +63,7 @@ describe('SignupForm', () => {
     await waitFor(() => {
       expect(register).toHaveBeenCalledWith('Jane Doe', 'user@gmail.com', 'Str0ngPass!123');
     });
-    expect(replace).toHaveBeenCalledWith('/');
+    expect(replace).toHaveBeenCalledWith('/dashboard');
   });
 
   it('shows the backend error message when signup fails', async () => {

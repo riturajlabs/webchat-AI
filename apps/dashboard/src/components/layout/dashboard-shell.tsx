@@ -35,7 +35,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-muted/30">
       <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
-        <Link href="/" className="flex items-center gap-2 px-5 py-5 font-semibold">
+        <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Bot className="size-4" aria-hidden="true" />
           </span>

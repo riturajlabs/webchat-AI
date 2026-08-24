@@ -81,7 +81,11 @@ export function MobileNav() {
             className="absolute inset-y-0 left-0 flex w-64 max-w-[85vw] flex-col border-r bg-background shadow-lg outline-none"
           >
             <div className="flex items-center justify-between gap-2 px-5 py-5">
-              <Link href="/" className="flex items-center gap-2 font-semibold" onClick={close}>
+              <Link
+                href="/dashboard"
+                className="flex items-center gap-2 font-semibold"
+                onClick={close}
+              >
                 <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
                   <Bot className="size-4" aria-hidden="true" />
                 </span>

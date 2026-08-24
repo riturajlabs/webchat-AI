@@ -25,7 +25,7 @@ export interface NavItem {
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/websites', label: 'Websites', icon: Bot },
   { href: '/knowledge', label: 'Knowledge Base', icon: LibraryBig },
   { href: '/conversations', label: 'Conversations', icon: MessagesSquare },

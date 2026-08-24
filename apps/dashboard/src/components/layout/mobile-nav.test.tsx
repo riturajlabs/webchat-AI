@@ -44,7 +44,7 @@ const mockedUseAuth = vi.mocked(useAuth);
 
 describe('MobileNav', () => {
   beforeEach(() => {
-    mockedUsePathname.mockReturnValue('/');
+    mockedUsePathname.mockReturnValue('/dashboard');
     mockedUseAuth.mockReturnValue({
       user: { role: 'owner' },
     } as never);
