@@ -150,6 +150,15 @@ const BACKEND_CODE_MAP: Record<string, WidgetErrorCode> = {
   VALIDATION_ERROR: 'validation',
   WIDGET_ORIGIN_NOT_ALLOWED: 'origin',
   WIDGET_DOMAIN_NOT_CONFIGURED: 'domain_not_configured',
+  // Audit S-21: codes emitted by the SSE streaming endpoints that were
+  // missing here. Unmapped codes fell back to `server` ("please try
+  // again"), which invited futile retries - a plan-cap visitor must hear
+  // "limit", and an unknown/expired chat session needs a fresh session,
+  // not another identical retry.
+  LIMIT_REACHED: 'limit',
+  SESSION_NOT_FOUND: 'session',
+  SERVICE_UNAVAILABLE: 'ai_unavailable',
+  WEBSITE_NOT_FOUND: 'widget_not_found',
 };
 
 /**

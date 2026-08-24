@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { WidgetError, errorFromApiBody, errorFromSseCode, errorFromStatus } from './errors';
+import {
+  WidgetError,
+  errorFromApiBody,
+  errorFromBackendCode,
+  errorFromSseCode,
+  errorFromStatus,
+  type WidgetErrorCode,
+} from './errors';
 
 describe('WidgetError', () => {
   it('exposes a stable user-facing message per code', () => {
@@ -151,5 +158,29 @@ describe('errorFromSseCode', () => {
     expect(errorFromSseCode('INTERNAL_DB_PASSWORD', 'm').code).toBe('server');
     expect(errorFromSseCode(undefined, 'm').code).toBe('server');
     expect(errorFromSseCode('', 'm').code).toBe('server');
+  });
+});
+
+describe('BACKEND_CODE_MAP pinning (audit S-21)', () => {
+  it('maps every SSE error code the streaming endpoints emit', () => {
+    // Streaming-specific backend codes that previously fell through to
+    // `server` ("please try again"), misdirecting visitors into futile
+    // retries. Each must keep its dedicated taxonomy code.
+    const streamingCodes: Array<[string, WidgetErrorCode]> = [
+      ['LIMIT_REACHED', 'limit'],
+      ['SESSION_NOT_FOUND', 'session'],
+      ['SERVICE_UNAVAILABLE', 'ai_unavailable'],
+      ['WEBSITE_NOT_FOUND', 'widget_not_found'],
+    ];
+    for (const [backendCode, expected] of streamingCodes) {
+      expect(errorFromSseCode(backendCode, 'm').code).toBe(expected);
+      expect(errorFromBackendCode(backendCode, 'm').code).toBe(expected);
+    }
+  });
+
+  it('keeps retryability honest for the mapped codes', () => {
+    // A plan cap is not fixed by retrying; a transient service outage is.
+    expect(errorFromSseCode('LIMIT_REACHED', 'm').retryable).toBe(false);
+    expect(errorFromSseCode('SERVICE_UNAVAILABLE', 'm').retryable).toBe(true);
   });
 });

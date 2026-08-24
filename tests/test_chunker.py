@@ -82,3 +82,47 @@ def test_defaults_match_settings() -> None:
     assert isinstance(chunks[0], TextChunk)
     # Default size is 700 tokens; even the largest chunk must not exceed it.
     assert max(chunk.tokens for chunk in chunks) <= 700
+
+
+# ---------------------------------------------------------------------------
+# Heading propagation (audit R-08)
+# ---------------------------------------------------------------------------
+
+
+def _heading_of(chunks: list[TextChunk], needle: str) -> str | None:
+    for chunk in chunks:
+        if needle in chunk.text:
+            return chunk.heading
+    raise AssertionError(f"no chunk contains {needle!r}")
+
+
+def test_chunks_carry_nearest_preceding_heading() -> None:
+    doc = (
+        "# Pricing\nStarter costs nine dollars. Pro costs nineteen. \n"
+        "Enterprise is custom quoted. Annual plans save money. \n"
+        "## Support\nEmail us any time. We reply within one day. \n"
+        "Phone support runs on weekdays. Chat is available too. "
+    )
+    chunks = chunk_text(doc, chunk_size=15, overlap=0)
+
+    assert len(chunks) >= 2
+    assert _heading_of(chunks, "Starter costs") == "Pricing"
+    # A chunk fully inside the Support section carries the Support heading.
+    support_chunks = [c for c in chunks if c.text and "Email" in c.text or "Chat" in c.text]
+    assert support_chunks
+    assert all(c.heading == "Support" for c in support_chunks)
+    # No chunk from the Pricing section leaks a Support heading.
+    pricing = [c for c in chunks if "nine dollars" in c.text]
+    assert all(c.heading == "Pricing" for c in pricing)
+
+
+def test_text_without_headings_yields_none() -> None:
+    chunks = chunk_text(LONG, chunk_size=30, overlap=0)
+    assert chunks
+    assert all(chunk.heading is None for chunk in chunks)
+
+
+def test_heading_before_any_content_is_attached_to_first_chunk() -> None:
+    chunks = chunk_text("# Intro\nAlpha beta. Gamma delta. Epsilon zeta.", chunk_size=10, overlap=0)
+    assert len(chunks) == 2
+    assert all(chunk.heading == "Intro" for chunk in chunks)

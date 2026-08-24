@@ -155,9 +155,22 @@ async def widget_chat(
         except AppError as exc:
             # Pre-stream rejection: the frame still carries the request id so
             # a blocked turn is traceable like a streamed one (Phase 2).
+            # Audit S-04: every SSE failure must end with the terminal pair -
+            # `error` followed by `done {"status": "failed", ...}` - so the
+            # widget can distinguish a finished (failed) turn from a dropped
+            # connection. The error payload itself is unchanged.
             yield sse(
                 "error",
                 {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": get_request_id(),
+                },
+            )
+            yield sse(
+                "done",
+                {
+                    "status": "failed",
                     "code": exc.code,
                     "message": exc.message,
                     "request_id": get_request_id(),

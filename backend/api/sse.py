@@ -21,6 +21,14 @@ disconnect-aware adapter with delta coalescing. Small `message` deltas are
 buffered and flushed as a single SSE frame every `buffer_ms` milliseconds
 (default 50ms), reducing the number of frames and network round-trips without
 changing the client-visible streaming semantics.
+
+Production hardening (audit S-03/S-08): `with_heartbeats` injects SSE comment
+frames (`: ping`) while the upstream is silent so idle proxies and browsers do
+not reap an apparently-dead connection during long generation pauses; comments
+are ignored by every SSE client and never reorder application events.
+`buffered_stream_with_disconnect` no longer yields from its cleanup path - a
+`yield` inside `finally` during GeneratorExit raises RuntimeError on client
+disconnects.
 """
 
 import asyncio
@@ -43,6 +51,60 @@ logger = logging.getLogger("webchat_ai")
 def sse(event: str, data: dict[str, Any]) -> str:
     """Serialize one SSE frame: `event: <name>\ndata: <json>\n\n`."""
     return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+# Audit S-03: SSE keepalive comment emitted while generation is silent. The
+# spec allows comment lines (`:` prefix); every client - including the widget
+# SDK's `parseSseFrame` - ignores them, but the bytes reset idle timeouts in
+# browsers and reverse proxies so long silent generations are not reaped.
+_SSE_HEARTBEAT_FRAME = ": ping\n\n"
+_DEFAULT_HEARTBEAT_INTERVAL_S = 15.0
+
+
+async def with_heartbeats(
+    frames: AsyncIterator[str], *, interval_s: float = _DEFAULT_HEARTBEAT_INTERVAL_S
+) -> AsyncIterator[str]:
+    """Yield `frames` unchanged, emitting a `: ping` comment when silent.
+
+    While waiting longer than `interval_s` for the next upstream frame, a
+    heartbeat comment is yielded between (never before/after or instead of)
+    real frames, so application event order is preserved exactly. Waiting
+    uses `asyncio.wait` on the pending `__anext__` task rather than
+    `wait_for`: timing out must NOT cancel the in-flight pull, only observe
+    it. On cleanup the pending pull is cancelled and the upstream closed so
+    persistence bookkeeping still runs.
+
+    Heartbeat comments are excluded from transport metrics by the caller.
+    """
+    iterator = frames.__aiter__()
+    pending: asyncio.Task[str] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(iterator.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=interval_s)
+            if pending not in done:
+                yield _SSE_HEARTBEAT_FRAME
+                continue
+            finished = pending
+            pending = None
+            try:
+                yield finished.result()
+            except StopAsyncIteration:
+                return
+    finally:
+        if pending is not None and not pending.done():
+            # Teardown while a pull is in flight (client disconnect): cancel
+            # it so the upstream generator can be closed synchronously below.
+            pending.cancel()
+        if pending is not None:
+            try:
+                await pending
+            except BaseException:  # noqa: BLE001 - teardown of a dead pull
+                pass
+        aclose = getattr(frames, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 def _stamp_request_id(data: dict[str, Any]) -> dict[str, Any]:
@@ -159,6 +221,24 @@ async def stream_with_disconnect(
 _DEFAULT_BUFFER_MS = 50.0
 
 
+async def _cancel_pending(pending: asyncio.Task[Any] | None) -> None:
+    """Cancel an in-flight upstream pull and wait for its teardown.
+
+    Awaiting the cancelled task before closing the upstream generator is what
+    makes `events.aclose()` safe: closing a generator whose `__anext__` is
+    still running raises RuntimeError. Swallowing the resulting
+    CancelledError/StopAsyncIteration keeps cleanup side-effect free.
+    """
+    if pending is None:
+        return
+    if not pending.done():
+        pending.cancel()
+    try:
+        await pending
+    except BaseException:  # noqa: BLE001 - teardown of a dead pull
+        pass
+
+
 async def buffered_stream_with_disconnect(
     request: Request,
     events: AsyncGenerator[dict[str, Any]],
@@ -174,6 +254,15 @@ async def buffered_stream_with_disconnect(
     without changing the client-visible streaming semantics: the client still
     receives the same sequence of text, just in slightly larger chunks.
 
+    Audit S-18 (lazy flush): the flush is driven by *time*, not by upstream
+    traffic. While deltas sit in the buffer, the wait for the next upstream
+    event is bounded by the flush deadline; when it expires the buffer is
+    yielded immediately without waiting for more tokens. Previously a model
+    pause longer than `buffer_ms` silently extended how long already-produced
+    text was withheld, doubling perceived inter-token latency. The wait uses
+    `asyncio.wait` on the in-flight `__anext__` task so a timeout never
+    cancels the pull itself (mirroring `with_heartbeats`).
+
     The first iteration acts as the pre-flight disconnect check, identical to
     `stream_with_disconnect`.
     """
@@ -188,8 +277,34 @@ async def buffered_stream_with_disconnect(
         buffer.clear()
         return sse("message", {"delta": merged})
 
+    iterator = events.__aiter__()
+    pending: asyncio.Task[Any] | None = None
     try:
-        async for event in events:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(iterator.__anext__())
+            # Bound the wait by the pending deadline only when deltas are
+            # actually held; otherwise block indefinitely like `async for`.
+            timeout = (
+                max(0.0, flush_deadline - time.monotonic())
+                if buffer and flush_deadline is not None
+                else None
+            )
+            done_set, _ = await asyncio.wait({pending}, timeout=timeout)
+            if pending not in done_set:
+                # Audit S-18: deadline expiry with a live buffer - flush now.
+                # The upstream pull stays in flight and is simply awaited on
+                # the next loop turn.
+                frame = await _flush()
+                flush_deadline = None
+                if frame is not None:
+                    yield frame
+                continue
+            finished, pending = pending, None
+            try:
+                event = finished.result()
+            except StopAsyncIteration:
+                break
             if await request.is_disconnected():
                 break
             event_name = event["event"]
@@ -211,12 +326,27 @@ async def buffered_stream_with_disconnect(
                     yield frame
                 flush_deadline = None
                 yield sse(event_name, event["data"])
-    finally:
-        # Flush any remaining buffered deltas on stream end or disconnect.
-        frame = await _flush()
-        if frame is not None:
-            yield frame
+    except GeneratorExit:
+        # Audit S-08: disconnect cleanup must not yield. Cancel any in-flight
+        # upstream pull first (a dangling pull would keep the pipeline alive -
+        # a leak on long streams), then close the inner generator so its
+        # persistence bookkeeping runs immediately; still-buffered deltas are
+        # undeliverable (the client is gone).
+        await _cancel_pending(pending)
         await events.aclose()
+        raise
+    except asyncio.CancelledError:
+        await _cancel_pending(pending)
+        await events.aclose()
+        raise
+    # Normal loop exit (stream exhausted or client-disconnect break): deliver
+    # deltas still held when iteration ended. This is live-stream control flow,
+    # never GeneratorExit cleanup - the except blocks above close the upstream
+    # without flushing (audit S-08).
+    frame = await _flush()
+    if frame is not None:
+        yield frame
+    await events.aclose()
 
 
 async def stream_answer_with_usage(
@@ -228,6 +358,7 @@ async def stream_answer_with_usage(
     user_id: str | None,
     website_id: str | None,
     buffer_ms: float = 0.0,
+    heartbeat_interval_s: float = _DEFAULT_HEARTBEAT_INTERVAL_S,
 ) -> AsyncIterator[str]:
     """`stream_with_disconnect` plus the Phase 13 billing gate and recordings.
 
@@ -238,6 +369,12 @@ async def stream_answer_with_usage(
     When ``buffer_ms > 0``, small ``message`` deltas are coalesced into a
     single SSE frame every ``buffer_ms`` milliseconds, reducing frame count
     and network round-trips without changing client-visible semantics.
+
+    When the upstream is silent for longer than ``heartbeat_interval_s``
+    (audit S-03), a `: ping` SSE comment is emitted so proxies and browsers
+    keep the connection open during long generation pauses. Heartbeat
+    comments are ignored by clients and excluded from transport metrics.
+    Pass ``heartbeat_interval_s <= 0`` to disable.
     """
     try:
         await usage.check_limit(tenant_id, event_type="messages_sent")
@@ -261,17 +398,36 @@ async def stream_answer_with_usage(
         stream_fn = buffered_stream_with_disconnect(request, recording_gen, buffer_ms=buffer_ms)
     else:
         stream_fn = stream_with_disconnect(request, recording_gen)
+    if heartbeat_interval_s > 0:
+        frames: AsyncIterator[str] = with_heartbeats(stream_fn, interval_s=heartbeat_interval_s)
+    else:
+        frames = stream_fn
     sse_started = time.perf_counter()
     event_count = 0
     first_event_ms: float | None = None
     first_token_ms: float | None = None
-    async for frame in stream_fn:
-        event_count += 1
-        if first_event_ms is None:
-            first_event_ms = (time.perf_counter() - sse_started) * 1000.0
-        if first_token_ms is None and frame.startswith("event: message"):
-            first_token_ms = (time.perf_counter() - sse_started) * 1000.0
-        yield frame
+    try:
+        async for frame in frames:
+            if not frame.startswith(":"):
+                # Heartbeat comments are transport keepalives, not events: they
+                # must not skew event counts or latency percentiles.
+                event_count += 1
+                if first_event_ms is None:
+                    first_event_ms = (time.perf_counter() - sse_started) * 1000.0
+                if first_token_ms is None and frame.startswith("event: message"):
+                    first_token_ms = (time.perf_counter() - sse_started) * 1000.0
+            yield frame
+    except GeneratorExit:
+        # Consumer abandonment (client disconnect cancels the response task,
+        # or the route generator is closed early): tear down the whole wrapper
+        # chain now - heartbeat/buffer/disconnect layers, billing recording,
+        # metrics and the pipeline itself - instead of leaving it suspended
+        # until garbage collection on a long-lived process.
+        await _aclose_events(frames)
+        raise
+    except asyncio.CancelledError:
+        await _aclose_events(frames)
+        raise
     sse_transport_ms = (time.perf_counter() - sse_started) * 1000.0
     logger.info(
         "sse_transport",
@@ -288,6 +444,23 @@ async def stream_answer_with_usage(
     )
 
 
+async def _aclose_events(events: AsyncIterator[Any]) -> None:
+    """Close an async iterator if it supports it (best-effort, never raises).
+
+    Long-lived processes must not wait for garbage collection to finalize an
+    abandoned stream: every wrapper in the SSE chain holds the previous layer
+    (and through it the whole chat pipeline) alive until then. Explicit close
+    on early exit releases those resources deterministically.
+    """
+    aclose = getattr(events, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:  # noqa: BLE001 - teardown must never mask the real exit
+        pass
+
+
 async def _metrics_events(
     events: AsyncGenerator[dict[str, Any]],
 ) -> AsyncGenerator[dict[str, Any]]:
@@ -296,22 +469,31 @@ async def _metrics_events(
     Pure pass-through: every value recorded here was already computed by the
     pipeline (source counts, confidence, tokens, timing block). Observation
     errors are swallowed so metrics can never break a chat stream.
+    Early exit (consumer abandonment) closes the wrapped generator so the
+    teardown cascades through the whole chain instead of waiting for GC.
     """
-    async for event in events:
-        try:
-            name = event.get("event")
-            data = event.get("data")
-            payload = data if isinstance(data, dict) else {}
-            if name == "sources":
-                sources = payload.get("sources")
-                observe_sources(len(sources) if isinstance(sources, list) else 0)
-            elif name == "error":
-                observe_sse_error(str(payload.get("code") or "UNKNOWN"))
-            elif name == "done" and payload.get("status") != "failed":
-                observe_done(payload)
-        except Exception:  # pragma: no cover - observation must never break streaming
-            pass
-        yield event
+    try:
+        async for event in events:
+            try:
+                name = event.get("event")
+                data = event.get("data")
+                payload = data if isinstance(data, dict) else {}
+                if name == "sources":
+                    sources = payload.get("sources")
+                    observe_sources(len(sources) if isinstance(sources, list) else 0)
+                elif name == "error":
+                    observe_sse_error(str(payload.get("code") or "UNKNOWN"))
+                elif name == "done" and payload.get("status") != "failed":
+                    observe_done(payload)
+            except Exception:  # pragma: no cover - observation must never break streaming
+                pass
+            yield event
+    except GeneratorExit:
+        await events.aclose()
+        raise
+    except asyncio.CancelledError:
+        await events.aclose()
+        raise
 
 
 async def _recording_events(
@@ -321,43 +503,56 @@ async def _recording_events(
     user_id: str | None,
     website_id: str | None,
 ) -> AsyncGenerator[dict[str, Any]]:
-    """Forward `events`, recording usage at the `sources` and `done` frames."""
+    """Forward `events`, recording usage at the `sources` and `done` frames.
+
+    Early exit (consumer abandonment) closes the wrapped generator so the
+    teardown cascades through the whole chain instead of waiting for GC.
+    """
     recorded = False
-    async for event in events:
-        if event["event"] == "sources" and not recorded:
-            recorded = True
-            await _record(
-                usage,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                website_id=website_id,
-                event_type="messages_sent",
-            )
-        elif event["event"] == "done":
-            data = event["data"]
-            if data.get("status") == "failed":
-                # Terminal failure frame from `ensure_terminal_done`: the turn
-                # did not complete, so no ai_responses/tokens are billed.
-                yield event
-                continue
-            tokens = int(data.get("input_tokens", 0) or 0) + int(data.get("output_tokens", 0) or 0)
-            await _record(
-                usage,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                website_id=website_id,
-                event_type="ai_responses",
-            )
-            if tokens > 0:
+    try:
+        async for event in events:
+            if event["event"] == "sources" and not recorded:
+                recorded = True
                 await _record(
                     usage,
                     tenant_id=tenant_id,
                     user_id=user_id,
                     website_id=website_id,
-                    event_type="tokens_used",
-                    quantity=tokens,
+                    event_type="messages_sent",
                 )
-        yield event
+            elif event["event"] == "done":
+                data = event["data"]
+                if data.get("status") == "failed":
+                    # Terminal failure frame from `ensure_terminal_done`: the turn
+                    # did not complete, so no ai_responses/tokens are billed.
+                    yield event
+                    continue
+                tokens = int(data.get("input_tokens", 0) or 0) + int(
+                    data.get("output_tokens", 0) or 0
+                )
+                await _record(
+                    usage,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    website_id=website_id,
+                    event_type="ai_responses",
+                )
+                if tokens > 0:
+                    await _record(
+                        usage,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        website_id=website_id,
+                        event_type="tokens_used",
+                        quantity=tokens,
+                    )
+            yield event
+    except GeneratorExit:
+        await events.aclose()
+        raise
+    except asyncio.CancelledError:
+        await events.aclose()
+        raise
 
 
 async def _record(
@@ -388,4 +583,5 @@ __all__ = [
     "sse",
     "stream_answer_with_usage",
     "stream_with_disconnect",
+    "with_heartbeats",
 ]

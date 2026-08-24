@@ -18,12 +18,27 @@ import type { SessionToken } from '../core/session';
 export const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
 
 /**
+ * Backend generation guards (audit S-16 alignment baseline), mirrored from
+ * the backend's production config (`GENERATION_TIMEOUT_SECONDS` in
+ * `backend/core/config.py`): a stalled per-chunk read is abandoned by the
+ * server after 30s and surfaces as an SSE `error` frame. The backend also
+ * sends `: ping` heartbeat comments every 15s while silent, so this window
+ * only ever expires on a genuinely dead connection.
+ */
+export const BACKEND_GENERATION_TIMEOUT_MS = 30 * 1000;
+
+/**
  * Inactivity watchdog for an established stream (production hardening): when
  * no bytes arrive within this window — stalled server, dead connection without
  * FIN — the reader is cancelled and a retryable `timeout` error ends the turn
  * instead of "AI is typing" forever. Re-armed on every chunk.
+ *
+ * Audit S-16: this must exceed the backend's own per-chunk guard
+ * (`BACKEND_GENERATION_TIMEOUT_MS`) so the server's error handling - not a
+ * client race - is what ends a slow generation. One heartbeat interval
+ * (15s) is added as network margin: 30s + 15s = 45s.
  */
-export const CHAT_STALL_TIMEOUT_MS = 30 * 1000;
+export const CHAT_STALL_TIMEOUT_MS = BACKEND_GENERATION_TIMEOUT_MS + 15 * 1000;
 
 export interface ChatRequest {
   question: string;

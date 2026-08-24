@@ -11,8 +11,10 @@ or returned (00-AI-Development-Rules §12, §20).
 """
 
 import asyncio
+import hashlib
 import logging
 import random
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -26,6 +28,11 @@ from backend.core.errors import (
 from backend.services.knowledge.chunker import count_tokens
 
 logger = logging.getLogger("webchat_ai")
+
+# Audit R-09: in-process memo of successfully embedded texts (text hash ->
+# vector). Purely in-memory on the client instance - no storage architecture
+# change - bounded so long-running workers cannot grow it without limit.
+_MEMO_MAX_ENTRIES = 1024
 
 
 def ensure_vector_dimensions(
@@ -115,6 +122,21 @@ class GoogleEmbeddingClient:
         self._on_usage = on_usage
         self._genai_client = genai_client
         self._usage = EmbeddingUsage()
+        # Audit R-09: texts embedded successfully by THIS client instance.
+        # When a later batch of the same document fails and the processor
+        # schedules a document-level retry, already-embedded batches are
+        # served from this memo instead of being re-embedded (and re-billed).
+        self._memo: OrderedDict[str, list[float]] = OrderedDict()
+
+    def _memo_key(self, text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _memo_put(self, text: str, vector: list[float]) -> None:
+        key = self._memo_key(text)
+        self._memo[key] = vector
+        self._memo.move_to_end(key)
+        while len(self._memo) > _MEMO_MAX_ENTRIES:
+            self._memo.popitem(last=False)
 
     @property
     def usage(self) -> EmbeddingUsage:
@@ -152,14 +174,41 @@ class GoogleEmbeddingClient:
 
         Returns one vector per input text, in order. Raises `EmbeddingError`
         when a batch exhausts its retries or the client is misconfigured.
+
+        Audit R-09: texts this client instance already embedded successfully
+        are served from the in-memory memo, so a document-level retry after a
+        mid-document batch failure only re-embeds the batches that never
+        succeeded. The retry policy itself (per-batch backoff + document-level
+        deferred retries) is unchanged.
         """
         if not texts:
             return []
-        vectors: list[list[float]] = []
-        for start in range(0, len(texts), self._batch_size):
-            batch = texts[start : start + self._batch_size]
-            vectors.extend(await self._embed_batch(batch))
-        return vectors
+        slots: list[list[float] | None] = [None] * len(texts)
+        pending: list[str] = []
+        queued: set[str] = set()
+        for i, text in enumerate(texts):
+            key = self._memo_key(text)
+            cached = self._memo.get(key)
+            if cached is not None:
+                self._memo.move_to_end(key)
+                slots[i] = cached
+            elif text not in queued:
+                # Duplicate uncached texts are embedded once and shared.
+                pending.append(text)
+                queued.add(text)
+        for start in range(0, len(pending), self._batch_size):
+            batch = pending[start : start + self._batch_size]
+            embedded = await self._embed_batch(batch)
+            for text, vector in zip(batch, embedded, strict=True):
+                self._memo_put(text, vector)
+        final: list[list[float]] = []
+        for i, text in enumerate(texts):
+            slot = slots[i]
+            vector = slot if slot is not None else self._memo[self._memo_key(text)]
+            if vector is None:  # pragma: no cover - every slot is filled above
+                raise EmbeddingError("Embedding assembly failed for a batch text.")
+            final.append(vector)
+        return final
 
     async def _embed_batch(self, batch: list[str]) -> list[list[float]]:
         last_error: Exception | None = None

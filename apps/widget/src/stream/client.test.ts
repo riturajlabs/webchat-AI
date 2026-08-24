@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_CONNECT_TIMEOUT_MS, CHAT_STALL_TIMEOUT_MS, streamChat } from './client';
+import {
+  BACKEND_GENERATION_TIMEOUT_MS,
+  CHAT_CONNECT_TIMEOUT_MS,
+  CHAT_STALL_TIMEOUT_MS,
+  streamChat,
+} from './client';
 import type { SessionToken } from '../core/session';
 
 const API_BASE = 'http://api.example.com/api/widget/v1';
@@ -514,6 +519,15 @@ describe('streamChat', () => {
     await stallAssertion;
     // The partial delta delivered before the stall is not lost.
     expect(h.onDelta).toHaveBeenCalledWith('par');
+  });
+
+  it('aligns the stall watchdog with the backend generation guard (audit S-16)', () => {
+    // The widget must out-wait the backend's own per-chunk guard so the
+    // server's error frame - not a client race - ends a slow generation.
+    expect(CHAT_STALL_TIMEOUT_MS).toBe(45 * 1000);
+    expect(CHAT_STALL_TIMEOUT_MS).toBeGreaterThan(BACKEND_GENERATION_TIMEOUT_MS);
+    // Backend production value: GENERATION_TIMEOUT_SECONDS=30 (config.py).
+    expect(BACKEND_GENERATION_TIMEOUT_MS).toBe(30 * 1000);
   });
 
   it('includes timing measurements in StreamResult', async () => {

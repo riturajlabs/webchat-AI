@@ -22,6 +22,7 @@ the streaming endpoint stays uniform.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -29,7 +30,11 @@ from typing import Any
 from backend.ai.gemini import GenerationClient
 from backend.core.cache import CacheStore
 from backend.core.config import get_settings
-from backend.core.errors import AppError, SessionNotFoundError
+from backend.core.errors import (
+    AppError,
+    EmbeddingCompatibilityError,
+    SessionNotFoundError,
+)
 from backend.core.logging import get_request_id
 from backend.core.privacy import content_hash
 from backend.core.prompt_guard import validate_response
@@ -610,6 +615,29 @@ class RagService:
                 hybrid_candidate_count,
                 adaptive_max_context_chars,
             ) = retrieval
+        except EmbeddingCompatibilityError:
+            # Audit fix (embedding identity): a mixed/incompatible corpus must
+            # never surface as an error to the visitor. The repositories
+            # already refuse to mix embedding spaces; here we degrade to the
+            # existing safe fallback instead of an error event.
+            history_task.cancel()
+            logger.warning(
+                "rag_embedding_identity_mismatch tenant=%s website=%s session=%s",
+                tenant_id,
+                website_id,
+                session.session_id,
+            )
+            async for event in self._emit_fallback(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session=session,
+                started=started,
+                vector_queries=1,
+                reason="embedding_mismatch",
+                query=question,
+            ):
+                yield event
+            return
         except Exception as exc:
             history_task.cancel()
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
@@ -848,6 +876,22 @@ class RagService:
             answer = UNKNOWN_ANSWER_FALLBACK
             substituted_fallback = True
             yield {"event": "message", "data": {"delta": answer}}
+        # Citation validation (audit fix): the model may emit [N] markers that
+        # reference no retrieved source. Strip the invalid ones so the
+        # persisted answer and conversation history never carry an
+        # unverifiable citation; valid markers and formatting are untouched.
+        if not substituted_fallback:
+            answer, removed_citations = _strip_invalid_citations(answer, len(sources))
+            if removed_citations:
+                logger.info(
+                    "rag_invalid_citations_removed tenant=%s website=%s session=%s "
+                    "removed=%s source_count=%d",
+                    tenant_id,
+                    website_id,
+                    session.session_id,
+                    removed_citations,
+                    len(sources),
+                )
         output_issues = validate_response(answer)
         if output_issues:
             logger.warning(
@@ -1270,7 +1314,17 @@ class RagService:
             text = chunk.chunk_text
             if len(text) > self._max_chars_per_chunk:
                 text = text[: self._max_chars_per_chunk]
-            candidate_items.append(ContextItem(url=url, title=title, heading=None, text=text))
+            candidate_items.append(
+                ContextItem(
+                    url=url,
+                    title=title,
+                    # Audit R-08: the chunk's nearest heading (stored in
+                    # metadata at processing time) feeds the prompt's existing
+                    # heading slot instead of being dropped.
+                    heading=chunk.metadata.get("heading") or None,
+                    text=text,
+                )
+            )
             candidate_sources.append(
                 {
                     "chunk_id": chunk.id,
@@ -1334,7 +1388,10 @@ class RagService:
                     budget = 0
                 else:
                     budget -= len(text)
-            items.append(ContextItem(url=item.url, title=item.title, heading=None, text=text))
+            # Preserve the chunk's heading through budget capping (audit R-08).
+            items.append(
+                ContextItem(url=item.url, title=item.title, heading=item.heading, text=text)
+            )
             sources.append({**src, "citation": len(sources) + 1})
             if budget == 0:
                 break
@@ -1476,6 +1533,38 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
             supported += 1
 
     return round(supported / len(sentences), 3)
+
+
+# Citation markers are bracketed 1-2 digit indexes ("[1]", "[12]"). The digit
+# bound keeps years in brackets ("[2024]") and markdown footnote-style text
+# out of the matcher; sources never number past a few dozen.
+_CITATION_MARKER_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+def _strip_invalid_citations(answer: str, source_count: int) -> tuple[str, list[int]]:
+    """Drop ``[N]`` citation markers that reference no retrieved source.
+
+    Audit fix (citation validation): the model is instructed to cite
+    ``[1]..[n]``, but it can hallucinate an index beyond the rendered source
+    list. Invalid markers are removed so the persisted answer and future
+    conversation history never present an unverifiable citation; valid
+    markers and all other formatting pass through untouched.
+
+    Returns ``(sanitized_answer, removed_indexes)``.
+    """
+    if source_count <= 0:
+        return _CITATION_MARKER_RE.sub("", answer), []
+
+    removed: list[int] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 1 <= index <= source_count:
+            return match.group(0)
+        removed.append(index)
+        return ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer), removed
 
 
 __all__ = ["RagService"]

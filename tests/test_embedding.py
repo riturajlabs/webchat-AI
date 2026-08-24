@@ -226,3 +226,58 @@ def test_client_never_uses_sdk_without_api_key(fake_sdk) -> None:
     """Building the client is inert; only a real `embed` call needs the SDK."""
     client = GoogleEmbeddingClient(genai_client=fake_sdk)
     assert client._genai_client is not None  # injected, no key required
+
+
+# ---------------------------------------------------------------------------
+# Completed-batch memoization across document-level retries (audit R-09)
+# ---------------------------------------------------------------------------
+
+
+async def test_retry_after_failed_batch_reuses_completed_batches() -> None:
+    """A mid-document batch failure must not re-embed batches that already
+    succeeded when the caller retries the whole document (audit R-09)."""
+    texts = ["a", "bb", "ccc", "dddd", "eeeee"]
+
+    class BatchFailSDK(FakeGenAIClient):
+        """Fails one specific batch for its first N attempts."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.failing_batch = ["ccc", "dddd"]
+            self.attempts_left = 3
+
+        async def _embed_content(self, model: str, contents: list[str]):
+            if contents == self.failing_batch and self.attempts_left > 0:
+                self.attempts_left -= 1
+                self.calls.append(contents)
+                raise RuntimeError("transient")
+            return await super()._embed_content(model, contents)
+
+    fake_sdk = BatchFailSDK()
+    client = _client(fake_sdk)
+
+    # Batch 2 ("ccc","dddd") exhausts all 3 attempts and fails the call;
+    # batch 3 is never attempted.
+    with pytest.raises(EmbeddingError):
+        await client.embed(texts)
+    assert len(fake_sdk.calls) == 4  # 1 successful + 3 failed attempts
+    calls_before_retry = len(fake_sdk.calls)
+
+    # Retry of the identical document: only the never-succeeded texts may
+    # reach the provider.
+    vectors = await client.embed(texts)
+    new_calls = fake_sdk.calls[calls_before_retry:]
+    flattened = [text for batch in new_calls for text in batch]
+    assert flattened == ["ccc", "dddd", "eeeee"]
+
+    # Full result set, original order, deterministic values.
+    assert [v[0] for v in vectors] == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+async def test_memo_serves_duplicate_texts_within_one_call(fake_sdk) -> None:
+    client = _client(fake_sdk)
+    vectors = await client.embed(["a", "bb", "a"])
+
+    assert [v[0] for v in vectors] == [1.0, 2.0, 1.0]
+    # "a" is embedded once despite appearing twice.
+    assert fake_sdk.calls == [["a", "bb"]]

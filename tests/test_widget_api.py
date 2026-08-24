@@ -425,6 +425,39 @@ async def test_widget_chat_rejects_spam(client) -> None:
     assert grouped["error"][0]["code"] == "SPAM_REJECTED"
 
 
+async def test_widget_chat_pre_stream_error_ends_with_failed_done(client) -> None:
+    """Audit S-04: every SSE failure ends with error + done(status=failed).
+
+    A widget that only saw the `error` frame could not distinguish a finished
+    (failed) turn from a dropped connection; the terminal pair closes that gap
+    without changing the error payload contract.
+    """
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    foreign_token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id="other-website",
+        visitor_id="visitor-1",
+    )
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi"},
+        headers={"Authorization": f"Bearer {foreign_token}"},
+    )
+
+    grouped = _event_map(_sse_events(response.text))
+    error = grouped["error"][0]
+    done = grouped["done"][0]
+    assert error["code"] == "WIDGET_NOT_FOUND"
+    assert done["status"] == "failed"
+    assert done["code"] == error["code"]
+    assert done["message"] == error["message"]
+    # The stream ends on the terminal frame - nothing follows the failed done.
+    events_order = [event_name for event_name, _ in _sse_events(response.text)]
+    assert events_order == ["error", "done"]
+
+
 # ------------------------------------------------- visitor binding (P0-2)
 
 

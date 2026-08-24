@@ -23,6 +23,21 @@ class ConfidenceMetrics:
     rejected_chunks_count: int
 
 
+def _normalize_scores(scores: list[float]) -> list[float]:
+    """Clamp raw retrieval scores into the [0, 1] similarity scale.
+
+    Different retrieval stages produce different scales: exact cosine scans
+    yield [-1, 1], Atlas ``vectorSearchScore`` is normalized similarity, and
+    hybrid/rerank blends can exceed 1.0 or dip below 0. Feeding those raw
+    values into the weighted formula makes confidence incomparable across
+    strategies (a BM25-style 2.4 would saturate it at 1.0; a dissimilar
+    cosine of -0.6 would drag it artificially low). Clamping each input to
+    [0, 1] keeps every signal on one scale. Scores already inside [0, 1]
+    pass through unchanged, so existing calibrated behavior is preserved.
+    """
+    return [max(0.0, min(score, 1.0)) for score in scores]
+
+
 def assess_confidence(
     scores: list[float],
     *,
@@ -32,21 +47,22 @@ def assess_confidence(
     if not scores:
         return ConfidenceMetrics(0.0, 0.0, 0.0, 0)
 
-    peak = max(scores)
-    average = sum(scores) / len(scores)
-    rejected = sum(1 for score in scores if score < min_score) if min_score > 0 else 0
+    normalized = _normalize_scores(scores)
+    peak = max(normalized)
+    average = sum(normalized) / len(normalized)
+    rejected = sum(1 for score in normalized if score < min_score) if min_score > 0 else 0
     hit_ratio = (
-        (len(scores) - rejected) / len(scores)
+        (len(normalized) - rejected) / len(normalized)
         if min_score > 0
         else average
     )
     confidence = 0.50 * average + 0.30 * hit_ratio + 0.20 * peak
-    # Clamp to [0, 1]: reranker cosine scores can be negative (dissimilar
-    # chunks), which would otherwise emit negative confidence telemetry.
+    # Clamp to [0, 1]: defensive only after input normalization, kept so a
+    # caller-supplied out-of-range min_score cannot push the ratio negative.
     confidence = max(0.0, min(confidence, 1.0))
     return ConfidenceMetrics(
         confidence=round(confidence, 4),
-        minimum_score=round(min(scores), 4),
+        minimum_score=round(min(normalized), 4),
         average_score=round(average, 4),
         rejected_chunks_count=rejected,
     )
