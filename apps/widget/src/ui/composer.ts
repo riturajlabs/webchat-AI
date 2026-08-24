@@ -2,8 +2,11 @@
  * Composer (plan §5, WCAG 2.2 AA).
  *
  * A rounded textarea with a 2000-char cap, Enter-to-send / Shift+Enter newline,
- * disabled while busy, and an icon send button (SVG paper-plane). While a real
- * SSE turn streams the Stop button replaces Send; while a local conversational
+ * an icon send button (SVG paper-plane), and an IME-safe Enter guard (audit
+ * W-13): Enter presses that confirm a CJK composition never send. While a real
+ * SSE turn streams the Stop button replaces Send, but the input stays editable
+ * (audit: composer lockout) and a question submitted mid-stream is queued and
+ * sent automatically when the turn completes. While a local conversational
  * reply is "thinking" the Send button shows a small loading spinner instead.
  * Focus is retained on send.
  */
@@ -24,7 +27,11 @@ export interface ChatComposer {
   /** Stop-generation button; hidden unless a turn streams. */
   stopButton: HTMLButtonElement;
   setDisabled(disabled: boolean): void;
-  /** Swap Send ↔ Stop and lock the input while a real stream is in flight. */
+  /**
+   * Swap Send ↔ Stop while a real stream is in flight. The input stays
+   * editable so the visitor can pre-type the next question (audit: composer
+   * lockout); submitting mid-stream queues it for auto-send on completion.
+   */
   setStreaming(streaming: boolean): void;
   /** Show the send-button loading spinner while a reply is pending. */
   setBusy(busy: boolean): void;
@@ -103,6 +110,8 @@ export function createComposer(options: ComposerOptions): ChatComposer {
 
   let locked = false;
   let streaming = false;
+  /** Next question typed while a turn streams; auto-sent when it completes. */
+  let pendingQuestion: string | null = null;
 
   /** Grow the textarea with its content, up to the CSS max-height. */
   const autogrow = (): void => {
@@ -126,7 +135,20 @@ export function createComposer(options: ComposerOptions): ChatComposer {
 
   const submit = (): void => {
     const question = input.value.trim();
-    if (!question || locked || options.isDisabled()) {
+    if (!question || locked) {
+      return;
+    }
+    if (streaming) {
+      // Audit (composer lockout): the visitor can keep typing during a turn.
+      // Buffer the draft and send it the moment the stream completes instead
+      // of dropping it (the outer send path is gated while streaming).
+      pendingQuestion = question;
+      input.value = '';
+      input.style.height = '';
+      updateSend();
+      return;
+    }
+    if (options.isDisabled()) {
       return;
     }
     options.onSend(question);
@@ -138,6 +160,12 @@ export function createComposer(options: ComposerOptions): ChatComposer {
     updateSend();
   });
   input.addEventListener('keydown', (event: KeyboardEvent) => {
+    // Audit W-13: Enter that confirms an IME composition (CJK input, or the
+    // legacy keyCode 229 signal) must never trigger submit — it belongs to
+    // the composition itself and must not be swallowed either.
+    if (event.isComposing || event.keyCode === 229) {
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
@@ -164,15 +192,24 @@ export function createComposer(options: ComposerOptions): ChatComposer {
     }
     const stopWasFocused = document.activeElement === stopButton;
     streaming = next;
-    input.disabled = next;
     sendButton.hidden = next;
     stopButton.hidden = !next;
+    updateSend();
     if (next) {
       stopButton.focus();
-    } else if (stopWasFocused) {
-      // The Stop button just left the DOM-visible state (which would drop
-      // focus to <body>); keep it inside the composer instead.
-      input.focus();
+    } else {
+      if (stopWasFocused) {
+        // The Stop button just left the DOM-visible state (which would drop
+        // focus to <body>); keep it inside the composer instead.
+        input.focus();
+      }
+      // Audit (composer lockout): deliver a question queued mid-stream now
+      // that the turn has finished and the send path is unblocked again.
+      if (pendingQuestion) {
+        const queued = pendingQuestion;
+        pendingQuestion = null;
+        options.onSend(queued);
+      }
     }
   };
 

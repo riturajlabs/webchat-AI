@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createChatWindow } from './window';
-import { defaultConfig } from '../config/types';
+import { defaultConfig, type WidgetPublicConfig } from '../config/types';
 
-function setup() {
-  const config = defaultConfig('widget_1');
+function setup(configOverrides: Partial<WidgetPublicConfig> = {}) {
+  const config = { ...defaultConfig('widget_1'), ...configOverrides };
   const onSend = vi.fn();
   const onClose = vi.fn();
   const onSuggested = vi.fn();
@@ -270,5 +270,60 @@ describe('createChatWindow', () => {
     expect(footer?.hidden).toBe(true);
     const img = windowApi.element.querySelector<HTMLImageElement>('.wc-brand-logo');
     expect(img?.src).toContain('acme.png');
+  });
+});
+
+describe('Escape scoping (audit W-05)', () => {
+  it('closes when Escape is pressed inside the window', () => {
+    const { windowApi, onClose } = setup();
+    windowApi.trapFocus();
+    pressKey(windowApi.composer.input, 'Escape');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    windowApi.releaseFocus();
+  });
+
+  it('ignores Escape pressed on the host page so its shortcuts keep working', () => {
+    const { windowApi, onClose, messagesElement } = setup();
+    document.body.appendChild(messagesElement);
+    windowApi.trapFocus();
+
+    // Focus lives outside the widget (e.g. a host lightbox): the global
+    // capture listener must neither close nor swallow the event.
+    const outside = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+    const prevented = vi.spyOn(outside, 'preventDefault');
+    document.body.dispatchEvent(outside);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(prevented).not.toHaveBeenCalled();
+    windowApi.releaseFocus();
+  });
+
+  it('still closes via the composed path when focus sits in a nested element', () => {
+    const { windowApi, onClose } = setup();
+    windowApi.trapFocus();
+    const close = windowApi.element.querySelector<HTMLButtonElement>('.wc-close')!;
+    pressKey(close, 'Escape');
+    expect(onClose).toHaveBeenCalledTimes(1);
+    windowApi.releaseFocus();
+  });
+});
+
+describe('brand image URL safety (audit W-22)', () => {
+  it('renders http(s) brand images', () => {
+    const { windowApi } = setup({ avatar_url: 'https://cdn.example.com/bot.png' });
+    const logo = windowApi.element.querySelector<HTMLImageElement>('.wc-brand-logo');
+    expect(logo?.src).toBe('https://cdn.example.com/bot.png');
+  });
+
+  it('falls back to the glyph for unsafe image schemes', () => {
+    for (const url of [
+      'javascript:alert(1)',
+      'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+      '//evil.example/track.png',
+      'blob:https://example.com/x',
+    ]) {
+      const { windowApi } = setup({ avatar_url: url });
+      expect(windowApi.element.querySelector('img')).toBeNull();
+      expect(windowApi.element.querySelector('.wc-brand-icon svg')).toBeTruthy();
+    }
   });
 });

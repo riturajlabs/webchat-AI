@@ -23,7 +23,7 @@ import {
 import { SessionManager } from './session';
 import { getVisitorId } from './visitor';
 import { isOffline } from './network';
-import { applyTheme, prefersReducedMotion } from '../theme/apply';
+import { applyTheme, prefersReducedMotion, wireSystemThemeChange } from '../theme/apply';
 import { createLauncher, syncLauncher } from '../ui/launcher';
 import { createChatWindow } from '../ui/window';
 import {
@@ -37,6 +37,7 @@ import {
 import { submitFeedback } from '../feedback/api';
 import type { FeedbackSubmitPayload } from '../ui/feedback';
 import type { FeedbackState } from '../stream/chat';
+import { wireKeyboardInset } from '../ui/viewport';
 import { WIDGET_STYLES } from '../ui/styles';
 import { streamChat } from '../stream/client';
 import { Conversation, type ChatMessage } from '../stream/chat';
@@ -229,6 +230,39 @@ export function mount(options: WidgetHostOptions): WidgetController {
   /** Last question whose send failed (re-sent by the banner Retry action). */
   let lastFailedQuestion: string | null = null;
   let lastError: WidgetError | null = null;
+  /**
+   * Turn id of the most recent real SSE stream. When it completes, its final
+   * answer is pushed into the status live region (audit W-12): the streaming
+   * bubble mutates via innerHTML, which `aria-relevant="additions"` never
+   * announces — without this, screen-reader users hear "typing" then silence.
+   */
+  let lastStreamedTurnId: string | null = null;
+  /**
+   * Banner condition the visitor explicitly dismissed (audit W-02). A dismissal
+   * suppresses only that exact, continuously-persisting condition: syncRenderer
+   * re-runs on every state change and used to resurrect dismissed banners on
+   * each pass. The flag expires as soon as the underlying condition changes or
+   * clears, and a new send resets it.
+   */
+  let bannerDismissedFor: string | null = null;
+
+  /** The current banner-worthy condition, or null when things are fine. */
+  function currentBannerCause(): { key: string; message: string; retryable: boolean } | null {
+    if (widgetUnavailable) {
+      return { key: 'unavailable', message: WIDGET_UNAVAILABLE_BANNER, retryable: false };
+    }
+    if (isOffline()) {
+      return { key: 'offline', message: OFFLINE_BANNER, retryable: false };
+    }
+    if (lastError) {
+      return {
+        key: `error:${lastError.userMessage}`,
+        message: lastError.userMessage,
+        retryable: lastError.retryable,
+      };
+    }
+    return null;
+  }
 
   // --- Offline awareness (plan §9) -----------------------------------------
 
@@ -266,6 +300,10 @@ export function mount(options: WidgetHostOptions): WidgetController {
       }
     },
     onDismiss: () => {
+      // Audit W-02: remember *which* condition was dismissed so syncRenderer
+      // passes stop resurrecting the banner; genuinely new conditions (a new
+      // error message, an offline episode) still surface.
+      bannerDismissedFor = currentBannerCause()?.key ?? null;
       lastFailedQuestion = null;
       lastError = null;
       windowElement.setBanner(null);
@@ -281,6 +319,18 @@ export function mount(options: WidgetHostOptions): WidgetController {
   shell.appendChild(windowElement.element);
   shell.appendChild(launcher);
   shadowRoot.appendChild(shell);
+
+  // --- Mobile keyboard inset (audit W-06) -----------------------------------
+  // Mirrors the keyboard-occluded height into --wc-keyboard-inset on the shell
+  // so the styles can lift/shrink the window above an on-screen keyboard.
+
+  const detachKeyboardInset = wireKeyboardInset(window.visualViewport ?? null, shell);
+
+  // --- OS theme changes (audit W-03) -----------------------------------------
+  // theme:'auto' used to be evaluated once at mount; this keeps the resolved
+  // palette in sync when the visitor flips their system light/dark preference.
+
+  const detachSystemTheme = wireSystemThemeChange(host, () => currentConfig);
 
   // --- Bubble actions (delegated: copy / retry / show-more) ----------------
 
@@ -329,6 +379,9 @@ export function mount(options: WidgetHostOptions): WidgetController {
     windowElement.setBanner(null);
     lastFailedQuestion = null;
     lastError = null;
+    // A fresh attempt re-arms the banner: a visitor who retries deserves to
+    // see the outcome even if they dismissed an identical failure before.
+    bannerDismissedFor = null;
 
     conversation.addUserMessage(question);
 
@@ -340,6 +393,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
 
     const turnId = conversation.startAssistantTurn();
+    lastStreamedTurnId = turnId;
     const profiler = profileTurn(widgetId);
 
     const client = {
@@ -546,19 +600,18 @@ export function mount(options: WidgetHostOptions): WidgetController {
 
   function syncRenderer() {
     const offline = isOffline();
-    if (widgetUnavailable) {
-      // Disabled/suspended widget: persistent banner, no chat. Takes priority
-      // over the offline banner so the visitor knows the *why*.
-      windowElement.setBanner(WIDGET_UNAVAILABLE_BANNER);
-    } else if (offline) {
-      windowElement.setBanner(OFFLINE_BANNER);
-    } else if (windowElement.currentBanner() === OFFLINE_BANNER) {
-      // Offline cleared: restore the pending error banner so Retry stays available.
-      if (lastError) {
-        windowElement.setBanner(lastError.userMessage, lastError.retryable);
-      } else {
-        windowElement.setBanner(null);
-      }
+    // Audit W-02: banner lifecycle is keyed to the underlying condition. A
+    // dismissed condition stays dismissed for exactly as long as it persists;
+    // changed/cleared conditions expire the dismissal so nothing stale is
+    // suppressed and nothing dismissed resurrects.
+    const cause = currentBannerCause();
+    if (bannerDismissedFor && (!cause || cause.key !== bannerDismissedFor)) {
+      bannerDismissedFor = null;
+    }
+    if (!cause || cause.key === bannerDismissedFor) {
+      windowElement.setBanner(null);
+    } else {
+      windowElement.setBanner(cause.message, cause.retryable);
     }
 
     const state = conversation.getState();
@@ -571,12 +624,23 @@ export function mount(options: WidgetHostOptions): WidgetController {
     // keep the Send button and show the spinner instead.
     windowElement.setStreaming(state.streaming && state.stoppable);
     windowElement.composer.setBusy(state.streaming && !state.stoppable);
-    windowElement.composer.setDisabled(state.streaming || offline || widgetUnavailable);
+    // Audit (composer lockout): the input stays editable while a turn streams
+    // so the visitor can pre-type; it is hard-disabled only when sending is
+    // genuinely impossible (offline / widget unavailable).
+    windowElement.composer.setDisabled(offline || widgetUnavailable);
     windowElement.suggested.hidden = state.messages.some((m) => m.role === 'user');
     if (state.streaming && !prevStreaming) {
       windowElement.setStatus('AI is typing');
     } else if (!state.streaming && prevStreaming) {
-      windowElement.setStatus('');
+      const last = state.messages[state.messages.length - 1];
+      if (last && last.id === lastStreamedTurnId && !last.error && Boolean(last.content)) {
+        // Audit W-12: announce the completed answer (kept partial answers
+        // after Stop included); failed turns are announced by the alert banner.
+        announce(last.content);
+        lastStreamedTurnId = null;
+      } else {
+        windowElement.setStatus('');
+      }
     }
     prevStreaming = state.streaming;
     shell.setAttribute('data-open', String(open));
@@ -593,7 +657,10 @@ export function mount(options: WidgetHostOptions): WidgetController {
     // Force the message list to re-render: the empty state / welcome bubble
     // are built from the config.
     lastRenderedRevision = -1;
-    if (config.auto_open && !prefersReducedMotion()) {
+    // Audit W-04: auto_open is a functional request ("show the dialog"), not
+    // motion — reduced-motion only disables the entrance animation (CSS), it
+    // must not suppress the dialog itself.
+    if (config.auto_open) {
       controller.open();
     }
   }
@@ -672,6 +739,8 @@ export function mount(options: WidgetHostOptions): WidgetController {
       open = false;
       activeAbort?.abort();
       activeAbort = null;
+      detachKeyboardInset();
+      detachSystemTheme();
       if (statusTimer) {
         clearTimeout(statusTimer);
         statusTimer = null;

@@ -65,12 +65,29 @@ function isSafeSourceUrl(href: string): boolean {
   return /^(https?:\/\/|#|\/|mailto:)/i.test(href);
 }
 
+/**
+ * Only http(s) images may ever be assigned to an `img.src` (audit W-22):
+ * `data:`/`blob:`/`javascript:` and protocol-relative URLs are rejected so
+ * tenant-provided brand images cannot become tracking pixels or mixed-content
+ * hazards on HTTPS hosts.
+ */
+export function isSafeImageUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
 /** Heading shown above the citation cards (friendly, not "Sources"). */
 const SOURCES_LABEL = 'Learn more';
 /** Cards visible before the "View all sources" toggle kicks in. */
 const VISIBLE_SOURCES = 3;
 /** Unique `aria-controls` ids for the expandable source lists. */
 let sourceListIdCounter = 0;
+
+/**
+ * Inline citation marker in assistant answers (audit W-09): `[12]` after a
+ * claim refers to the 12th "Learn more" card. Matched as plain text inside
+ * rendered content and upgraded into a button that navigates to the card.
+ */
+const CITATION_MARKER = /\[(\d{1,2})\]/g;
 
 /** Hostname of an http(s) URL, or null when the URL is unparsable/unsafe. */
 function hostOf(url: string): string | null {
@@ -275,6 +292,10 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage, list?: HTMLElemen
   syncSources(bubble, message);
   syncRetry(bubble, message);
 
+  // Inline [n] markers -> clickable citation links (audit W-09), only for
+  // completed answers that actually carry sources.
+  syncCitations(bubble, message);
+
   // Visitor feedback (Phase 12.4): only for completed assistant answers.
   syncFeedback(bubble, message, list);
 }
@@ -390,6 +411,124 @@ function syncRetry(bubble: HTMLElement, message: ChatMessage): void {
 }
 
 /**
+ * Upgrade inline `[n]` citation markers in a completed answer into buttons
+ * that jump to the matching source card (audit W-09). Runs over text nodes
+ * only — markers inside code blocks, links or already-converted chips are left
+ * alone — and is idempotent across the per-frame reconciliation passes.
+ */
+function syncCitations(bubble: HTMLElement, message: ChatMessage): void {
+  if (
+    message.role !== 'assistant' ||
+    message.streaming ||
+    message.thinking ||
+    message.error ||
+    !message.sources?.length
+  ) {
+    return;
+  }
+  const content = bubble.querySelector<HTMLElement>('.wc-bubble-content');
+  if (!content) {
+    return;
+  }
+  // Citations index the *rendered* list, which is deduplicated by URL.
+  const total = deduplicateSources(message.sources).length;
+  if (total === 0) {
+    return;
+  }
+
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+    acceptNode(node: Node): number {
+      const parent = node.parentElement;
+      if (!parent) {
+        return NodeFilter.FILTER_REJECT;
+      }
+      const tag = parent.tagName;
+      if (tag === 'CODE' || tag === 'PRE' || tag === 'A' || tag === 'BUTTON') {
+        return NodeFilter.FILTER_REJECT;
+      }
+      return CITATION_MARKER.test(node.nodeValue ?? '')
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+
+  // Collect first: replacing nodes mutates the tree the walker is iterating.
+  const matches: Text[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    matches.push(node as Text);
+  }
+
+  for (const node of matches) {
+    const text = node.nodeValue ?? '';
+    CITATION_MARKER.lastIndex = 0;
+    let cursor = 0;
+    let replaced = false;
+    const fragment = document.createDocumentFragment();
+    for (let match = CITATION_MARKER.exec(text); match; match = CITATION_MARKER.exec(text)) {
+      const index = Number.parseInt(match[1], 10);
+      if (!Number.isInteger(index) || index < 1 || index > total) {
+        continue; // out-of-range marker stays literal text (defensive)
+      }
+      fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      fragment.appendChild(createCitationLink(index));
+      cursor = match.index + match[0].length;
+      replaced = true;
+    }
+    if (!replaced) {
+      continue;
+    }
+    fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    node.replaceWith(fragment);
+  }
+}
+
+/** A single inline citation chip (`[3]` → button "3"). */
+function createCitationLink(index: number): HTMLElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'wc-citation';
+  button.textContent = String(index);
+  button.setAttribute('aria-label', `Jump to source ${index}`);
+  button.dataset.sourceIndex = String(index);
+  return button;
+}
+
+/**
+ * Navigate from an inline citation chip to its source card: expand a collapsed
+ * "View all sources" list first, then scroll the card into view and flash it.
+ */
+function jumpToSource(citation: HTMLElement): void {
+  const bubble = citation.closest<HTMLElement>('[data-message-id]');
+  const block = bubble?.querySelector<HTMLElement>('.wc-sources');
+  const list = bubble?.querySelector<HTMLElement>('.wc-sources-list');
+  const index = Number.parseInt(citation.dataset.sourceIndex ?? '', 10);
+  if (!block || !list || !Number.isInteger(index) || index < 1) {
+    return;
+  }
+  const cards = Array.from(list.children).filter((element): element is HTMLElement =>
+    element.classList.contains('wc-source-item'),
+  );
+  if (index > cards.length) {
+    return;
+  }
+  if (!block.classList.contains('wc-sources-expanded')) {
+    for (const child of Array.from(block.children)) {
+      if (child.classList.contains('wc-sources-toggle')) {
+        (child as HTMLButtonElement).click();
+        break;
+      }
+    }
+  }
+  const card = cards[index - 1];
+  if (typeof card.scrollIntoView === 'function') {
+    card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+  // Restart the one-shot highlight animation even on repeat clicks.
+  card.classList.remove('wc-source-highlight');
+  void card.offsetWidth;
+  card.classList.add('wc-source-highlight');
+}
+/**
  * Render/update the visitor feedback control under a completed assistant
  * answer. The control is created once per bubble and re-synced on feedback
  * status transitions; the visitor's in-form input is never lost.
@@ -465,7 +604,7 @@ export function createEmptyState(config: WidgetPublicConfig): HTMLElement {
   avatar.className = 'wc-empty-avatar';
   avatar.setAttribute('aria-hidden', 'true');
   const avatarUrl = config.avatar_url || config.logo_url;
-  if (avatarUrl) {
+  if (avatarUrl && isSafeImageUrl(avatarUrl)) {
     const img = document.createElement('img');
     img.className = 'wc-empty-avatar-img';
     img.src = avatarUrl;
@@ -595,6 +734,13 @@ export function wireMessageActions(
       if (code !== undefined) {
         handlers.onCopyCode(code);
       }
+      return;
+    }
+
+    // Inline citation chip -> jump to its "Learn more" card (audit W-09).
+    const citation = target.closest<HTMLButtonElement>('.wc-citation');
+    if (citation) {
+      jumpToSource(citation);
       return;
     }
 

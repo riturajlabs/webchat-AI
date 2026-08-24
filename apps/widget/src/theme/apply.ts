@@ -123,3 +123,26 @@ export function prefersReducedMotion(): boolean {
     typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 }
+
+/**
+ * Re-resolve the theme when the OS light/dark preference changes (audit W-03):
+ * `theme: 'auto'` used to be evaluated exactly once at mount, so flipping the
+ * system theme had no effect until a page reload. Manual `light`/`dark`
+ * overrides are unaffected — `effectiveDarkMode` ignores the system setting
+ * for them, so the extra re-apply is a no-op there.
+ *
+ * Returns a disposer for `destroy()`. Tolerates matchMedia mocks without
+ * listener support (test environments).
+ */
+export function wireSystemThemeChange(
+  host: HTMLElement,
+  getConfig: () => WidgetPublicConfig,
+): () => void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return () => {};
+  }
+  const query = window.matchMedia('(prefers-color-scheme: dark)');
+  const onChange = (): void => applyTheme(host, getConfig());
+  query.addEventListener?.('change', onChange);
+  return () => query.removeEventListener?.('change', onChange);
+}

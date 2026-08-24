@@ -11,7 +11,14 @@ import type { WidgetOptions } from './config/types';
 export { mount } from './core/mount';
 export { autoUpgrade } from './core/embed';
 export type { WidgetController } from './core/mount';
-export type { WidgetOptions } from './config/types';
+export type { SessionManager } from './core/session';
+export type {
+  WidgetOptions,
+  WidgetOverride,
+  WidgetPublicConfig,
+  WidgetPosition,
+} from './config/types';
+export type { ChatMessage, ChatSource, FeedbackState } from './stream/chat';
 
 /**
  * Auto-upgrade from an embed script carrying `data-widget-id`, or mount the

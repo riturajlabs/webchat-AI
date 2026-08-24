@@ -60,18 +60,78 @@ describe('createComposer', () => {
     expect(composer.sendButton.hidden).toBe(false);
   });
 
-  it('setStreaming swaps Send for Stop and disables the input', () => {
+  it('setStreaming swaps Send for Stop but keeps the input editable', () => {
     const { composer } = setup();
     composer.setStreaming(true);
     expect(composer.sendButton.hidden).toBe(true);
     expect(composer.stopButton.hidden).toBe(false);
-    expect(composer.input.disabled).toBe(true);
+    // Audit (composer lockout): the visitor can pre-type while a turn streams.
+    expect(composer.input.disabled).toBe(false);
     expect(document.activeElement).toBe(composer.stopButton);
 
     composer.setStreaming(false);
     expect(composer.sendButton.hidden).toBe(false);
     expect(composer.stopButton.hidden).toBe(true);
-    expect(composer.input.disabled).toBe(false);
+    expect(document.activeElement).toBe(composer.input);
+  });
+
+  it('ignores Enter that confirms an IME composition without swallowing it (W-13)', () => {
+    const { composer, onSend } = setup();
+    composer.input.value = 'こん';
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      isComposing: true,
+      bubbles: true,
+    });
+    const preventDefault = vi.spyOn(composing, 'preventDefault');
+    composer.input.dispatchEvent(composing);
+    // The keypress belongs to the composition: not sent, and not prevented
+    // either (preventing it would break the candidate confirmation).
+    expect(onSend).not.toHaveBeenCalled();
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('ignores legacy keyCode 229 composition Enter (W-13)', () => {
+    const { composer, onSend } = setup();
+    composer.input.value = 'ni hao';
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+    Object.defineProperty(event, 'keyCode', { value: 229 });
+    composer.input.dispatchEvent(event);
+    expect(onSend).not.toHaveBeenCalled();
+
+    // A real Enter (keyCode 13) still sends.
+    const real = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+    Object.defineProperty(real, 'keyCode', { value: 13 });
+    composer.input.dispatchEvent(real);
+    expect(onSend).toHaveBeenCalledWith('ni hao');
+  });
+
+  it('queues a question submitted mid-stream and auto-sends it when the turn completes', () => {
+    const { composer, onSend } = setup();
+    composer.setStreaming(true);
+
+    composer.input.value = 'next question';
+    composer.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    // Buffered, not dropped and not sent into the active stream.
+    expect(onSend).not.toHaveBeenCalled();
+    expect(composer.input.value).toBe('');
+
+    composer.setStreaming(false);
+    expect(onSend).toHaveBeenCalledWith('next question');
+  });
+
+  it('lets the latest draft win when several questions are queued mid-stream', () => {
+    const { composer, onSend } = setup();
+    composer.setStreaming(true);
+
+    composer.input.value = 'first draft';
+    composer.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    composer.input.value = 'second draft';
+    composer.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+
+    composer.setStreaming(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('second draft');
   });
 
   it('returns focus to the input when streaming ends while Stop is focused', () => {
