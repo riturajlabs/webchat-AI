@@ -159,11 +159,14 @@ describe('KnowledgePage', () => {
     expect(screen.getByText('Websites ready')).toBeInTheDocument();
   });
 
-  it('shows an empty state when there are no websites', () => {
+  it('shows the knowledge base setup guide when there are no websites', () => {
     mockWebsites({ data: [] });
     renderPage();
-    expect(screen.getByText('No knowledge yet')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Go to websites' })).toBeInTheDocument();
+    expect(screen.getByText('Build your knowledge base')).toBeInTheDocument();
+    expect(screen.getByText('Add your website URL')).toBeInTheDocument();
+    expect(screen.getByText('Crawl to extract content')).toBeInTheDocument();
+    expect(screen.getByText('AI learns from your content')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add your first website' })).toBeInTheDocument();
   });
 
   it('reveals the per-document status breakdown when opening a website', () => {

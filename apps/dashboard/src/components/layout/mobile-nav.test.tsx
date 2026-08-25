@@ -108,7 +108,10 @@ describe('MobileNav', () => {
     render(<MobileNav />);
     fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
 
-    expect(screen.getByRole('link', { name: 'Websites' })).toHaveAttribute('aria-current', 'page');
+    const activeLink = screen.getByRole('link', { name: 'Websites' });
+    expect(activeLink).toHaveAttribute('aria-current', 'page');
+    expect(activeLink).toHaveClass('border-l-2');
+    expect(activeLink).toHaveClass('bg-primary/10');
     expect(screen.getByRole('link', { name: 'Dashboard' })).not.toHaveAttribute('aria-current');
   });
 

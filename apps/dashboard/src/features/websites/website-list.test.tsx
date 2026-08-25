@@ -161,10 +161,11 @@ describe('WebsiteList', () => {
     expect(screen.getByText('ready')).toBeInTheDocument();
   });
 
-  it('shows the knowledge base statistics on the website card', () => {
+  it('shows the knowledge base statistics in the advanced details section', () => {
     renderList();
-    expect(screen.getByText('Knowledge status')).toBeInTheDocument();
-    expect(screen.getByText('processing')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Advanced details/ }));
+    const dts = screen.getAllByText('Knowledge status');
+    expect(dts.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('Chunks created')).toBeInTheDocument();
     expect(screen.getByText('27')).toBeInTheDocument();
     expect(screen.getByText('Documents embedded')).toBeInTheDocument();

@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useState, type FormEvent } from 'react';
-import { Check, Copy, X } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { Check, Copy, ExternalLink, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ export function AddWebsiteDialog({
   /** When set, the dialog edits this website instead of creating one. */
   website?: Website | null;
 }) {
+  const router = useRouter();
   const createWebsite = useCreateWebsite();
   const updateWebsite = useUpdateWebsite();
   const isEditing = Boolean(website);
@@ -132,7 +134,7 @@ export function AddWebsiteDialog({
             >
               <p className="font-medium text-green-900 dark:text-green-400">Website added</p>
               <p className="text-green-800 dark:text-green-300">
-                Your widget is ready. Paste the embed script below.
+                Next: crawl your site to build the knowledge base, then configure the widget.
               </p>
             </div>
 
@@ -162,9 +164,31 @@ export function AddWebsiteDialog({
               </Button>
             </div>
 
-            <Button type="button" onClick={close} className="mt-2">
-              Done
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                onClick={() => {
+                  close();
+                  router.push('/knowledge');
+                }}
+                className="flex-1"
+              >
+                Start Crawl
+                <ExternalLink className="size-4" aria-hidden="true" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  close();
+                  router.push('/widget');
+                }}
+                className="flex-1"
+              >
+                Configure Widget
+                <ExternalLink className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
           </div>
         ) : (
           <form onSubmit={(event) => void handleSubmit(event)} className="flex flex-col gap-4">

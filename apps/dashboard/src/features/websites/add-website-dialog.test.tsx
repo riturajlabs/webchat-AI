@@ -6,6 +6,10 @@ import { AddWebsiteDialog } from './add-website-dialog';
 import { useCreateWebsite, useUpdateWebsite } from './hooks';
 import type { CreateWebsiteResponse, Website } from './types';
 
+vi.mock('next/navigation', () => ({
+  useRouter: vi.fn(() => ({ push: vi.fn() })),
+}));
+
 vi.mock('./hooks', () => ({
   useCreateWebsite: vi.fn(),
   useUpdateWebsite: vi.fn(),
@@ -89,7 +93,7 @@ describe('AddWebsiteDialog', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('creates a website and shows the embed script', async () => {
+  it('creates a website and shows next actions', async () => {
     render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Acme Inc' } });
@@ -103,6 +107,8 @@ describe('AddWebsiteDialog', () => {
     });
     expect(screen.queryByText('secret-abc-123')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Embed script')).toHaveValue(CREATE_RESPONSE.embed_script);
+    expect(screen.getByRole('button', { name: 'Start Crawl' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Configure Widget' })).toBeInTheDocument();
   });
 
   it('copies the embed script when requested', async () => {

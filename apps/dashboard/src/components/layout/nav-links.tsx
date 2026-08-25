@@ -40,8 +40,8 @@ export function NavLinks({
                   className={cn(
                     'flex items-center gap-3 rounded-md px-3 py-3 text-sm transition-colors',
                     active
-                      ? 'bg-primary font-medium text-primary-foreground'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      ? 'border-l-2 border-primary bg-primary/10 font-medium text-primary'
+                      : 'border-l-2 border-transparent text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                   )}
                 >
                   <Icon className="size-4" aria-hidden="true" />

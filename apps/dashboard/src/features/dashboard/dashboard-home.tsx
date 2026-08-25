@@ -4,28 +4,21 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Bot,
-  Circle,
-  CircleCheckBig,
-  CircleX,
   Database,
   Globe,
   LibraryBig,
-  Loader2,
   MessagesSquare,
   Plus,
-  Server,
   SlidersHorizontal,
 } from 'lucide-react';
 
 import { useAuth } from '@/features/auth/auth-context';
-import { useSystemStatus } from '@/features/dashboard/use-system-status';
+import { OnboardingChecklist } from '@/features/dashboard/onboarding-checklist';
 import { StatusBadge } from '@/features/websites/status-badge';
 import { useWebsites } from '@/features/websites/hooks';
 import type { Website } from '@/features/websites/types';
 import { useUsage } from '@/features/usage/hooks';
 import { useConversations } from '@/features/conversations/hooks';
-import { useWidgetConfig } from '@/features/widget/hooks';
-import type { WidgetConfig } from '@/features/widget/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -42,109 +35,6 @@ function formatDate(value: string | null): string {
     return '—';
   }
   return date.toLocaleDateString(undefined, { timeZone: 'UTC' });
-}
-
-function isWidgetCustomized(widget: WidgetConfig | undefined): boolean {
-  if (!widget) {
-    return false;
-  }
-  return (
-    widget.theme_preset !== '' ||
-    widget.welcome_message.trim().length > 0 ||
-    widget.suggested_questions.length > 0 ||
-    widget.logo_url !== null ||
-    widget.avatar_url !== null ||
-    widget.header_color !== null ||
-    widget.background_color !== null
-  );
-}
-
-const CHECKLIST_STEPS = [
-  { label: 'Create website', href: '/websites' },
-  { label: 'Crawl knowledge base', href: '/knowledge' },
-  { label: 'Customize widget', href: '/widget' },
-  { label: 'Install widget', href: '/widget' },
-  { label: 'Test chatbot', href: '/conversations' },
-] as const;
-
-function OnboardingChecklist({ done }: { done: boolean[] }) {
-  const completed = done.filter(Boolean).length;
-  const percent = Math.round((completed / CHECKLIST_STEPS.length) * 100);
-  const nextIndex = done.findIndex((stepDone) => !stepDone);
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-        <div>
-          <CardTitle>Getting started</CardTitle>
-          <CardDescription>
-            {completed === CHECKLIST_STEPS.length
-              ? 'All set — your assistant is live.'
-              : `${completed} of ${CHECKLIST_STEPS.length} steps complete`}
-          </CardDescription>
-        </div>
-        <span className="text-sm font-medium text-muted-foreground">{percent}%</span>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent}
-          aria-valuetext={`${completed} of ${CHECKLIST_STEPS.length} setup steps complete`}
-          aria-label="Setup progress"
-          className="h-2 w-full overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full rounded-full bg-blue-600 transition-all"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
-        <ol aria-label="Setup steps" className="flex flex-col divide-y">
-          {CHECKLIST_STEPS.map(({ label, href }, index) => {
-            const stepDone = done[index] ?? false;
-            const isNext = index === nextIndex;
-            return (
-              <li key={label} className="flex items-center justify-between gap-3 py-2.5">
-                <span className="flex min-w-0 items-center gap-2.5 text-sm">
-                  {stepDone ? (
-                    <CircleCheckBig
-                      className="size-4 shrink-0 text-blue-600 dark:text-blue-400"
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <Circle className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  )}
-                  <span className={stepDone ? 'text-muted-foreground line-through' : 'font-medium'}>
-                    {label}
-                  </span>
-                  {isNext ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                      <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
-                      Up next
-                    </span>
-                  ) : null}
-                </span>
-                {!stepDone ? (
-                  <Button
-                    asChild
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 text-blue-600 dark:text-blue-400"
-                  >
-                    <Link href={href}>
-                      Open
-                      <span className="sr-only">{label}</span>
-                    </Link>
-                  </Button>
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
-      </CardContent>
-    </Card>
-  );
 }
 
 const QUICK_ACTIONS = [
@@ -188,11 +78,9 @@ export function DashboardHome() {
   const { data: websitesData, isPending, isError, error, refetch } = useWebsites();
 
   const websites: Website[] = websitesData ?? [];
-  const firstWebsiteId = websites[0]?.id ?? null;
 
   const { data: usageData } = useUsage();
   const { data: conversationsData } = useConversations({ page: 1, perPage: 1 });
-  const { data: widgetResponse } = useWidgetConfig(firstWebsiteId);
 
   const totalChunks = websites.reduce((sum, site) => sum + site.knowledge_chunks, 0);
   const totalDocuments = websites.reduce((sum, site) => sum + site.knowledge_documents, 0);
@@ -245,12 +133,10 @@ export function DashboardHome() {
     },
   ];
 
-  const checklistDone = [
-    websites.length > 0,
-    totalDocuments > 0 || totalPages > 0,
-    isWidgetCustomized(widgetResponse?.widget),
-    (conversationCount ?? 0) > 0,
-    (messagesSent ?? 0) > 0,
+  const checklistSteps = [
+    { label: 'Add website', href: '/websites', done: websites.length > 0 },
+    { label: 'Crawl knowledge', href: '/knowledge', done: totalDocuments > 0 || totalPages > 0 },
+    { label: 'Install widget', href: '/widget', done: websites.some((s) => s.status === 'ready') },
   ];
 
   return (
@@ -296,7 +182,7 @@ export function DashboardHome() {
 
       {!isPending && !isError ? (
         <>
-          <OnboardingChecklist done={checklistDone} />
+          <OnboardingChecklist steps={checklistSteps} />
 
           <section aria-label="Product overview">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -335,7 +221,6 @@ export function DashboardHome() {
                   onAction={() => router.push('/websites')}
                 />
               )}
-              <SystemStatusCard />
             </div>
             <div className="flex flex-col gap-4">
               <QuickActions />
@@ -408,58 +293,6 @@ function CrawlStatusCard({
           <p className="text-2xl font-bold tracking-tight">{failed}</p>
           <p className="text-xs text-muted-foreground">Failed</p>
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function SystemStatusCard() {
-  const { data, isPending, isError, refetch } = useSystemStatus();
-
-  const checks = [
-    { label: 'API', ok: !isError, icon: Server },
-    { label: 'Database', ok: data?.checks.database ?? false, icon: Database },
-    { label: 'Redis', ok: data?.checks.redis ?? false, icon: Globe },
-  ];
-
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-        <div>
-          <CardTitle>System status</CardTitle>
-          <CardDescription>Backend dependency health.</CardDescription>
-        </div>
-        {isPending ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}
-      </CardHeader>
-      <CardContent>
-        <ul role="status" aria-label="System health" className="flex flex-col gap-2">
-          {checks.map(({ label, ok, icon: Icon }) => (
-            <li key={label} className="flex items-center justify-between text-sm">
-              <span className="inline-flex items-center gap-2 text-muted-foreground">
-                <Icon className="size-4" aria-hidden="true" />
-                {label}
-              </span>
-              {isPending ? (
-                <Skeleton className="h-4 w-16" />
-              ) : ok ? (
-                <span className="inline-flex items-center gap-1 text-green-700 dark:text-green-400">
-                  <CircleCheckBig className="size-4" aria-hidden="true" />
-                  OK
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-destructive">
-                  <CircleX className="size-4" aria-hidden="true" />
-                  Down
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-        {isError ? (
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => void refetch()}>
-            Retry
-          </Button>
-        ) : null}
       </CardContent>
     </Card>
   );

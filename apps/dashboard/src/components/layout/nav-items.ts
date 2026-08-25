@@ -12,6 +12,7 @@ import {
   MessagesSquare,
   Puzzle,
   Receipt,
+  Rocket,
   Settings,
   ShieldCheck,
 } from 'lucide-react';
@@ -32,6 +33,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/usage', label: 'Usage', icon: CreditCard },
   { href: '/billing', label: 'Billing', icon: Receipt },
+  { href: '/widget/setup', label: 'Setup Assistant', icon: Rocket },
   { href: '/widget', label: 'Widget', icon: Puzzle },
   { href: '/widget-test', label: 'Widget Test', icon: FlaskConical },
   { href: '/api-keys', label: 'API Keys', icon: KeyRound },
@@ -54,15 +56,15 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     label: 'Assistant',
-    items: [NAV_ITEMS[7], NAV_ITEMS[8]],
+    items: [NAV_ITEMS[7], NAV_ITEMS[8], NAV_ITEMS[9]],
   },
   {
     label: 'Account',
-    items: [NAV_ITEMS[5], NAV_ITEMS[6], NAV_ITEMS[9], NAV_ITEMS[10], NAV_ITEMS[11], NAV_ITEMS[12]],
+    items: [NAV_ITEMS[5], NAV_ITEMS[6], NAV_ITEMS[10], NAV_ITEMS[11], NAV_ITEMS[12], NAV_ITEMS[13]],
   },
   {
     label: 'Platform',
-    items: [NAV_ITEMS[13]],
+    items: [NAV_ITEMS[14]],
   },
 ];
 

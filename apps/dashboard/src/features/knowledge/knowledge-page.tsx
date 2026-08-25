@@ -8,7 +8,6 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -306,12 +305,49 @@ export function KnowledgePage() {
           </div>
 
           {websites.length === 0 ? (
-            <EmptyState
-              title="No knowledge yet"
-              description="Add a website and run a crawl to start building its knowledge base."
-              actionLabel="Go to websites"
-              onAction={() => router.push('/websites')}
-            />
+            <Card>
+              <CardContent className="flex flex-col items-center gap-6 py-12 text-center">
+                <div className="flex flex-col items-center gap-2">
+                  <h3 className="text-lg font-semibold">Build your knowledge base</h3>
+                  <p className="max-w-md text-sm text-muted-foreground">
+                    Your AI assistant learns from your website content. Add a website and run a
+                    crawl to get started.
+                  </p>
+                </div>
+
+                <ol className="flex w-full max-w-md flex-col gap-3 text-left">
+                  {[
+                    {
+                      step: 1,
+                      label: 'Add your website URL',
+                      desc: 'Tell us which site to index.',
+                    },
+                    {
+                      step: 2,
+                      label: 'Crawl to extract content',
+                      desc: 'We fetch pages and extract text automatically.',
+                    },
+                    {
+                      step: 3,
+                      label: 'AI learns from your content',
+                      desc: 'Chunks are embedded so your assistant can answer questions.',
+                    },
+                  ].map(({ step, label, desc }) => (
+                    <li key={step} className="flex items-start gap-3">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                        {step}
+                      </span>
+                      <div>
+                        <p className="text-sm font-medium">{label}</p>
+                        <p className="text-xs text-muted-foreground">{desc}</p>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+
+                <Button onClick={() => router.push('/websites')}>Add your first website</Button>
+              </CardContent>
+            </Card>
           ) : (
             <Card>
               <CardHeader>

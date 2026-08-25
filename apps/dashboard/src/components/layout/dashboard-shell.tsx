@@ -8,6 +8,7 @@ import { useState } from 'react';
 import { useAuth } from '@/features/auth/auth-context';
 import { VerificationReminder } from '@/features/auth/verification-reminder';
 import { Button } from '@/components/ui/button';
+import { CrawlStatusBanner } from '@/components/layout/crawl-status-banner';
 import { MobileNav } from '@/components/layout/mobile-nav';
 import { NavLinks } from '@/components/layout/nav-links';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
@@ -66,6 +67,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
         <VerificationReminder />
+        <CrawlStatusBanner />
         <div className="flex-1 overflow-y-auto px-4 py-8 md:px-10">{children}</div>
       </main>
     </div>
