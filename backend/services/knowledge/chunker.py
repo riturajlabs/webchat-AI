@@ -8,6 +8,7 @@ boundaries. Defaults follow the TRD: 500-800 tokens per chunk with a 100-token
 overlap (ADR-008, Phase 5).
 """
 
+import bisect
 import re
 from dataclasses import dataclass
 
@@ -25,6 +26,10 @@ _BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|\n\s*\n")
 # token-reconstructed chunk reads naturally ("only ." -> "only.").
 _CLOSING_PUNCT_RE = re.compile(r"\s+([.,!?;:)%\"'\]}])")
 
+# Markdown-style heading line emitted by the HTML cleaner (audit R-08):
+# `#`..`######` followed by the heading text.
+_HEADING_LINE_RE = re.compile(r"^ {0,3}(#{1,6})\s+(\S.*?)\s*#*\s*$")
+
 
 def _join_tokens(tokens: list[str]) -> str:
     """Join tokenized words/punctuation into natural text."""
@@ -38,6 +43,9 @@ class TextChunk:
     index: int
     text: str
     tokens: int
+    # Nearest heading at or above this chunk's start (audit R-08). `None`
+    # when no heading precedes the chunk in the source document.
+    heading: str | None = None
 
 
 def count_tokens(text: str) -> int:
@@ -45,6 +53,56 @@ def count_tokens(text: str) -> int:
     if not text:
         return 0
     return len(_TOKEN_RE.findall(text))
+
+
+def _heading_index(text: str) -> tuple[list[int], list[int], list[str]]:
+    """Map token positions to heading lines for nearest-heading lookups.
+
+    Returns parallel lists sorted by position: token positions of each
+    heading's first content token (right after its single `#`-run marker),
+    token positions of each `#`-run marker itself, and the heading texts.
+    Marker positions double as preferred chunk split points so a section
+    heading leads the chunk that follows it.
+    """
+    positions: list[int] = []
+    markers: list[int] = []
+    headings: list[str] = []
+    offset = 0
+    for line in text.split("\n"):
+        line_tokens = len(_TOKEN_RE.findall(line))
+        match = _HEADING_LINE_RE.match(line)
+        if match is not None and line_tokens > 1:
+            positions.append(offset + 1)
+            markers.append(offset)
+            headings.append(match.group(2).strip())
+        offset += line_tokens
+    return positions, markers, headings
+
+
+def _resolve_heading(
+    positions: list[int],
+    markers: list[int],
+    headings: list[str],
+    start: int,
+    end: int,
+) -> str | None:
+    """Heading in effect for the token range `[start, end)`.
+
+    Normally the last heading at-or-before the chunk start. When the chunk
+    opens exactly at a section heading, or opens a document/section with the
+    first heading beginning inside it, that heading is attributed instead so
+    the section's first chunk still carries its context.
+    """
+    for i, marker in enumerate(markers):
+        if marker == start:
+            return headings[i]
+    idx = bisect.bisect_right(positions, start) - 1
+    if idx >= 0:
+        return headings[idx]
+    for i, marker in enumerate(markers):
+        if start < marker < end:
+            return headings[i]
+    return None
 
 
 def _iter_boundaries(tokens: list[str], start: int, end: int) -> list[int]:
@@ -92,6 +150,10 @@ def chunk_text(
     if not tokens:
         return []
 
+    # Audit R-08: track the nearest preceding heading so each chunk can carry
+    # its section context into metadata without any schema change.
+    heading_positions, marker_positions, heading_texts = _heading_index(text or "")
+
     chunks: list[TextChunk] = []
     start = 0
     index = 0
@@ -101,11 +163,26 @@ def chunk_text(
         preferred = _iter_boundaries(tokens, start, end)
         # The final window consumes everything: a boundary cut there would
         # strand tiny fragments behind it (and can stall the window).
-        cut = end if end == len(tokens) else (preferred[-1] if preferred else end)
+        if end == len(tokens):
+            cut = end
+        else:
+            # A section heading inside the window is the strongest cut point:
+            # the next chunk then opens with its own heading (audit R-08).
+            marker_cuts = [p for p in marker_positions if start < p < end]
+            cut = marker_cuts[-1] if marker_cuts else (preferred[-1] if preferred else end)
         chunk_tokens = tokens[start:cut]
         chunk = _join_tokens(chunk_tokens).strip()
         if chunk:
-            chunks.append(TextChunk(index=index, text=chunk, tokens=len(chunk_tokens)))
+            chunks.append(
+                TextChunk(
+                    index=index,
+                    text=chunk,
+                    tokens=len(chunk_tokens),
+                    heading=_resolve_heading(
+                        heading_positions, marker_positions, heading_texts, start, cut
+                    ),
+                )
+            )
             index += 1
         if cut == len(tokens):
             break

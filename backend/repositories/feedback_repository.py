@@ -13,6 +13,7 @@ from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import DESCENDING
+from pymongo.errors import DuplicateKeyError
 
 from backend.models.feedback import FEEDBACK_MAX_RATING, Feedback
 
@@ -69,7 +70,18 @@ class MongoFeedbackRepository:
         self._collection = db["feedback"]
 
     async def create(self, feedback: Feedback) -> None:
-        await self._collection.insert_one(feedback.to_doc())
+        """Insert one rating; idempotent on the unique (tenant_id, message_id) index.
+
+        A concurrent duplicate submit (the TOCTOU window between the service's
+        `find_by_message` dedup check and this insert) loses the race here as
+        a `DuplicateKeyError`. Swallowing it keeps `create` an idempotent
+        success — "a message is rated at most once" means the loser already
+        got what it asked for. pymongo stays confined to the repository layer.
+        """
+        try:
+            await self._collection.insert_one(feedback.to_doc())
+        except DuplicateKeyError:
+            return
 
     async def find_by_message(self, tenant_id: str, message_id: str) -> Feedback | None:
         doc = await self._collection.find_one({"tenant_id": tenant_id, "message_id": message_id})

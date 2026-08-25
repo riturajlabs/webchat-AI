@@ -61,6 +61,26 @@ async def enqueue_process_website_documents(website_id: str) -> None:
     await _arq_redis().enqueue_job("process_website_documents", website_id)
 
 
+def _build_cache() -> Any:
+    """Build the retrieval CacheStore (same namespace convention as crawl).
+
+    Audit R-03: the API writes retrieval answers under
+    `{redis_prefix}:rag:...`, so invalidation after successful processing must
+    target that exact namespace. Best-effort: a Redis outage disables only the
+    post-processing invalidation, never embedding itself.
+    """
+    try:
+        from redis.asyncio import Redis as _Redis
+
+        from backend.core.cache import RedisCacheStore
+
+        redis = _Redis.from_url(get_settings().redis_url, decode_responses=True)
+        return RedisCacheStore(redis, prefix=f"{get_settings().redis_prefix}:rag")
+    except Exception:
+        logger.warning("Could not build cache for knowledge invalidation", exc_info=True)
+        return None
+
+
 def _processor(ctx: dict[str, Any], embedder: EmbeddingClient) -> KnowledgeProcessor:
     db = MongoDB.db()
     return KnowledgeProcessor(
@@ -71,6 +91,7 @@ def _processor(ctx: dict[str, Any], embedder: EmbeddingClient) -> KnowledgeProce
         audit=MongoAuditLogRepository(db),
         embedder=embedder,
         usage=MongoUsageRecordRepository(db),
+        cache=ctx.get("retrieval_cache") or _build_cache(),
     )
 
 

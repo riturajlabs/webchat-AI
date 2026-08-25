@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CHAT_CONNECT_TIMEOUT_MS, streamChat } from './client';
+import {
+  BACKEND_GENERATION_TIMEOUT_MS,
+  CHAT_CONNECT_TIMEOUT_MS,
+  CHAT_STALL_TIMEOUT_MS,
+  streamChat,
+} from './client';
 import type { SessionToken } from '../core/session';
 
 const API_BASE = 'http://api.example.com/api/widget/v1';
@@ -80,6 +85,115 @@ describe('streamChat', () => {
     );
   });
 
+  // -- Phase 2 tracing: X-Request-ID ---------------------------------------
+
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  type MockFetch = { mock: { calls: unknown[][] } };
+
+  function sentHeaders(fetchImpl: MockFetch, call = 0): Record<string, string> {
+    const init = fetchImpl.mock.calls[call][1] as RequestInit;
+    return init.headers as Record<string, string>;
+  }
+
+  it('sends a UUID X-Request-ID header and echoes it on the result', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse([]));
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    const header = sentHeaders(fetchImpl)['X-Request-ID'];
+    expect(header).toMatch(UUID_RE);
+    expect(result.requestId).toBe(header);
+  });
+
+  it('generates a fresh request id per turn (never reused)', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse([]));
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const first = await streamChat(OPTIONS, { question: 'q1' }, h, client, fetchImpl);
+    const second = await streamChat(OPTIONS, { question: 'q2' }, h, client, fetchImpl);
+    expect(first.requestId).not.toBe(second.requestId);
+  });
+
+  it('reuses one request id across the 401 re-mint retry', async () => {
+    let call = 0;
+    const fetchImpl = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return new Response('unauthorized', { status: 401 });
+      }
+      return sseResponse(['event: done\ndata: {"session_id":"s2"}\n\n']);
+    });
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sentHeaders(fetchImpl, 0)['X-Request-ID']).toBe(result.requestId);
+    expect(sentHeaders(fetchImpl, 1)['X-Request-ID']).toBe(result.requestId);
+  });
+
+  it('attaches the backend-echoed request id from SSE error frames', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: error\ndata: {"code":"GENERATION_FAILED","message":"boom","request_id":"rid-backend"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onError.mock.calls[0][0].requestId).toBe('rid-backend');
+    expect(result.error?.requestId).toBe('rid-backend');
+    // The turn-level correlation id stays the widget-generated one.
+    expect(result.requestId).toMatch(UUID_RE);
+  });
+
+  it('carries the failed done frame request id onto the error', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: done\ndata: {"status":"failed","code":"AI_UNAVAILABLE","request_id":"rid-done"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onError.mock.calls[0][0].requestId).toBe('rid-done');
+  });
+
+  it('attaches the generated request id to pre-stream/network failures', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError('network down');
+    });
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('network');
+    expect(result.error?.requestId).toBe(result.requestId);
+    expect(result.requestId).toMatch(UUID_RE);
+  });
+
   it('re-mints the token and retries exactly once on a 401', async () => {
     let call = 0;
     const fetchImpl = vi.fn(async () => {
@@ -127,6 +241,85 @@ describe('streamChat', () => {
     expect(result.completed).toBe(false);
     expect(result.error?.code).toBe('invalid');
     expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'invalid' }));
+    expect(h.onDone).not.toHaveBeenCalled();
+  });
+
+  it('treats a legacy done event without status as success (backward compatible)', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse(['event: done\ndata: {"session_id":"s1","message_id":"m1"}\n\n']),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.done?.session_id).toBe('s1');
+    expect(h.onDone).toHaveBeenCalledTimes(1);
+    expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('completes successfully on done with status completed', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"Hi"}\n\n',
+        'event: done\ndata: {"status":"completed","session_id":"s1"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    expect(result.completed).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(h.onDone).toHaveBeenCalledTimes(1);
+    expect(h.onDone.mock.calls[0][0].status).toBe('completed');
+    expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('reports failure exactly once when error is followed by the failed terminal done', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"par"}\n\n',
+        'event: error\ndata: {"code":"GENERATION_FAILED","message":"provider down"}\n\n',
+        'event: done\ndata: {"status":"failed","code":"GENERATION_FAILED","message":"provider down"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('ai_unavailable');
+    // One failure transition only: the trailing failed done must not
+    // produce a duplicate onError (no double error banner in the UI).
+    expect(h.onError).toHaveBeenCalledTimes(1);
+    expect(h.onDone).not.toHaveBeenCalled();
+  });
+
+  it('maps a standalone failed-status done onto the error path', async () => {
+    const fetchImpl = vi.fn(async () =>
+      sseResponse([
+        'event: message\ndata: {"delta":"par"}\n\n',
+        'event: done\ndata: {"status":"failed","code":"MESSAGE_LIMIT_REACHED","message":"cap hit"}\n\n',
+      ]),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+
+    expect(result.completed).toBe(false);
+    expect(result.error?.code).toBe('limit');
+    expect(h.onError).toHaveBeenCalledTimes(1);
     expect(h.onDone).not.toHaveBeenCalled();
   });
 
@@ -292,6 +485,49 @@ describe('streamChat', () => {
     expect(result.aborted).toBe(true);
     expect(result.error).toBeUndefined();
     expect(h.onError).not.toHaveBeenCalled();
+  });
+
+  it('ends a turn with a retryable timeout when an established stream stalls', async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(encoder.encode('event: message\ndata: {"delta":"par"}\n\n'));
+              // No further chunks and no FIN: a dead/stalled connection.
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+        ),
+    );
+    const h = handlers();
+    const client = {
+      getToken: vi.fn(async () => sessionToken('tok-1')),
+      reissueToken: vi.fn(async () => sessionToken('tok-2')),
+    };
+    const resultPromise = streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
+    // Attach the rejection handler before the watchdog fires so the rejection
+    // is never unhandled while fake timers advance.
+    const stallAssertion = expect(resultPromise).rejects.toMatchObject({
+      code: 'timeout',
+      retryable: true,
+      message: 'Stream stalled',
+    });
+    await vi.advanceTimersByTimeAsync(CHAT_STALL_TIMEOUT_MS);
+    await stallAssertion;
+    // The partial delta delivered before the stall is not lost.
+    expect(h.onDelta).toHaveBeenCalledWith('par');
+  });
+
+  it('aligns the stall watchdog with the backend generation guard (audit S-16)', () => {
+    // The widget must out-wait the backend's own per-chunk guard so the
+    // server's error frame - not a client race - ends a slow generation.
+    expect(CHAT_STALL_TIMEOUT_MS).toBe(45 * 1000);
+    expect(CHAT_STALL_TIMEOUT_MS).toBeGreaterThan(BACKEND_GENERATION_TIMEOUT_MS);
+    // Backend production value: GENERATION_TIMEOUT_SECONDS=30 (config.py).
+    expect(BACKEND_GENERATION_TIMEOUT_MS).toBe(30 * 1000);
   });
 
   it('includes timing measurements in StreamResult', async () => {

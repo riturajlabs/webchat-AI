@@ -57,6 +57,45 @@ def test_context_coverage_url_in_answer() -> None:
     assert q.context_coverage == 0.5  # only 1 of 2 URLs matched
 
 
+def test_context_coverage_citation_markers() -> None:
+    """Production answers cite via [N]; coverage counts distinct valid cites."""
+    srcs = [
+        SourceInfo(url="https://a.com", title="A", score=0.9),
+        SourceInfo(url="https://b.com", title="B", score=0.8),
+    ]
+    q = evaluate_quality(answer="Details here [1].", sources=srcs)
+    assert q.context_coverage == 0.5
+
+
+def test_context_coverage_all_sources_cited() -> None:
+    srcs = [
+        SourceInfo(url="https://a.com", title="A", score=0.9),
+        SourceInfo(url="https://b.com", title="B", score=0.8),
+        SourceInfo(url="https://c.com", title="C", score=0.7),
+    ]
+    q = evaluate_quality(answer="One [1], two [2], three [3].", sources=srcs)
+    assert q.context_coverage == 1.0
+
+
+def test_context_coverage_out_of_range_citations_ignored() -> None:
+    """[7] points past the source list — a hallucinated reference."""
+    srcs = [
+        SourceInfo(url="https://a.com", title="A", score=0.9),
+        SourceInfo(url="https://b.com", title="B", score=0.8),
+    ]
+    q = evaluate_quality(answer="See [1] and [7].", sources=srcs)
+    assert q.context_coverage == 0.5
+
+
+def test_context_coverage_duplicate_citations_counted_once() -> None:
+    srcs = [
+        SourceInfo(url="https://a.com", title="A", score=0.9),
+        SourceInfo(url="https://b.com", title="B", score=0.8),
+    ]
+    q = evaluate_quality(answer="[1] and [1] again [2].", sources=srcs)
+    assert q.context_coverage == 1.0
+
+
 def test_context_coverage_title_in_answer() -> None:
     srcs = [
         SourceInfo(url="https://a.com/x", title="Pricing Page", score=0.9),
@@ -191,7 +230,9 @@ def test_full_quality_assessment() -> None:
     q = evaluate_quality(answer=answer, sources=srcs)
     assert q.retrieved_chunk_count == 2
     assert q.avg_relevance_score == 0.9
-    assert q.context_coverage == 0.5  # only FAQ URL present
+    # Both sources are used: [1] cites Pricing, the FAQ URL appears in text,
+    # and [2] cites FAQ — distinct valid citations cover every source.
+    assert q.context_coverage == 1.0
     assert q.is_empty is False
     assert q.is_truncated is False
     assert q.citation_count == 2

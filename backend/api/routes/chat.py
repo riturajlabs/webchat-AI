@@ -32,7 +32,7 @@ from backend.api.deps import (
     get_usage_service,
     require_principal_role,
 )
-from backend.api.sse import stream_answer_with_usage
+from backend.api.sse import ensure_terminal_done, stream_answer_with_usage
 from backend.core.config import get_settings
 from backend.schemas.chat import ChatRequest
 from backend.services.api_keys import ApiKeyPrincipal
@@ -69,13 +69,15 @@ async def stream_chat(
         buffer_ms = get_settings().sse_buffer_ms
         async for frame in stream_answer_with_usage(
             request,
-            service.stream_answer(
-                tenant_id=principal.tenant_id,
-                website_id=body.website_id,
-                question=body.question,
-                session_id=body.session_id,
-                visitor_id=body.visitor_id,
-                user_id=principal.user_id,
+            ensure_terminal_done(
+                service.stream_answer(
+                    tenant_id=principal.tenant_id,
+                    website_id=body.website_id,
+                    question=body.question,
+                    session_id=body.session_id,
+                    visitor_id=body.visitor_id,
+                    user_id=principal.user_id,
+                )
             ),
             usage=usage,
             tenant_id=principal.tenant_id,

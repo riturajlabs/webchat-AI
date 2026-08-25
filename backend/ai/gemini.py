@@ -85,6 +85,11 @@ class GoogleGeminiClient:
     def usage(self) -> GenerationUsage:
         return self._usage
 
+    @property
+    def model_name(self) -> str:
+        """Model id used for generation (rate-card key, Phase 1 cost tracking)."""
+        return self._model
+
     def _client(self) -> Any:
         """Lazily build the SDK client (never touches network until first call)."""
         if self._genai_client is None:

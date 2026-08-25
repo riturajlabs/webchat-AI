@@ -306,6 +306,77 @@ async def test_delete_website_cascades_widget_and_audits() -> None:
     assert env.audit.logs[-1].action == AUDIT_WEBSITE_DELETED
 
 
+async def test_delete_website_purges_documents_and_vectors() -> None:
+    """Audit R-02/A-06: deleting a website drops its pages and embedded chunks."""
+    from backend.models.document import Document
+    from backend.models.knowledge_chunk import KnowledgeChunk
+    from backend.services.website import WebsiteService
+
+    from tests.fakes import (
+        FakeAuditLogRepository,
+        FakeDocumentRepository,
+        FakeVectorRepository,
+        FakeWebsiteRepository,
+        FakeWidgetRepository,
+    )
+
+    websites = FakeWebsiteRepository()
+    widgets = FakeWidgetRepository()
+    audit = FakeAuditLogRepository()
+    documents = FakeDocumentRepository()
+    vector = FakeVectorRepository()
+    service = WebsiteService(
+        websites=websites,
+        widgets=widgets,
+        audit=audit,
+        documents=documents,
+        vector=vector,
+    )
+    principal = make_principal()
+    created = await service.create_website(
+        principal=principal, name="A", url="https://a.example", ip_address=None, user_agent=None
+    )
+    document = Document.new(
+        tenant_id=principal.tenant_id,
+        website_id=created.website.id,
+        url="https://a.example/page",
+        title="Page",
+        content="page content",
+        checksum="c" * 64,
+    )
+    await documents.upsert(document)
+    await vector.insert_chunks(
+        [
+            KnowledgeChunk.new(
+                tenant_id=principal.tenant_id,
+                website_id=created.website.id,
+                document_id=document.id,
+                chunk_text="page content",
+                embedding=[0.5, 0.5, 0.5, 0.5],
+                chunk_index=0,
+            )
+        ]
+    )
+    # A different tenant's corpus must be untouched by the cascade.
+    other_doc = Document.new(
+        tenant_id="tenant-b",
+        website_id="site-b",
+        url="https://b.example/page",
+        title="Other",
+        content="other content",
+        checksum="d" * 64,
+    )
+    await documents.upsert(other_doc)
+
+    await service.delete_website(
+        principal=principal, website_id=created.website.id, ip_address=None, user_agent=None
+    )
+
+    assert await documents.list_by_website(principal.tenant_id, created.website.id) == []
+    assert await vector.list_chunks(principal.tenant_id, created.website.id) == []
+    assert await documents.find_by_id("tenant-b", other_doc.id) is not None
+
+
 async def test_delete_website_hides_it_from_list_and_get() -> None:
     env = build_website_env()
     principal = make_principal()

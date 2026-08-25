@@ -279,6 +279,10 @@ class MongoDB:
         await db["messages"].create_index("tenant_id")
         await db["messages"].create_index("session_id")
         await db["messages"].create_index([("tenant_id", 1), ("session_id", 1), ("created_at", 1)])
+        # Audit A-01: dashboard analytics aggregate on (tenant_id, role,
+        # created_at); without this compound the $match filters role/date in
+        # memory over the single-field tenant index.
+        await db["messages"].create_index([("tenant_id", 1), ("role", 1), ("created_at", 1)])
         await db["messages"].create_index("created_at", expireAfterSeconds=_messages_ttl_seconds())
         await db["usage_records"].create_index(
             [("tenant_id", 1), ("website_id", 1), ("date", 1)], unique=True
@@ -308,6 +312,9 @@ class MongoDB:
         await db["feedback"].create_index("tenant_id")
         await db["feedback"].create_index([("tenant_id", 1), ("created_at", -1)])
         await db["feedback"].create_index("rating")
+        await db["feedback"].create_index(
+            [("tenant_id", 1), ("message_id", 1)], unique=True, name="uniq_tenant_message"
+        )
         await db["feedback"].create_index("created_at", expireAfterSeconds=_FEEDBACK_TTL_SECONDS)
 
     @classmethod

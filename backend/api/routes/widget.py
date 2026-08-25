@@ -26,19 +26,22 @@ from backend.api.deps import (
     get_rag_service,
     get_usage_service,
     get_widget_service,
+    widget_chat_ip_limiter,
     widget_chat_limiter,
     widget_claims_origin_guard,
     widget_config_origin_guard,
     widget_feedback_limiter,
     widget_ip_limiter,
     widget_session_claims,
+    widget_session_ip_limiter,
     widget_session_issue_limiter,
     widget_session_origin_guard,
     widget_visitor_limiter,
 )
-from backend.api.sse import sse, stream_answer_with_usage
+from backend.api.sse import ensure_terminal_done, sse, stream_answer_with_usage
 from backend.core.config import get_settings
 from backend.core.errors import AppError, SpamRejectedError
+from backend.core.logging import get_request_id
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
     CreateWidgetSessionRequest,
@@ -83,11 +86,14 @@ async def create_widget_session(
     _: Annotated[None, Depends(widget_session_origin_guard)],
     __: Annotated[None, Depends(widget_session_issue_limiter)],
     ___: Annotated[None, Depends(widget_ip_limiter)],
+    ____: Annotated[None, Depends(widget_session_ip_limiter)],
 ) -> WidgetSessionResponse:
     """Mint a short-lived widget-session token for an anonymous visitor.
 
     `visitor_id` is the non-PII anonymous cookie id (ADR-004); the token is
-    kept in memory by the SDK and never persisted client-side.
+    kept in memory by the SDK and never persisted client-side. Beyond the
+    per-widget issue budget, a dedicated per-IP burst budget (P0-4) bounds
+    minting even when both entity keys are attacker-rotated.
     """
     token, expires_at = await service.create_session(
         widget_id=body.widget_id,
@@ -108,6 +114,7 @@ async def widget_chat(
     __: Annotated[None, Depends(widget_visitor_limiter)],
     ___: Annotated[None, Depends(widget_claims_origin_guard)],
     ____: Annotated[None, Depends(widget_ip_limiter)],
+    _____: Annotated[None, Depends(widget_chat_ip_limiter)],
 ) -> StreamingResponse:
     """Stream an answer for the visitor's question (SSE).
 
@@ -129,6 +136,15 @@ async def widget_chat(
                 tenant_id=claims["tenant_id"],
                 website_id=claims["website_id"],
             )
+            # P0-2 visitor binding: the client-supplied session_id may only
+            # resume a conversation owned by this token's tenant+website+
+            # visitor triple (same SESSION_NOT_FOUND code as unknown ids).
+            await service.validate_session_access(
+                tenant_id=claims["tenant_id"],
+                website_id=claims["website_id"],
+                visitor_id=claims.get("visitor_id"),
+                session_id=body.session_id,
+            )
             if is_spam(body.question):
                 raise SpamRejectedError("This message looks like spam.")
             await service.check_message_cap(
@@ -137,16 +153,40 @@ async def widget_chat(
                 session_id=body.session_id,
             )
         except AppError as exc:
-            yield sse("error", {"code": exc.code, "message": exc.message})
+            # Pre-stream rejection: the frame still carries the request id so
+            # a blocked turn is traceable like a streamed one (Phase 2).
+            # Audit S-04: every SSE failure must end with the terminal pair -
+            # `error` followed by `done {"status": "failed", ...}` - so the
+            # widget can distinguish a finished (failed) turn from a dropped
+            # connection. The error payload itself is unchanged.
+            yield sse(
+                "error",
+                {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": get_request_id(),
+                },
+            )
+            yield sse(
+                "done",
+                {
+                    "status": "failed",
+                    "code": exc.code,
+                    "message": exc.message,
+                    "request_id": get_request_id(),
+                },
+            )
             return
 
-        stream = rag.stream_answer(
-            tenant_id=claims["tenant_id"],
-            website_id=claims["website_id"],
-            question=body.question,
-            session_id=body.session_id,
-            visitor_id=claims.get("visitor_id"),
-            user_id=None,
+        stream = ensure_terminal_done(
+            rag.stream_answer(
+                tenant_id=claims["tenant_id"],
+                website_id=claims["website_id"],
+                question=body.question,
+                session_id=body.session_id,
+                visitor_id=claims.get("visitor_id"),
+                user_id=None,
+            )
         )
         buffer_ms = get_settings().sse_buffer_ms
         async for frame in stream_answer_with_usage(
@@ -175,6 +215,7 @@ async def submit_feedback(
     body: WidgetFeedbackRequest,
     claims: Annotated[dict[str, Any], Depends(widget_session_claims)],
     service: Annotated[FeedbackService, Depends(get_feedback_service)],
+    widgets: Annotated[WidgetService, Depends(get_widget_service)],
     _: Annotated[None, Depends(widget_feedback_limiter)],
     __: Annotated[None, Depends(widget_claims_origin_guard)],
     ___: Annotated[None, Depends(widget_ip_limiter)],
@@ -183,11 +224,21 @@ async def submit_feedback(
 
     Requires `Authorization: Bearer <widget_session_token>`. The token's
     tenant/website are authoritative: the untrusted `message_id`/`session_id`
-    are validated against them before anything is persisted (the service
-    verifies the message exists and belongs to this tenant/website/session).
-    A repeat rating for the same message is idempotent. A per-visitor
-    sliding-window budget (`WIDGET_FEEDBACK_LIMIT`) bounds abuse.
+    are validated against them before anything is persisted - P0-2 visitor
+    binding first (the conversation must belong to this token's visitor), then
+    the feedback service verifies the message exists and belongs to this
+    tenant/website/session. A repeat rating for the same message is
+    idempotent. A per-visitor sliding-window budget (`WIDGET_FEEDBACK_LIMIT`)
+    bounds abuse.
     """
+    # P0-2: reject conversations that belong to a different visitor before
+    # touching the message store (404 SESSION_NOT_FOUND, no existence oracle).
+    await widgets.validate_session_access(
+        tenant_id=claims["tenant_id"],
+        website_id=claims["website_id"],
+        visitor_id=claims.get("visitor_id"),
+        session_id=body.session_id,
+    )
     await service.submit(
         tenant_id=claims["tenant_id"],
         website_id=claims["website_id"],

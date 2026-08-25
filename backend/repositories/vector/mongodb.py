@@ -21,6 +21,7 @@ Search-capability handling (three cases):
   misconfigured index there still fails fast with the actionable message.
 """
 
+import asyncio
 import logging
 from math import sqrt
 from typing import Any
@@ -302,40 +303,27 @@ class MongoVectorRepository(VectorRepository):
         would otherwise surface only as silently missing hits - so the skip is
         counted and reported. Only the expected/detected dimensions and the
         skipped count are logged, never the vector values.
+
+        Audit A-02: the per-chunk scoring pass is pure-Python CPU work over the
+        whole website corpus; it runs in a worker thread via ``asyncio.to_thread``
+        so one large knowledge base cannot stall the event loop for every other
+        request. Mongo I/O (the cursor) stays on the loop.
         """
         cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
-        scored: list[tuple[float, KnowledgeChunk]] = []
-        scanned = 0
-        expected_dimension = len(query_embedding)
-        skipped_mismatched = 0
-        detected_dimensions: dict[int, int] = {}
-        async for item in cursor:
-            chunk = KnowledgeChunk.from_doc(item)
-            scanned += 1
-            if embedding_identity is not None:
-                ensure_embedding_compatibility(chunk, embedding_identity)
-            if not chunk.embedding:
-                continue
-            if len(chunk.embedding) != expected_dimension:
-                skipped_mismatched += 1
-                detected_dimensions[len(chunk.embedding)] = (
-                    detected_dimensions.get(len(chunk.embedding), 0) + 1
-                )
-                continue
-            score = _cosine_similarity(query_embedding, chunk.embedding)
-            if score > 0:
-                scored.append((score, chunk))
+        items = [item async for item in cursor]
+        scored, scanned, skipped_mismatched, detected_dimensions = await asyncio.to_thread(
+            _score_corpus, items, query_embedding, embedding_identity
+        )
         if skipped_mismatched:
             logger.warning(
                 "skipped %s chunk(s) with mismatched embedding dimensions "
                 "(expected=%s detected=%s tenant=%s website=%s)",
                 skipped_mismatched,
-                expected_dimension,
+                len(query_embedding),
                 detected_dimensions,
                 tenant_id,
                 website_id,
             )
-        scored.sort(key=lambda pair: pair[0], reverse=True)
         results = [VectorSearchResult(chunk=chunk, score=score) for score, chunk in scored[:top_k]]
         logger.info(
             "exact cosine scan finished (tenant=%s website=%s scanned=%s hits=%s)",
@@ -345,6 +333,45 @@ class MongoVectorRepository(VectorRepository):
             len(results),
         )
         return results
+
+
+def _score_corpus(
+    items: list[dict[str, Any]],
+    query_embedding: list[float],
+    embedding_identity: EmbeddingIdentity | None,
+) -> tuple[list[tuple[float, KnowledgeChunk]], int, int, dict[int, int]]:
+    """Score fetched chunks by cosine similarity (audit A-02).
+
+    Pure-Python CPU pass over the website corpus, executed via
+    ``asyncio.to_thread`` so the event loop stays responsive. Raises
+    ``EmbeddingCompatibilityError`` on an identity mismatch and skips chunks
+    with missing or mismatched-dimension embeddings. Returns
+    ``(scored, scanned, skipped_mismatched, detected_dimensions)`` where
+    ``scored`` is sorted by descending similarity.
+    """
+    expected_dimension = len(query_embedding)
+    scored: list[tuple[float, KnowledgeChunk]] = []
+    scanned = 0
+    skipped_mismatched = 0
+    detected_dimensions: dict[int, int] = {}
+    for item in items:
+        chunk = KnowledgeChunk.from_doc(item)
+        scanned += 1
+        if embedding_identity is not None:
+            ensure_embedding_compatibility(chunk, embedding_identity)
+        if not chunk.embedding:
+            continue
+        if len(chunk.embedding) != expected_dimension:
+            skipped_mismatched += 1
+            detected_dimensions[len(chunk.embedding)] = (
+                detected_dimensions.get(len(chunk.embedding), 0) + 1
+            )
+            continue
+        score = _cosine_similarity(query_embedding, chunk.embedding)
+        if score > 0:
+            scored.append((score, chunk))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return scored, scanned, skipped_mismatched, detected_dimensions
 
 
 def _atlas_only_error(exc: Exception) -> bool:

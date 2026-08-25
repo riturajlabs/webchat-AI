@@ -94,6 +94,13 @@ def _hermetic_infrastructure(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     _oai_mod._shared_client = None  # noqa: SLF001
 
+    # Reset the process-global AI provider circuit breakers (Phase 4): state
+    # must never leak between tests, or a provider tripped in one test would
+    # be silently skipped in another.
+    import backend.ai.circuit_breaker as _circuit_mod
+
+    _circuit_mod.reset_circuit_breakers()
+
     # Clear the mail-service LRU cache so a stale provider (e.g. Resend)
     # created in a prior test with polluted env does not survive.
     from backend.services.mail import get_mail_service

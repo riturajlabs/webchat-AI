@@ -22,6 +22,8 @@ from backend.services.knowledge.processor import KnowledgeProcessor
 
 from tests.fakes import (
     FakeAuditLogRepository,
+    FakeBrokenCacheStore,
+    FakeCacheStore,
     FakeDocumentRepository,
     FakeEmbeddingClient,
     FakeKnowledgeChunkRepository,
@@ -750,3 +752,130 @@ async def test_legacy_unstamped_chunks_block_ingestion() -> None:
 
     assert result["reason"] == "embedding_identity_conflict"
     assert [c.document_id for c in env.vector.chunks] == ["doc-legacy-other-space"]
+
+
+# ---------------------------------------------------------------------------
+# Heading metadata (audit R-08) + post-completion cache invalidation (R-03)
+# ---------------------------------------------------------------------------
+
+
+async def test_chunk_metadata_carries_section_heading() -> None:
+    env = await _env(content="# Pricing\nAlpha beta. Gamma delta. " * 20)
+    await env.processor.process_document(env.document.id)
+
+    stored = env.vector.chunks
+    assert stored
+    assert all(chunk.metadata.get("heading") == "Pricing" for chunk in stored)
+
+
+async def test_chunk_metadata_heading_absent_without_headings() -> None:
+    env = await _env()
+    await env.processor.process_document(env.document.id)
+
+    assert env.vector.chunks
+    assert all("heading" not in chunk.metadata for chunk in env.vector.chunks)
+
+
+class OrderRecordingCache(FakeCacheStore):
+    """Appends markers so tests can assert invalidation ordering."""
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__()
+        self._events = events
+
+    async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
+        self._events.append("delete_by_prefix")
+        return await super().delete_by_prefix(namespace, prefix)
+
+
+class RecordingVectorRepository(FakeVectorRepository):
+    def __init__(self, events: list[str]) -> None:
+        super().__init__()
+        self._events = events
+
+    async def insert_chunks(self, chunks):  # type: ignore[no-untyped-def]
+        self._events.append("insert_chunks")
+        return await super().insert_chunks(chunks)
+
+
+def _processor_with(cache, events, *, website_id: str | None = None):  # type: ignore[no-untyped-def]
+    documents = FakeDocumentRepository()
+    vector = RecordingVectorRepository(events)
+    chunks = FakeKnowledgeChunkRepository(vector=vector)
+    websites = FakeWebsiteRepository()
+    audit = FakeAuditLogRepository()
+
+    async def build():
+        website = Website.new(tenant_id="tenant-a", name="Acme", url="https://acme.example/")
+        if website_id is not None:
+            website.id = website_id
+        await websites.create(website)
+        document = Document.new(
+            tenant_id="tenant-a",
+            website_id=website.id,
+            url="https://acme.example/",
+            title="Home",
+            content=TEXT,
+            checksum="abc123",
+        )
+        await documents.upsert(document)
+        processor = KnowledgeProcessor(
+            documents=documents,
+            vector=vector,
+            chunks=chunks,
+            websites=websites,
+            audit=audit,
+            embedder=FakeEmbeddingClient(),
+            usage=FakeUsageRecordRepository(),
+            chunk_size=30,
+            overlap=5,
+            cache=cache,
+        )
+        return processor, document, vector
+
+    return build
+
+
+async def test_cache_purge_happens_after_chunks_are_stored() -> None:
+    """Audit R-03 regression: invalidation must follow successful storage.
+
+    Previously the crawl worker purged the retrieval cache BEFORE embedding,
+    so a slow re-index served stale answers repopulated during the window.
+    The processor now purges only after `insert_chunks` succeeds.
+    """
+    events: list[str] = []
+    cache = OrderRecordingCache(events)
+    build = _processor_with(cache, events)
+    processor, document, _vector = await build()
+
+    result = await processor.process_document(document.id)
+    assert result["status"] == "processed"
+    assert events.index("insert_chunks") < events.index("delete_by_prefix")
+
+
+async def test_completed_processing_removes_stale_retrieval_entries() -> None:
+    """Stale answers seeded before re-processing must not survive it."""
+    events: list[str] = []
+    cache = FakeCacheStore()
+    await cache.set("retrieval", "site-1:old question", '["stale answer"]')
+    await cache.set("retrieval", "other-site:q", '["keep"]')
+
+    build = _processor_with(cache, events, website_id="site-1")
+    processor, document, _vector = await build()
+
+    result = await processor.process_document(document.id)
+    assert result["status"] == "processed"
+    assert await cache.get("retrieval", "site-1:old question") is None
+    # Only the re-processed website's entries are purged.
+    assert await cache.get("retrieval", "other-site:q") == '["keep"]'
+
+
+async def test_cache_purge_is_best_effort_on_cache_outage() -> None:
+    """A broken cache must not fail document processing (same contract as crawl)."""
+    events: list[str] = []
+    build = _processor_with(FakeBrokenCacheStore(), events)
+    processor, document, vector = await build()
+
+    result = await processor.process_document(document.id)
+    assert result["status"] == "processed"
+    assert vector.chunks

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { applyTheme, effectiveDarkMode } from './apply';
+import { describe, expect, it, vi } from 'vitest';
+import { applyTheme, effectiveDarkMode, wireSystemThemeChange } from './apply';
 import { defaultConfig } from '../config/types';
 
 describe('applyTheme', () => {
@@ -187,6 +187,73 @@ describe('effectiveDarkMode', () => {
       expect(effectiveDarkMode({ ...defaultConfig('w'), theme: 'auto' })).toBe(true);
     } finally {
       window.matchMedia = original;
+    }
+  });
+});
+
+describe('wireSystemThemeChange (audit W-03)', () => {
+  type Listener = (event?: unknown) => void;
+
+  function fakeMatchMedia(matches: boolean) {
+    const state = { matches };
+    const listeners = new Set<Listener>();
+    return {
+      get matches() {
+        return state.matches;
+      },
+      addEventListener: (_: string, listener: Listener) => listeners.add(listener),
+      removeEventListener: (_: string, listener: Listener) => listeners.delete(listener),
+      flip(next: boolean) {
+        // A real MediaQueryList updates `matches` before dispatching 'change'.
+        state.matches = next;
+        for (const listener of listeners) listener();
+      },
+    };
+  }
+
+  it('re-applies the theme when the OS preference flips under theme:auto', () => {
+    const mq = fakeMatchMedia(false);
+    window.matchMedia = vi.fn().mockReturnValue(mq) as unknown as typeof window.matchMedia;
+    const host = document.createElement('webchat-widget');
+    const config = { ...defaultConfig('w'), theme: 'auto' };
+    applyTheme(host, config);
+    expect(host.dataset.dark).toBeUndefined();
+
+    const dispose = wireSystemThemeChange(host, () => config);
+    try {
+      mq.flip(true); // visitor switches their system to dark
+      expect(host.dataset.dark).toBe('1');
+      mq.flip(false);
+      expect(host.hasAttribute('data-dark')).toBe(false);
+    } finally {
+      dispose();
+    }
+  });
+
+  it('stops listening after dispose (destroy wiring)', () => {
+    const mq = fakeMatchMedia(false);
+    window.matchMedia = vi.fn().mockReturnValue(mq) as unknown as typeof window.matchMedia;
+    const host = document.createElement('webchat-widget');
+    const dispose = wireSystemThemeChange(host, () => ({ ...defaultConfig('w'), theme: 'auto' }));
+
+    dispose();
+    mq.flip(true);
+    expect(host.dataset.dark).toBeUndefined();
+  });
+
+  it('leaves manual light/dark overrides untouched on system flips', () => {
+    const mq = fakeMatchMedia(true);
+    window.matchMedia = vi.fn().mockReturnValue(mq) as unknown as typeof window.matchMedia;
+    const host = document.createElement('webchat-widget');
+    const config = { ...defaultConfig('w'), theme: 'light' };
+    applyTheme(host, config);
+
+    const dispose = wireSystemThemeChange(host, () => config);
+    try {
+      mq.flip(true); // system goes dark; explicit light must win
+      expect(host.dataset.dark).toBeUndefined();
+    } finally {
+      dispose();
     }
   });
 });

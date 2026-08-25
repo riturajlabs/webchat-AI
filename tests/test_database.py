@@ -241,6 +241,11 @@ async def test_init_indexes_declares_message_indexes(monkeypatch) -> None:
         keys == (("tenant_id", 1), ("session_id", 1), ("created_at", 1)) and not unique
         for (keys, unique) in indexes
     )
+    # Dashboard-analytics query: (tenant, role, created_at).
+    assert any(
+        keys == (("tenant_id", 1), ("role", 1), ("created_at", 1)) and not unique
+        for (keys, unique) in indexes
+    )
     ttl = [kwargs for keys, kwargs in db["messages"].indexes if kwargs.get("expireAfterSeconds")]
     assert ttl == [{"expireAfterSeconds": CHAT_TTL}]
 

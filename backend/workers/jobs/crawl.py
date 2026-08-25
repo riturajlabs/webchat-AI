@@ -36,6 +36,7 @@ from backend.repositories import (
     MongoCrawlJobRepository,
     MongoDocumentRepository,
     MongoUsageRecordRepository,
+    MongoVectorRepository,
     MongoWebsiteRepository,
 )
 from backend.services.ingestion import BrowserPageFetcher, CrawlSession, SsrFGuard
@@ -64,7 +65,11 @@ def _build_cache() -> CacheStore | None:
         from redis.asyncio import Redis as _Redis
 
         redis = _Redis.from_url(get_settings().redis_url, decode_responses=True)
-        return RedisCacheStore(redis)
+        # Audit R-01: the API writes retrieval entries under
+        # `{redis_prefix}:rag:...` (see deps.get_rag_service). The worker must
+        # invalidate that exact namespace, otherwise stale answers survive the
+        # full TTL after every re-crawl.
+        return RedisCacheStore(redis, prefix=f"{get_settings().redis_prefix}:rag")
     except Exception:
         logger.warning("Could not build cache for crawl invalidation", exc_info=True)
         return None
@@ -84,6 +89,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         crawl_job_id,
         crawl_jobs=MongoCrawlJobRepository(db),
         documents=MongoDocumentRepository(db),
+        vector=MongoVectorRepository(db),
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         usage=MongoUsageRecordRepository(db),
@@ -103,6 +109,7 @@ async def _run_crawl_job(
     usage: Any = None,
     enqueue_knowledge: Any = None,
     cache: CacheStore | None = None,
+    vector: Any = None,
 ) -> dict[str, Any]:
     """Core worker logic, testable with fake repositories/fetcher injected.
 
@@ -178,6 +185,18 @@ async def _run_crawl_job(
         # `crawl_max_concurrent` ever drive the shared headless browser.
         async with crawl_semaphore():
             stored = await session.run()
+        # Audit R-02: incremental crawls only upsert discovered pages, so
+        # documents whose URL vanished from the site must be reconciled away
+        # (including their embedded chunks). Best-effort: a reconciliation
+        # failure must not fail an otherwise successful crawl.
+        await _purge_removed_documents(
+            documents=documents,
+            vector=vector,
+            tenant_id=job.tenant_id,
+            website_id=job.website_id,
+            crawled_urls=session.stored_urls,
+            errored_urls=[error.url for error in session.errors],
+        )
         job.errors = session.errors
         job.pages_completed = stored
         job.pages_total = max(job.pages_total, stored)
@@ -257,6 +276,48 @@ async def _run_crawl_job(
             await crawl_jobs.update(job)
         logger.warning("crawl job %s failed (try %s/%s): %s", crawl_job_id, job_try, max_tries, exc)
         raise
+
+
+async def _purge_removed_documents(
+    *,
+    documents: Any,
+    vector: Any,
+    tenant_id: str,
+    website_id: str,
+    crawled_urls: list[str],
+    errored_urls: list[str],
+) -> int:
+    """Delete documents (and their chunks) whose URLs left the site (R-02).
+
+    Compares stored document URLs against the URLs crawled in this run. Pages
+    that errored *this* run are forgiven — a transient fetch failure must not
+    purge good content. Best-effort: any failure is logged and swallowed so
+    the crawl job still completes.
+    """
+    try:
+        keep = set(crawled_urls)
+        forgive = set(errored_urls)
+        stored = await documents.list_by_website(tenant_id, website_id)
+        stale = [doc for doc in stored if doc.url not in keep and doc.url not in forgive]
+        for document in stale:
+            if vector is not None:
+                await vector.delete_by_document(tenant_id, document.id)
+        if stale:
+            await documents.delete_by_ids(tenant_id, [doc.id for doc in stale])
+            logger.info(
+                "purged %s removed page(s) from the knowledge base (tenant=%s website=%s)",
+                len(stale),
+                tenant_id,
+                website_id,
+            )
+        return len(stale)
+    except Exception:
+        logger.warning(
+            "stale-document reconciliation failed (website=%s)",
+            website_id,
+            exc_info=True,
+        )
+        return 0
 
 
 async def _site_checksum(documents: Any, tenant_id: str, website_id: str) -> str:

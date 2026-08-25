@@ -240,6 +240,7 @@ def test_rag_service_hybrid_flag_enables_hybrid() -> None:
         mock_settings.return_value.enable_faithfulness_check = False
         mock_settings.return_value.faithfulness_warning_threshold = 0.6
         mock_settings.return_value.hybrid_search_candidate_limit = 50
+        mock_settings.return_value.ai_model_pricing_json = ""
         rag = RagService(
             websites=env.websites,
             vector=env.vector,

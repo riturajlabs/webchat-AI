@@ -68,6 +68,10 @@ export interface WidgetOverride {
   accentColor?: string;
 }
 
+/** Positions the widget shell supports (audit W-01). */
+export const ALLOWED_POSITIONS = ['bottom-right', 'bottom-left'] as const;
+export type WidgetPosition = (typeof ALLOWED_POSITIONS)[number];
+
 /** Safe fallback config used when the public config cannot be fetched. */
 export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   enabled: true,
@@ -132,18 +136,85 @@ export function defaultConfig(widgetId: string): WidgetPublicConfig {
   return { widget_id: widgetId, ...DEFAULT_CONFIG };
 }
 
+/* --- Dynamic style-input validation (audit W-23) ---------------------------
+ * Tenant-provided strings end up as CSS custom properties on the host. CSSOM
+ * setProperty cannot escape the declaration, but garbage values still break
+ * the layout; every dynamic style field is validated against its format and
+ * replaced with the safe default when it does not match.
+ * ------------------------------------------------------------------------- */
+
+/** Hex (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`) or `rgb()/rgba()` colors. */
+const COLOR_PATTERN =
+  /^(?:#[0-9a-fA-F]{3,8}|rgba?\(\s*[\d.]+(?:\s*%)?(?:\s*,\s*[\d.]+(?:\s*%)?){2,3}\s*\))$/;
+
+/** Non-negative CSS lengths (px/em/rem/%). */
+const LENGTH_PATTERN = /^\d+(?:\.\d+)?(?:px|em|rem|%)$/;
+
 /**
- * Fill any fields missing from a fetched config with the safe defaults.
- *
- * The backend public config is forward-compatible: older backends (or cached
- * entries) omit fields added later. Normalizing on receipt keeps the SDK
- * robust against partial payloads — every downstream consumer can assume the
- * full `WidgetPublicConfig` shape.
+ * Font family names: letters/digits/spaces plus the separators needed for
+ * multi-word quoted stacks. Deliberately excludes `();{}<>\` so neither
+ * `url(...)` payloads nor declaration-breaking punctuation can pass.
+ */
+const FONT_FAMILY_PATTERN = /^[a-zA-Z0-9 \-_,'"]+$/;
+
+function validatedOrNull(value: string | null | undefined, pattern: RegExp): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return pattern.test(trimmed) ? trimmed : null;
+}
+
+/** Validated value or the given safe default (for non-nullable fields). */
+function validated(value: string | null | undefined, pattern: RegExp, fallback: string): string {
+  return validatedOrNull(value, pattern) ?? fallback;
+}
+
+/** Only http(s) image URLs may be rendered (audit W-22). */
+const IMAGE_URL_PATTERN = /^https?:\/\//i;
+
+function validatedImageUrl(value: string | null | undefined): string | null {
+  if (typeof value !== 'string' || !IMAGE_URL_PATTERN.test(value.trim())) {
+    return null;
+  }
+  return value.trim();
+}
+
+function validatedPosition(value: string | undefined): WidgetPosition {
+  return ALLOWED_POSITIONS.includes(value as WidgetPosition)
+    ? (value as WidgetPosition)
+    : (DEFAULT_CONFIG.position as WidgetPosition);
+}
+
+/**
+ * Fill any fields missing from a fetched config with the safe defaults, and
+ * validate every dynamic style field (audit W-23): invalid positions fall
+ * back to `bottom-right` (audit W-01), invalid colors/lengths/font stacks to
+ * the theme defaults, and non-http(s) image URLs are dropped entirely.
  */
 export function normalizeConfig(
   config: Partial<WidgetPublicConfig> | WidgetPublicConfig,
 ): WidgetPublicConfig {
-  return { ...DEFAULT_CONFIG, ...config, widget_id: config.widget_id ?? 'unknown' };
+  return {
+    ...DEFAULT_CONFIG,
+    ...config,
+    widget_id: config.widget_id ?? 'unknown',
+    // Audit W-01: an unknown position used to leave the shell unpositioned.
+    position: validatedPosition(config.position),
+    primary_color: validated(config.primary_color, COLOR_PATTERN, DEFAULT_CONFIG.primary_color),
+    accent_color: validated(config.accent_color, COLOR_PATTERN, DEFAULT_CONFIG.accent_color),
+    header_color: validatedOrNull(config.header_color, COLOR_PATTERN),
+    secondary_color: validatedOrNull(config.secondary_color, COLOR_PATTERN),
+    background_color: validatedOrNull(config.background_color, COLOR_PATTERN),
+    text_color: validatedOrNull(config.text_color, COLOR_PATTERN),
+    width: validated(config.width, LENGTH_PATTERN, DEFAULT_CONFIG.width),
+    height: validated(config.height, LENGTH_PATTERN, DEFAULT_CONFIG.height),
+    border_radius: validated(config.border_radius, LENGTH_PATTERN, DEFAULT_CONFIG.border_radius),
+    launcher_size: validated(config.launcher_size, LENGTH_PATTERN, DEFAULT_CONFIG.launcher_size),
+    font_family: validatedOrNull(config.font_family, FONT_FAMILY_PATTERN),
+    logo_url: validatedImageUrl(config.logo_url),
+    avatar_url: validatedImageUrl(config.avatar_url),
+  };
 }
 
 export function sanitizeApiBaseUrl(value: string): string {

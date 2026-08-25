@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   appendMessage,
   createBubble,
+  createEmptyState,
   createMessageList,
   createWelcomeBubble,
   renderMessages,
@@ -10,6 +11,7 @@ import {
   wireMessageActions,
 } from './bubbles';
 import type { ChatMessage } from '../stream/chat';
+import { defaultConfig } from '../config/types';
 
 function message(
   role: ChatMessage['role'],
@@ -312,6 +314,42 @@ describe('renderMessages / appendMessage', () => {
     expect(list.querySelector('.wc-welcome')).toBeNull();
     expect(list.querySelectorAll('.wc-bubble').length).toBe(1);
   });
+
+  it('skips DOM moves for bubbles whose position is unchanged', () => {
+    const list = createMessageList();
+    const first = message('user', 'one', { id: 'u1' });
+    renderMessages(list, [first, message('assistant', '', { id: 'a1' })]);
+
+    const appendSpy = vi.spyOn(list, 'appendChild');
+    try {
+      // Streaming pass: same order plus one new bubble at the end.
+      renderMessages(list, [
+        first,
+        message('assistant', 'He', { id: 'a1', streaming: true }),
+        message('assistant', '', { id: 'a2' }),
+      ]);
+      // Only the new bubble is appended; existing nodes are not re-inserted.
+      expect(appendSpy).toHaveBeenCalledTimes(1);
+      expect(list.querySelector('[data-message-id="a2"]')).toBeTruthy();
+    } finally {
+      appendSpy.mockRestore();
+    }
+  });
+
+  it('restores order by moving nodes when the sequence changes', () => {
+    const list = createMessageList();
+    renderMessages(list, [
+      message('user', 'one', { id: 'u1' }),
+      message('assistant', 'two', { id: 'a1' }),
+    ]);
+    const userBubble = list.querySelector('[data-message-id="u1"]') as HTMLElement;
+
+    renderMessages(list, [
+      message('assistant', 'two', { id: 'a1' }),
+      message('user', 'one', { id: 'u1' }),
+    ]);
+    expect(list.lastElementChild).toBe(userBubble);
+  });
 });
 
 describe('wireMessageActions', () => {
@@ -335,5 +373,101 @@ describe('wireMessageActions', () => {
 
     (list.querySelector('.wc-more-toggle') as HTMLButtonElement).click();
     expect(onToggleMore).toHaveBeenCalledWith('long-1');
+  });
+});
+
+describe('inline citation links (audit W-09)', () => {
+  const SOURCES = [
+    { url: 'https://docs.example.com/one', title: 'One' },
+    { url: 'https://docs.example.com/two', title: 'Two' },
+    { url: 'https://docs.example.com/three', title: 'Three' },
+  ];
+
+  function rendered(content: string, extra: Partial<ChatMessage> = {}) {
+    const list = createMessageList();
+    document.body.appendChild(list);
+    renderMessages(list, [message('assistant', content, { sources: SOURCES, ...extra })]);
+    wireMessageActions(list, {
+      onCopyCode: vi.fn(),
+      onRetry: vi.fn(),
+      onToggleMore: vi.fn(),
+    });
+    return list;
+  }
+
+  it('converts [n] markers into buttons that jump to the matching card', () => {
+    const list = rendered('Pricing is per seat[1], billed yearly[2] or monthly[3].');
+    const chips = list.querySelectorAll<HTMLButtonElement>('.wc-citation');
+    expect(Array.from(chips).map((chip) => chip.textContent)).toEqual(['1', '2', '3']);
+    expect(chips[0].getAttribute('aria-label')).toBe('Jump to source 1');
+    expect(chips[0].dataset.sourceIndex).toBe('1');
+
+    chips[1].click();
+    const cards = list.querySelectorAll('.wc-sources-list .wc-source-item');
+    expect(cards[1].classList.contains('wc-source-highlight')).toBe(true);
+    expect(cards[0].classList.contains('wc-source-highlight')).toBe(false);
+  });
+
+  it('expands a collapsed source list before jumping to a hidden card', () => {
+    const fourth = [...SOURCES, { url: 'https://docs.example.com/four', title: 'Four' }];
+    const list = createMessageList();
+    document.body.appendChild(list);
+    renderMessages(list, [message('assistant', 'See the docs[4].', { sources: fourth })]);
+    wireMessageActions(list, {
+      onCopyCode: vi.fn(),
+      onRetry: vi.fn(),
+      onToggleMore: vi.fn(),
+    });
+    // Card 4 is beyond VISIBLE_SOURCES and collapsed.
+    expect(list.querySelector('.wc-sources')?.classList.contains('wc-sources-expanded')).toBe(
+      false,
+    );
+
+    (list.querySelector('.wc-citation') as HTMLButtonElement).click();
+    const block = list.querySelector('.wc-sources') as HTMLElement;
+    expect(block.classList.contains('wc-sources-expanded')).toBe(true);
+    const cards = block.querySelectorAll('.wc-source-item');
+    expect(cards[3].classList.contains('wc-source-highlight')).toBe(true);
+  });
+
+  it('leaves out-of-range markers as literal text', () => {
+    const list = rendered('Reference [9] does not exist.');
+    expect(list.querySelector('.wc-citation')).toBeNull();
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[9]');
+  });
+
+  it('does not touch markers inside code blocks', () => {
+    const list = rendered('Use `arr[1]` indexing and:\n\n```\nmatrix[2]\n```');
+    expect(list.querySelector('.wc-citation')).toBeNull();
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('arr[1]');
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('matrix[2]');
+  });
+
+  it('keeps markers plain while streaming; converts once sources arrive on completion', () => {
+    const streaming = rendered('Partial claim[1]', { streaming: true });
+    expect(streaming.querySelector('.wc-citation')).toBeNull();
+    expect(streaming.querySelector('.wc-bubble-content')?.textContent).toContain('[1]');
+
+    const done = rendered('Complete claim[1]');
+    expect(done.querySelector('.wc-citation')).toBeTruthy();
+  });
+});
+
+describe('empty-state avatar safety (audit W-22)', () => {
+  it('renders http(s) avatars as images', () => {
+    const state = createEmptyState({
+      ...defaultConfig('w'),
+      avatar_url: 'https://cdn.example.com/bot.png',
+    });
+    const img = state.querySelector<HTMLImageElement>('img');
+    expect(img?.src).toBe('https://cdn.example.com/bot.png');
+  });
+
+  it('falls back to the glyph for unsafe avatar schemes', () => {
+    for (const url of ['javascript:alert(1)', 'data:image/png;base64,x', '//evil.example/a.png']) {
+      const state = createEmptyState({ ...defaultConfig('w'), avatar_url: url });
+      expect(state.querySelector('img')).toBeNull();
+      expect(state.querySelector('svg')).toBeTruthy();
+    }
   });
 });

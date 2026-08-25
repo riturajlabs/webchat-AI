@@ -174,6 +174,8 @@ def get_website_service(
         widgets=MongoWidgetRepository(db),
         audit=MongoAuditLogRepository(db),
         usage=usage,
+        documents=MongoDocumentRepository(db),
+        vector=get_vector_repository(db),
     )
 
 
@@ -372,6 +374,8 @@ def get_widget_service(
         tenants=MongoTenantRepository(db),
         websites=MongoWebsiteRepository(db),
         store=_RedisWidgetStore(get_redis()),
+        # Chat-session lookup powers the P0-2 visitor-binding check.
+        sessions=MongoChatSessionRepository(db),
     )
 
 
@@ -749,6 +753,9 @@ async def _session_issue_rate_limit_key(request: Request) -> str:
 #  * per-widget: WIDGET_PER_WIDGET_LIMIT / min (60)
 #  * per-visitor: WIDGET_PER_VISITOR_LIMIT / min (20)
 #  * session issue: WIDGET_SESSION_ISSUE_LIMIT / min (30)
+# P0-4 dedicated per-IP burst budgets:
+#  * session issue / IP: WIDGET_SESSION_ISSUE_IP_LIMIT / min (30)
+#  * chat / IP: WIDGET_CHAT_IP_LIMIT / min (60)
 widget_chat_limiter = WidgetRateLimitDependency(
     key_factory=_widget_rate_limit_key,
     window_seconds=60,
@@ -789,13 +796,50 @@ widget_ip_limiter = WidgetRateLimitDependency(
 )
 
 
+# Dedicated per-IP burst budgets (P0-4): anonymous token minting and SSE
+# generation are the two most expensive public surfaces, and both of their
+# entity keys (`visitor_id`, target `widget_id`) are attacker-chosen. These
+# tighter IP-shaped windows survive that rotation instead of blending into
+# the generic per-endpoint `widget_ip_limiter` bucket above.
+def _widget_chat_ip_rate_limit_key(request: Request) -> str:
+    return f"rl:ip:chat:{client_ip(request)}"
+
+
+def _widget_session_ip_rate_limit_key(request: Request) -> str:
+    return f"rl:ip:sessions:{client_ip(request)}"
+
+
+widget_chat_ip_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_chat_ip_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_chat_ip_limit",
+)
+widget_session_ip_limiter = WidgetRateLimitDependency(
+    key_factory=_widget_session_ip_rate_limit_key,
+    window_seconds=60,
+    limit_setting="widget_session_issue_ip_limit",
+)
+
+
 async def _widget_origin_guard(
     request: Request,
     widget_id: str,
     service: Annotated[WidgetService, Depends(get_widget_service)],
+    *,
+    require_origin: bool = False,
 ) -> None:
-    """Reject browser embeds from origins outside the widget allowlist."""
-    await service.validate_origin(widget_id, request.headers.get("origin"))
+    """Reject browser embeds from origins outside the widget allowlist.
+
+    The `User-Agent` rides along so the service can distinguish a browser
+    that dropped its `Origin` header (rejected - P0-1) from a genuine
+    non-browser client such as curl or a server-to-server caller.
+    """
+    await service.validate_origin(
+        widget_id,
+        request.headers.get("origin"),
+        user_agent=request.headers.get("user-agent"),
+        require_origin=require_origin,
+    )
 
 
 async def widget_config_origin_guard(
@@ -812,8 +856,13 @@ async def widget_session_origin_guard(
     body: CreateWidgetSessionRequest,
     service: Annotated[WidgetService, Depends(get_widget_service)],
 ) -> None:
-    """Origin guard for `POST /api/widget/v1/sessions` (widget_id in body)."""
-    await _widget_origin_guard(request, body.widget_id, service)
+    """Origin guard for `POST /api/widget/v1/sessions` (widget_id in body).
+
+    Session minting unconditionally requires an `Origin` header (P0-1): a
+    browser cross-origin POST always carries one, so headerless requests
+    cannot mint widget-session tokens at all.
+    """
+    await _widget_origin_guard(request, body.widget_id, service, require_origin=True)
 
 
 async def widget_claims_origin_guard(

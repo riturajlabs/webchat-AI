@@ -55,11 +55,18 @@ export function parseSseFrame(frame: string): SseEvent {
  * The stream is consumed until the reader signals done or `signal` aborts.
  * On abort the underlying reader is cancelled so a stalled connection can't
  * leave the Stop-generation button hanging (Phase 10).
+ *
+ * `stallTimeoutMs` (production hardening) bounds *inactivity*: when no bytes
+ * arrive within the window, the reader is cancelled and a retryable
+ * `timeout` WidgetError is raised. Without it, a server that stalls after
+ * headers would leave "AI is typing" on screen indefinitely. The deadline is
+ * re-armed on every chunk, so slow-but-alive streams are never cut off.
  */
 export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   onEvent: (event: SseEvent) => void,
   signal?: AbortSignal,
+  stallTimeoutMs?: number,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -74,16 +81,57 @@ export async function readSseStream(
     cancel();
   }
 
+  // Inactivity watchdog: cancel() resolves a pending read() with
+  // `{ done: true }`, so the loop below observes the expiry deterministically
+  // (no promise racing, no unhandled rejections).
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | null = null;
+  const armStallTimer = (): void => {
+    if (!stallTimeoutMs || stallTimeoutMs <= 0) {
+      return;
+    }
+    disarmStallTimer();
+    stallTimer = setTimeout(() => {
+      stalled = true;
+      cancel();
+    }, stallTimeoutMs);
+  };
+  const disarmStallTimer = (): void => {
+    if (stallTimer !== null) {
+      clearTimeout(stallTimer);
+      stallTimer = null;
+    }
+  };
+
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      armStallTimer();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } finally {
+        disarmStallTimer();
+      }
+      const { done, value } = chunk;
       if (signal?.aborted) {
         throw new WidgetError({ code: 'timeout', message: 'Stream aborted' });
+      }
+      if (stalled) {
+        throw new WidgetError({
+          code: 'timeout',
+          message: 'Stream stalled',
+          retryable: true,
+        });
       }
       if (done) {
         break;
       }
       buffer += decoder.decode(value, { stream: true });
+      // Some servers/proxies terminate SSE lines with CRLF; normalize so the
+      // `\n\n` frame boundary below matches regardless of line endings.
+      if (buffer.indexOf('\r') !== -1) {
+        buffer = buffer.replace(/\r\n/g, '\n');
+      }
       let boundary = buffer.indexOf('\n\n');
       while (boundary !== -1) {
         const frame = buffer.slice(0, boundary);
@@ -105,6 +153,7 @@ export async function readSseStream(
     }
     throw cause;
   } finally {
+    disarmStallTimer();
     signal?.removeEventListener('abort', onAbort);
     // cancel() releases the lock; releaseLock() then throws — ignore it.
     try {

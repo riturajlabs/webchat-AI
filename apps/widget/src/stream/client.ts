@@ -10,12 +10,35 @@
 
 import { resolveApiBaseUrl, type WidgetOptions } from '../config/types';
 import { WidgetError, errorFromApiBody, errorFromSseCode } from '../core/errors';
-import { fetchWithTimeout } from '../core/network';
+import { fetchWithTimeout, newRequestId } from '../core/network';
 import { readSseStream, type SseEvent } from '../core/sse';
 import type { SessionToken } from '../core/session';
 
 /** Connect + first-token timeout for a chat stream (plan §9). */
 export const CHAT_CONNECT_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * Backend generation guards (audit S-16 alignment baseline), mirrored from
+ * the backend's production config (`GENERATION_TIMEOUT_SECONDS` in
+ * `backend/core/config.py`): a stalled per-chunk read is abandoned by the
+ * server after 30s and surfaces as an SSE `error` frame. The backend also
+ * sends `: ping` heartbeat comments every 15s while silent, so this window
+ * only ever expires on a genuinely dead connection.
+ */
+export const BACKEND_GENERATION_TIMEOUT_MS = 30 * 1000;
+
+/**
+ * Inactivity watchdog for an established stream (production hardening): when
+ * no bytes arrive within this window — stalled server, dead connection without
+ * FIN — the reader is cancelled and a retryable `timeout` error ends the turn
+ * instead of "AI is typing" forever. Re-armed on every chunk.
+ *
+ * Audit S-16: this must exceed the backend's own per-chunk guard
+ * (`BACKEND_GENERATION_TIMEOUT_MS`) so the server's error handling - not a
+ * client race - is what ends a slow generation. One heartbeat interval
+ * (15s) is added as network margin: 30s + 15s = 45s.
+ */
+export const CHAT_STALL_TIMEOUT_MS = BACKEND_GENERATION_TIMEOUT_MS + 15 * 1000;
 
 export interface ChatRequest {
   question: string;
@@ -33,6 +56,8 @@ export interface ChatSource {
 export interface DonePayload {
   session_id?: string;
   message_id?: string;
+  /** Final stream state: "completed" | "failed" (absent on legacy servers). */
+  status?: string;
   [key: string]: unknown;
 }
 
@@ -59,6 +84,11 @@ export interface StreamResult {
   error?: WidgetError;
   /** Client-side timing measurements for latency analysis. */
   timing?: StreamTiming;
+  /**
+   * Correlation id sent as `X-Request-ID` for this turn (Phase 2 tracing);
+   * also echoed by backend `done`/`error` frames and attached to errors.
+   */
+  requestId?: string;
 }
 
 /** Client-side latency measurements for a chat stream. */
@@ -98,6 +128,9 @@ export async function streamChat(
 ): Promise<StreamResult> {
   const apiBaseUrl = resolveApiBaseUrl(options.apiBaseUrl);
   const streamStartTime = performance.now();
+  // One correlation id per chat turn (Phase 2 tracing): generated once and
+  // reused across the 401 re-mint retry so backend logs join the whole turn.
+  const requestId = newRequestId();
 
   let token: SessionToken;
   try {
@@ -106,9 +139,14 @@ export async function streamChat(
     const error =
       cause instanceof WidgetError
         ? cause
-        : new WidgetError({ code: 'network', message: 'Session unavailable', cause });
+        : new WidgetError({
+            code: 'network',
+            message: 'Session unavailable',
+            cause,
+            requestId,
+          });
     handlers.onError?.(error);
-    return { completed: false, error };
+    return { completed: false, error, requestId };
   }
 
   for (let attempt = 0; ; attempt += 1) {
@@ -122,6 +160,7 @@ export async function streamChat(
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token.token}`,
             Accept: 'text/event-stream',
+            'X-Request-ID': requestId,
           },
           body: JSON.stringify({
             question: request.question,
@@ -132,15 +171,16 @@ export async function streamChat(
       );
     } catch (cause) {
       if (signal?.aborted) {
-        return { completed: false, aborted: true };
+        return { completed: false, aborted: true, requestId };
       }
       const error = new WidgetError({
         code: cause && (cause as Error).name === 'RequestTimeoutError' ? 'timeout' : 'network',
         message: 'Chat request failed',
         cause,
+        requestId,
       });
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     if (response.status === 401 && attempt === 0) {
@@ -152,9 +192,14 @@ export async function streamChat(
         const error =
           cause instanceof WidgetError
             ? cause
-            : new WidgetError({ code: 'network', message: 'Session renewal failed', cause });
+            : new WidgetError({
+                code: 'network',
+                message: 'Session renewal failed',
+                cause,
+                requestId,
+              });
         handlers.onError?.(error);
-        return { completed: false, error };
+        return { completed: false, error, requestId };
       }
     }
 
@@ -163,26 +208,40 @@ export async function streamChat(
       // the JSON error envelope; parse it so the visitor gets a meaningful
       // message rather than a generic status guess.
       const body = await readErrorEnvelope(response);
-      const error = errorFromApiBody(response.status, body);
+      const error = errorFromApiBody(response.status, body, requestId);
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     if (!response.body) {
-      const error = new WidgetError({ code: 'invalid', message: 'Chat stream missing body' });
+      const error = new WidgetError({
+        code: 'invalid',
+        message: 'Chat stream missing body',
+        requestId,
+      });
       handlers.onError?.(error);
-      return { completed: false, error };
+      return { completed: false, error, requestId };
     }
 
     try {
-      return await consumeStream(response.body, handlers, signal, streamStartTime);
+      return await consumeStream(response.body, handlers, signal, streamStartTime, {
+        stallTimeoutMs: CHAT_STALL_TIMEOUT_MS,
+        requestId,
+      });
     } catch (cause) {
       if (signal?.aborted) {
-        return { completed: false, aborted: true };
+        return { completed: false, aborted: true, requestId };
       }
       throw cause;
     }
   }
+}
+
+/** Options for {@link consumeStream} beyond the raw stream body. */
+interface ConsumeOptions {
+  stallTimeoutMs?: number;
+  /** Correlation id for this turn (Phase 2 tracing), attached to errors. */
+  requestId?: string;
 }
 
 /**
@@ -194,9 +253,11 @@ async function consumeStream(
   handlers: ChatHandlers,
   signal?: AbortSignal,
   streamStartTime?: number,
+  options: ConsumeOptions = {},
 ): Promise<StreamResult> {
+  const { stallTimeoutMs = CHAT_STALL_TIMEOUT_MS, requestId } = options;
   let terminalReached = false;
-  let result: StreamResult = { completed: false };
+  let result: StreamResult = { completed: false, ...(requestId ? { requestId } : {}) };
   let firstTokenTime: number | null = null;
   let deltaCount = 0;
 
@@ -224,16 +285,41 @@ async function consumeStream(
           }
           case 'done': {
             terminalReached = true;
-            const done = (event.data ?? {}) as DonePayload;
-            result = { completed: true, done };
-            handlers.onDone?.(done);
+            const payload = (event.data ?? {}) as DonePayload;
+            // Terminal-state protocol: the server always closes with `done`
+            // carrying a final `status`. A failed status maps onto the same
+            // error path as a bare `error` frame; anything else - including
+            // servers that predate the `status` field - is a success, and the
+            // terminal-idempotency guard above keeps exactly one outcome.
+            if (payload.status === 'failed') {
+              const code = typeof payload.code === 'string' ? payload.code : undefined;
+              const message = typeof payload.message === 'string' ? payload.message : 'Chat failed';
+              const error = errorFromSseCode(
+                code,
+                message,
+                typeof payload.request_id === 'string' ? payload.request_id : requestId,
+              );
+              result = { completed: false, error, ...(requestId ? { requestId } : {}) };
+              handlers.onError?.(error);
+              break;
+            }
+            result = { completed: true, done: payload, ...(requestId ? { requestId } : {}) };
+            handlers.onDone?.(payload);
             break;
           }
           case 'error': {
             terminalReached = true;
-            const payload = (event.data ?? {}) as { code?: string; message?: string };
-            const error = errorFromSseCode(payload.code, payload.message ?? 'Chat failed');
-            result = { completed: false, error };
+            const payload = (event.data ?? {}) as {
+              code?: string;
+              message?: string;
+              request_id?: string;
+            };
+            const error = errorFromSseCode(
+              payload.code,
+              payload.message ?? 'Chat failed',
+              typeof payload.request_id === 'string' ? payload.request_id : requestId,
+            );
+            result = { completed: false, error, ...(requestId ? { requestId } : {}) };
             handlers.onError?.(error);
             break;
           }
@@ -242,6 +328,7 @@ async function consumeStream(
         }
       },
       signal,
+      stallTimeoutMs,
     );
   } catch (cause) {
     // The SSE reader raises a WidgetError when `signal` aborts (sse.ts).
@@ -257,8 +344,9 @@ async function consumeStream(
     const error = new WidgetError({
       code: 'network',
       message: 'Chat stream ended unexpectedly',
+      requestId: requestId ?? null,
     });
-    result = { completed: false, error };
+    result = { completed: false, error, ...(requestId ? { requestId } : {}) };
     handlers.onError?.(error);
   }
   if (streamStartTime !== undefined) {

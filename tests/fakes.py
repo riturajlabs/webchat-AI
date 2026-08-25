@@ -765,6 +765,25 @@ class FakeDocumentRepository:
             if document.tenant_id == tenant_id and document.website_id == website_id
         ]
 
+    async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int:
+        deleted = 0
+        for document_id in document_ids:
+            document = self._documents.get(document_id)
+            if document is not None and document.tenant_id == tenant_id:
+                del self._documents[document_id]
+                deleted += 1
+        return deleted
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        stale = [
+            document_id
+            for document_id, document in self._documents.items()
+            if document.tenant_id == tenant_id and document.website_id == website_id
+        ]
+        for document_id in stale:
+            del self._documents[document_id]
+        return len(stale)
+
 
 class FakeEmbeddingClient:
     """Deterministic embedding client: vector i is derived from text[i]."""
@@ -1226,6 +1245,11 @@ class FakeFeedbackRepository:
         return list(self._feedback.values())
 
     async def create(self, feedback: Feedback) -> None:
+        """Mirror MongoFeedbackRepository.create: idempotent on the unique
+        (tenant_id, message_id) index, so racing duplicate submits converge
+        to a single stored row instead of duplicating."""
+        if await self.find_by_message(feedback.tenant_id, feedback.message_id) is not None:
+            return
         self._feedback[feedback.id] = feedback
 
     async def find_by_message(self, tenant_id: str, message_id: str) -> Feedback | None:
@@ -1335,7 +1359,7 @@ class FakeUsageRecordRepository:
         return self._records.get((tenant_id, website_id, date))
 
     async def sum_by_tenant(self, tenant_id: str) -> TenantUsageSummary:
-        chats = messages = input_tokens = output_tokens = 0
+        chats = messages = input_tokens = output_tokens = cost_micros = 0
         for record in self._records.values():
             if record.tenant_id != tenant_id:
                 continue
@@ -1343,11 +1367,33 @@ class FakeUsageRecordRepository:
             messages += record.counters.get("messages", 0)
             input_tokens += record.counters.get("input_tokens", 0)
             output_tokens += record.counters.get("output_tokens", 0)
+            cost_micros += record.counters.get("estimated_cost_micros", 0)
         return TenantUsageSummary(
             chats=chats,
             messages=messages,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            estimated_cost_micros=cost_micros,
+        )
+
+    async def sum_by_website(
+        self, tenant_id: str, website_id: str
+    ) -> TenantUsageSummary:
+        chats = messages = input_tokens = output_tokens = cost_micros = 0
+        for record in self._records.values():
+            if record.tenant_id != tenant_id or record.website_id != website_id:
+                continue
+            chats += record.counters.get("chats", 0)
+            messages += record.counters.get("messages", 0)
+            input_tokens += record.counters.get("input_tokens", 0)
+            output_tokens += record.counters.get("output_tokens", 0)
+            cost_micros += record.counters.get("estimated_cost_micros", 0)
+        return TenantUsageSummary(
+            chats=chats,
+            messages=messages,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_micros=cost_micros,
         )
 
 
@@ -1907,6 +1953,8 @@ class FakeGenerationClient:
     """
 
     name = "fake"
+    # Rate-card key used by cost-tracking tests (Phase 1).
+    model_name = "fake-model"
 
     def __init__(self, deltas: list[str] | None = None) -> None:
         self.calls: list[dict] = []

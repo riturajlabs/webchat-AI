@@ -7,10 +7,12 @@ store, mirroring the API-test pattern in tests/chat_helpers.py.
 import pytest
 from backend.core.errors import (
     MessageLimitReachedError,
+    SessionNotFoundError,
     WebsiteNotReadyError,
     WidgetDisabledError,
     WidgetNotFoundError,
 )
+from backend.models.chat_session import ChatSession
 from backend.models.tenant import Tenant
 from backend.models.website import (
     WEBSITE_STATUS_PENDING,
@@ -22,6 +24,7 @@ from backend.schemas.widget import WidgetPublicConfig
 from backend.services.widget.widget_service import WidgetService
 
 from tests.fakes import (
+    FakeChatSessionRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
     FakeWidgetRepository,
@@ -40,6 +43,8 @@ def _widget_env(**kwargs):
         websites=websites,
         store=store,
         settings=None,
+        # P0-2 visitor binding lookup; tests seed via `service._sessions`.
+        sessions=FakeChatSessionRepository(),
     )
     return widgets, tenants, websites, store, service
 
@@ -285,3 +290,125 @@ async def test_message_cap_fails_open_on_store_error() -> None:
 
     service._store = _Boom()
     await service.check_message_cap(widget_id="widget-1", visitor_id="v1", session_id="session-1")
+
+
+# --------------------------------------------- visitor binding (P0-2)
+
+
+def _seed_session(
+    sessions: FakeChatSessionRepository,
+    *,
+    tenant_id: str = "tenant-a",
+    website_id: str = "web-1",
+    session_id: str = "session-1",
+    visitor_id: str | None = "visitor-a",
+) -> ChatSession:
+    session = ChatSession.new(
+        tenant_id=tenant_id,
+        website_id=website_id,
+        session_id=session_id,
+        visitor_id=visitor_id,
+        user_id=None,
+    )
+    return sessions.sessions.setdefault(session.session_id, session)
+
+
+async def test_session_access_allows_owner() -> None:
+    _, _, _, _, service = _widget_env()
+    _seed_session(service._sessions)  # noqa: SLF001
+
+    await service.validate_session_access(
+        tenant_id="tenant-a",
+        website_id="web-1",
+        visitor_id="visitor-a",
+        session_id="session-1",
+    )
+
+
+async def test_session_access_rejects_foreign_visitor() -> None:
+    """P0-2 core case: same tenant+website, different visitor -> denied."""
+    _, _, _, _, service = _widget_env()
+    _seed_session(service._sessions)  # noqa: SLF001
+
+    with pytest.raises(SessionNotFoundError):
+        await service.validate_session_access(
+            tenant_id="tenant-a",
+            website_id="web-1",
+            visitor_id="visitor-b",
+            session_id="session-1",
+        )
+
+
+async def test_session_access_rejects_unknown_and_cross_website() -> None:
+    _, _, _, _, service = _widget_env()
+    _seed_session(service._sessions)  # noqa: SLF001
+
+    with pytest.raises(SessionNotFoundError):
+        await service.validate_session_access(
+            tenant_id="tenant-a",
+            website_id="web-1",
+            visitor_id="visitor-a",
+            session_id="missing-session",
+        )
+    # Same tenant, different website under that tenant.
+    _seed_session(
+        service._sessions,  # noqa: SLF001
+        website_id="web-2",
+        session_id="session-web2",
+    )
+    with pytest.raises(SessionNotFoundError):
+        await service.validate_session_access(
+            tenant_id="tenant-a",
+            website_id="web-other",
+            visitor_id="visitor-a",
+            session_id="session-web2",
+        )
+
+
+async def test_session_access_rejects_visitorless_dashboard_thread() -> None:
+    """A user-created (dashboard) thread has no visitor; a widget token can
+    no longer resume it just because it shares the tenant+website."""
+    _, _, _, _, service = _widget_env()
+    _seed_session(service._sessions, visitor_id=None)  # noqa: SLF001
+
+    with pytest.raises(SessionNotFoundError):
+        await service.validate_session_access(
+            tenant_id="tenant-a",
+            website_id="web-1",
+            visitor_id="visitor-a",
+            session_id="session-1",
+        )
+
+
+async def test_session_access_new_conversation_needs_no_lookup() -> None:
+    """`session_id=None` starts a fresh conversation - always allowed, the
+    RAG layer stamps it with this token's visitor id."""
+    _, _, _, _, service = _widget_env()
+
+    await service.validate_session_access(
+        tenant_id="tenant-a",
+        website_id="web-1",
+        visitor_id="visitor-a",
+        session_id=None,
+    )
+
+
+async def test_session_access_fails_closed_without_lookup() -> None:
+    """A mis-wired service (no session repo) must deny, never allow."""
+    widgets, tenants, websites, store = (
+        FakeWidgetRepository(),
+        FakeTenantRepository(),
+        FakeWebsiteRepository(),
+        FakeWidgetStore(),
+    )
+    service = WidgetService(
+        widgets=widgets, tenants=tenants, websites=websites, store=store
+    )
+
+    with pytest.raises(SessionNotFoundError):
+        await service.validate_session_access(
+            tenant_id="tenant-a",
+            website_id="web-1",
+            visitor_id="visitor-a",
+            session_id="session-1",
+        )

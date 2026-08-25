@@ -16,6 +16,7 @@
  */
 
 import type { WidgetPublicConfig } from '../config/types';
+import { isSafeImageUrl } from './bubbles';
 import { createComposer } from './composer';
 import type { ChatComposer } from './composer';
 import { botGlyph, closeIcon, footerLogo } from './icons';
@@ -59,7 +60,7 @@ export interface ChatWindow {
 }
 
 const FOCUSABLE_SELECTOR =
-  'button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'button:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
 
 export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const root = document.createElement('section');
@@ -82,10 +83,13 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   brandIcon.setAttribute('aria-hidden', 'true');
   const renderBrandIcon = (config: WidgetPublicConfig): void => {
     brandIcon.replaceChildren();
-    if (config.avatar_url || config.logo_url) {
+    const logoUrl = config.avatar_url || config.logo_url;
+    if (logoUrl && isSafeImageUrl(logoUrl)) {
+      // Audit W-22: only http(s) URLs reach img.src; anything else falls back
+      // to the built-in glyph.
       const logo = document.createElement('img');
       logo.className = 'wc-brand-logo';
-      logo.src = config.avatar_url || (config.logo_url as string);
+      logo.src = logoUrl;
       logo.alt = '';
       logo.referrerPolicy = 'no-referrer';
       brandIcon.appendChild(logo);
@@ -197,6 +201,14 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
+      // Audit W-05: the widget only owns Escape while focus lives inside the
+      // dialog (same composedPath() check as the Tab branch). Escape pressed
+      // elsewhere on the host page keeps driving host shortcuts (lightboxes,
+      // sliders, ...) instead of closing this window.
+      const target = event.composedPath()[0] as Node | null;
+      if (!(target instanceof Node && root.contains(target))) {
+        return;
+      }
       event.preventDefault();
       options.onClose();
       return;

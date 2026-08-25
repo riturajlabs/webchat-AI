@@ -304,15 +304,20 @@ describe('mount integration', () => {
       apiBaseUrl: API_BASE,
       fetchImpl,
       host,
-      intentReplyDelayMs: 25,
+      // Long enough that the "thinking" phase outlasts a waitFor poll
+      // interval, so the transient typing indicator is observable.
+      intentReplyDelayMs: 400,
     });
     await controller.ready();
     controller.open();
     controller.sendMessage('hello');
 
-    // Typing indicator shows while the local turn "thinks"…
+    // Typing indicator shows while the local turn "thinks"… (renders land on
+    // the next animation frame — streaming renders are coalesced.)
     const shadow = host.shadowRoot as ShadowRoot;
-    expect(shadow.querySelector('.wc-typing')).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(shadow.querySelector('.wc-typing')).toBeTruthy();
+    });
     // …and the Stop button is NOT offered for a non-streaming turn.
     expect((shadow.querySelector('.wc-stop') as HTMLButtonElement)?.hidden).toBe(true);
 
@@ -609,5 +614,399 @@ describe('mount integration', () => {
     expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(true);
 
     controller.destroy();
+  });
+});
+
+/** SSE response whose frames are withheld until `gate` resolves. */
+function gatedSseResponse(gate: Promise<void>, events: string[]): Response {
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      await gate;
+      const encoder = new TextEncoder();
+      for (const event of events) {
+        controller.enqueue(encoder.encode(event));
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+}
+
+describe('widget production audit fixes (P2)', () => {
+  beforeEach(() => {
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+  });
+
+  it('announces the completed answer in the status live region (audit W-12)', async () => {
+    const fetchImpl = apiFetch(() => [
+      'event: message\ndata: {"delta":"Streaming answers mutate innerHTML,"}\n\n',
+      'event: message\ndata: {"delta":" so additions-only regions stay silent."}\n\n',
+      'event: done\ndata: {"session_id":"s-1"}\n\n',
+    ]);
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({ widgetId: 'widget_1', apiBaseUrl: API_BASE, fetchImpl, host });
+    await controller.ready();
+    controller.open();
+
+    controller.sendMessage('What is pricing?');
+    const shadow = host.shadowRoot as ShadowRoot;
+
+    await vi.waitFor(() => {
+      expect(shadow.querySelector('.wc-bubble-content')?.textContent).toContain(
+        'additions-only regions stay silent.',
+      );
+    });
+    // Same reconciliation pass that finished the turn pushed the final answer
+    // into the polite live region — screen readers hear it exactly once.
+    expect(shadow.querySelector('.wc-status-live')?.textContent).toContain(
+      'additions-only regions stay silent.',
+    );
+
+    controller.destroy();
+  });
+
+  it('keeps the composer editable while a turn streams (audit: composer lockout)', async () => {
+    const encoder = new TextEncoder();
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_1')) {
+        return jsonResponse(CONFIG);
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({ session_token: 'tok-1', expires_at: '2030-01-01T00:00:00Z' });
+      }
+      if (url.endsWith('/chat')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: message\ndata: {"delta":"working"}\n\n'));
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({ widgetId: 'widget_1', apiBaseUrl: API_BASE, fetchImpl, host });
+    await controller.ready();
+    controller.open();
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    controller.sendMessage('What is pricing?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(false);
+    });
+
+    // Typing must remain possible mid-stream…
+    const input = shadow.querySelector<HTMLTextAreaElement>('textarea');
+    expect(input?.disabled).toBe(false);
+
+    // …and submitting queues the draft instead of hitting the API while
+    // the turn is still active.
+    input!.value = 'follow-up question';
+    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(fetchImpl.mock.calls.filter(([u]) => String(u).endsWith('/chat'))).toHaveLength(1);
+    expect(input!.value).toBe('');
+
+    controller.destroy();
+  });
+
+  it('auto-sends a question queued mid-stream once the turn completes', async () => {
+    const chatQuestions: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_1')) {
+        return jsonResponse(CONFIG);
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({ session_token: 'tok-1', expires_at: '2030-01-01T00:00:00Z' });
+      }
+      if (url.endsWith('/chat')) {
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        chatQuestions.push(body.question);
+        if (chatQuestions.length === 1) {
+          // First turn hangs until the test releases it.
+          return gatedSseResponse(gate, [
+            'event: message\ndata: {"delta":"first answer"}\n\n',
+            'event: done\ndata: {"session_id":"s-1"}\n\n',
+          ]);
+        }
+        return sseResponse([
+          'event: message\ndata: {"delta":"second answer"}\n\n',
+          'event: done\ndata: {"session_id":"s-1"}\n\n',
+        ]);
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({ widgetId: 'widget_1', apiBaseUrl: API_BASE, fetchImpl, host });
+    await controller.ready();
+    controller.open();
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    controller.sendMessage('What is pricing?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(false);
+    });
+
+    const input = shadow.querySelector<HTMLTextAreaElement>('textarea');
+    input!.value = 'follow-up question';
+    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(chatQuestions).toEqual(['What is pricing?']);
+
+    release(); // finish turn 1 -> the queued question must fire as turn 2
+
+    await vi.waitFor(() => {
+      expect(chatQuestions).toEqual(['What is pricing?', 'follow-up question']);
+    });
+    await vi.waitFor(() => {
+      const contents = shadow.querySelectorAll('.wc-bubble-content');
+      expect(contents[contents.length - 1]?.textContent).toBe('second answer');
+    });
+
+    controller.destroy();
+  });
+
+  it('lifts the shell above the keyboard via --wc-keyboard-inset and stops on destroy (audit W-06)', async () => {
+    const listeners = new Map<string, Set<EventListener>>();
+    const fakeViewport = {
+      height: 448,
+      offsetTop: 0,
+      addEventListener(type: string, listener: EventListener) {
+        const set = listeners.get(type) ?? new Set<EventListener>();
+        set.add(listener);
+        listeners.set(type, set);
+      },
+      removeEventListener(type: string, listener: EventListener) {
+        listeners.get(type)?.delete(listener);
+      },
+    };
+    Object.defineProperty(window, 'visualViewport', {
+      configurable: true,
+      value: fakeViewport,
+    });
+    try {
+      const fetchImpl = apiFetch(() => []);
+      const host = document.createElement('webchat-widget');
+      host.attachShadow({ mode: 'open' });
+      const controller = mount({ widgetId: 'widget_1', apiBaseUrl: API_BASE, fetchImpl, host });
+      await controller.ready();
+
+      const shell = host.shadowRoot?.querySelector('.wc-shell') as HTMLElement;
+      // jsdom innerHeight is 768: 768 - 448 = 320px occluded by the keyboard.
+      expect(shell.style.getPropertyValue('--wc-keyboard-inset')).toBe('320px');
+
+      fakeViewport.height = 568; // keyboard shrinks
+      for (const listener of listeners.get('resize') ?? []) {
+        (listener as (event: Event) => void)(new Event('resize'));
+      }
+      expect(shell.style.getPropertyValue('--wc-keyboard-inset')).toBe('200px');
+
+      controller.destroy();
+      fakeViewport.height = 100;
+      for (const listener of listeners.get('resize') ?? []) {
+        (listener as (event: Event) => void)(new Event('resize'));
+      }
+      // Listeners were detached on destroy: the stale value is untouched.
+      expect(shell.style.getPropertyValue('--wc-keyboard-inset')).toBe('200px');
+    } finally {
+      delete (window as unknown as Record<string, unknown>).visualViewport;
+    }
+  });
+});
+
+describe('banner lifecycle + motion handling audit fixes', () => {
+  beforeEach(() => {
+    // Reduced-motion context on purpose: W-04 asserts auto_open still opens.
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+  });
+
+  /** jsdom never flips onLine by itself; force it for offline-banner tests. */
+  function setOnline(online: boolean): void {
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: online,
+    });
+  }
+
+  function mountWith(autoOpen = false) {
+    let failNext = false;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_1')) {
+        return jsonResponse({ ...CONFIG, auto_open: autoOpen });
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({ session_token: 'tok-1', expires_at: '2030-01-01T00:00:00Z' });
+      }
+      if (url.endsWith('/chat')) {
+        if (failNext) {
+          throw new TypeError('Failed to fetch');
+        }
+        return sseResponse([
+          'event: message\ndata: {"delta":"answer"}\n\n',
+          'event: done\ndata: {"session_id":"s-1"}\n\n',
+        ]);
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({ widgetId: 'widget_1', apiBaseUrl: API_BASE, fetchImpl, host });
+    return { controller, host, setFailNext: (v: boolean) => (failNext = v) };
+  }
+
+  it('does not resurrect a dismissed banner across sync passes (audit W-02)', async () => {
+    const { controller, host, setFailNext } = mountWith();
+    await controller.ready();
+    controller.open();
+    const shadow = host.shadowRoot as ShadowRoot;
+
+    setFailNext(true);
+    controller.sendMessage('What is pricing?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+    });
+
+    (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+    expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
+
+    // Every state transition re-runs syncRenderer; the dismissed error must
+    // stay dismissed through open/close cycles and offline/online flips.
+    controller.close();
+    controller.open();
+    try {
+      setOnline(false);
+      window.dispatchEvent(new Event('offline'));
+      await vi.waitFor(() => {
+        expect(shadow.querySelector('.wc-banner')?.textContent).toContain('offline');
+      });
+      // Still offline: dismissing connectivity info must stick too.
+      (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+      window.dispatchEvent(new Event('offline'));
+      await vi.waitFor(() => {
+        expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
+      });
+      setOnline(true);
+      window.dispatchEvent(new Event('online'));
+      await vi.waitFor(() => {
+        expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
+      });
+    } finally {
+      setOnline(true);
+    }
+
+    controller.destroy();
+  });
+
+  it('surfaces a genuinely new failure after a dismissal, but not stale ones', async () => {
+    const { controller, host, setFailNext } = mountWith();
+    await controller.ready();
+    controller.open();
+    const shadow = host.shadowRoot as ShadowRoot;
+
+    // First turn fails -> banner -> visitor dismisses it.
+    setFailNext(true);
+    controller.sendMessage('What is pricing?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+    });
+    (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+    expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
+
+    // A successful turn must NOT resurrect the stale error…
+    setFailNext(false);
+    controller.sendMessage('What are your support hours?');
+    await vi.waitFor(() => {
+      expect(
+        Array.from(shadow.querySelectorAll('.wc-bubble-content')).some(
+          (el) => el.textContent === 'answer',
+        ),
+      ).toBe(true);
+    });
+    expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
+
+    // …but a NEW failing attempt shows the banner again.
+    setFailNext(true);
+    controller.sendMessage('What is your refund policy?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+    });
+
+    controller.destroy();
+  });
+
+  it('restores the pending error banner after a transient offline episode', async () => {
+    const { controller, host, setFailNext } = mountWith();
+    await controller.ready();
+    controller.open();
+    const shadow = host.shadowRoot as ShadowRoot;
+
+    setFailNext(true);
+    controller.sendMessage('What is pricing?');
+    await vi.waitFor(() => {
+      expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+    });
+
+    // Offline takes priority while active; when it clears, the error banner
+    // (with Retry) must come back — it was never dismissed.
+    try {
+      setOnline(false);
+      window.dispatchEvent(new Event('offline'));
+      await vi.waitFor(() => {
+        expect(shadow.querySelector('.wc-banner')?.textContent).toContain('offline');
+      });
+      setOnline(true);
+      window.dispatchEvent(new Event('online'));
+      await vi.waitFor(() => {
+        expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
+      });
+      expect((shadow.querySelector('.wc-banner-retry') as HTMLButtonElement)?.hidden).toBe(false);
+    } finally {
+      setOnline(true);
+    }
+
+    controller.destroy();
+  });
+
+  it('honors auto_open even under prefers-reduced-motion (audit W-04)', async () => {
+    // A distinct widget id avoids the in-module config cache seeded by the
+    // earlier tests (same widget_1, auto_open:false).
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/config/widget_auto')) {
+        return jsonResponse({ ...CONFIG, widget_id: 'widget_auto', auto_open: true });
+      }
+      if (url.endsWith('/sessions')) {
+        return jsonResponse({ session_token: 'tok-1', expires_at: '2030-01-01T00:00:00Z' });
+      }
+      throw new Error(`unexpected URL: ${url}`);
+    });
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({
+      widgetId: 'widget_auto',
+      apiBaseUrl: API_BASE,
+      fetchImpl,
+      host,
+    });
+    try {
+      await controller.ready();
+      // matchMedia is stubbed to "reduce" in beforeEach: the dialog must still
+      // open automatically; only its entrance animation is disabled (CSS).
+      expect(controller.isOpen()).toBe(true);
+      expect(host.shadowRoot?.querySelector<HTMLElement>('.wc-window')?.hidden).toBe(false);
+    } finally {
+      controller.destroy();
+    }
   });
 });

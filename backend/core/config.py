@@ -142,6 +142,15 @@ class Settings(BaseSettings):
     # `visitor_id` is client-supplied - so an IP-shaped budget that a bot farm
     # cannot trivially rotate backs them up.
     widget_ip_limit: int = 120
+    # Dedicated per-IP burst budgets (P0-4) for the two most expensive widget
+    # endpoints. Anonymous token minting (`/sessions`) and SSE generation
+    # (`/chat`) previously shared the generic `widget_ip_limit` bucket, so an
+    # attacker rotating both visitor_id and target widget_id kept fresh entity
+    # budgets while blending into that 120/min pool. These tighter IP-shaped
+    # windows fire regardless of rotation; both stay configurable and honor
+    # the `WIDGET_RATE_LIMIT_ENABLED` master switch (localhost dev unaffected).
+    widget_session_issue_ip_limit: int = 30
+    widget_chat_ip_limit: int = 60
     widget_max_messages_per_session: int = 50
     # Master switch for the widget rate limits; `None` inherits the global
     # `rate_limit_enabled` (resolved in the validator below).
@@ -194,6 +203,25 @@ class Settings(BaseSettings):
     # Bounded at 10s so a hung provider fails fast and the fallback chain moves
     # on instead of stalling the chat for a minute (Phase 12.6 latency work).
     ai_provider_timeout_seconds: float = 10.0
+
+    # Per-provider circuit breaker (Phase 4 resilience). After
+    # `ai_circuit_failure_threshold` consecutive provider failures the circuit
+    # opens and the provider is skipped for `ai_circuit_cooldown_seconds`;
+    # after the cooldown exactly one probe request is allowed (HALF_OPEN):
+    # success closes the circuit, failure reopens it. Generation and
+    # embedding circuits are tracked separately per provider. Disable to
+    # restore unconditional try-in-order fallback.
+    ai_circuit_breaker_enabled: bool = True
+    ai_circuit_failure_threshold: int = 3
+    ai_circuit_cooldown_seconds: float = 30.0
+
+    # AI cost rate card (Phase 1 cost tracking). JSON object keyed by model
+    # name, merged over built-in defaults; a "*" entry prices any unlisted
+    # model. Rates are USD per 1 million tokens. Example:
+    #   AI_MODEL_PRICING_JSON={"gemini-2.5-flash":
+    #     {"input_per_million": 0.30, "output_per_million": 2.50},
+    #    "*": {"input_per_million": 0.50, "output_per_million": 1.00}}
+    ai_model_pricing_json: str = ""
 
     # Cloud embedding fallbacks (ADR-009). Keys are optional: a provider in
     # `EMBEDDING_PROVIDER_ORDER` whose key is missing is skipped gracefully at
@@ -377,6 +405,14 @@ class Settings(BaseSettings):
     # Minimum confidence score (0.0–1.0) required to proceed with generation.
     # Scores below this threshold trigger the fallback response.
     rag_confidence_threshold: float = 0.3
+
+    # Conversational query rewriting (multi-turn retrieval accuracy).
+    # Follow-up questions ("what about refunds?") embed poorly without their
+    # subject.  When enabled AND the question looks context-dependent, the
+    # most recent user turn is prepended to form the *search* query used for
+    # embedding + vector search.  The model still receives the original
+    # question verbatim; no LLM call is added.  Set false to disable.
+    enable_conversational_query_rewrite: bool = True
 
     # Context optimization (opt-in, disabled by default). When enabled,
     # near-duplicate chunks are removed and context text is compressed

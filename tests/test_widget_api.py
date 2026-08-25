@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 from tests.fakes import (
+    FakeChatSessionRepository,
     FakeFeedbackRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
@@ -45,6 +46,7 @@ def _build_widget_service(
     widget_enabled: bool = True,
     allowed_domains: list[str] | None = None,
     tenants: FakeTenantRepository | None = None,
+    sessions: FakeChatSessionRepository | None = None,
 ) -> WidgetService:
     widgets = FakeWidgetRepository()
     tenants = tenants or FakeTenantRepository()
@@ -69,6 +71,8 @@ def _build_widget_service(
         tenants=tenants,
         websites=websites,
         store=store,
+        # P0-2 visitor binding reads chat sessions through this lookup.
+        sessions=sessions,
     )
 
 
@@ -101,7 +105,9 @@ def client(monkeypatch):
     get_settings.cache_clear()
     chat_env = build_chat_env()
     tenants = FakeTenantRepository()
-    widget_service = _build_widget_service(chat_env.websites, tenants=tenants)
+    widget_service = _build_widget_service(
+        chat_env.websites, tenants=tenants, sessions=chat_env.sessions
+    )
     billing_env = build_billing_env(tenants)
     # The feedback service shares the chat message repo so a visitor can rate a
     # message the chat flow actually produced.
@@ -222,9 +228,12 @@ async def test_widget_config_reports_enabled_false_for_disabled_widget(monkeypat
 
 async def test_widget_sessions_mints_token(client) -> None:
     test_client, _, _, _ = client
+    # Session minting requires an Origin header (P0-1): browser embeds always
+    # send one on cross-origin POSTs.
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+        headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -237,6 +246,7 @@ async def test_widget_sessions_rejects_unknown_widget(client) -> None:
     response = test_client.post(
         "/api/widget/v1/sessions",
         json={"widget_id": "nope", "visitor_id": "visitor-1"},
+        headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "WIDGET_NOT_FOUND"
@@ -255,6 +265,7 @@ async def test_widget_sessions_rejects_disabled_widget(monkeypatch) -> None:
         response = test_client.post(
             "/api/widget/v1/sessions",
             json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+            headers={"Origin": "https://customer.example"},
         )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "WIDGET_DISABLED"
@@ -308,6 +319,53 @@ async def test_widget_chat_streams_answer(client) -> None:
     assert "error" not in grouped
     # The conversation session id is returned in the done event.
     assert grouped["done"][0]["session_id"]
+
+
+async def test_widget_chat_done_event_carries_client_request_id(client) -> None:
+    """Phase 2 tracing: the inbound X-Request-ID flows into the done frame.
+
+    Proves the middleware-set id reaches the SSE generator context, and that
+    no second id is generated server-side when the client supplies one.
+    """
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers={**_chat_headers(), "X-Request-ID": "trace-e2e-done"},
+    )
+
+    assert response.status_code == 200
+    # Existing middleware behavior: the client-supplied id is echoed back.
+    assert response.headers["x-request-id"] == "trace-e2e-done"
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["done"][0]["request_id"] == "trace-e2e-done"
+
+
+async def test_widget_chat_error_event_carries_client_request_id(client) -> None:
+    """Pre-stream validation rejections are traceable too (Phase 2)."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    foreign_token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id="other-website",
+        visitor_id="visitor-1",
+    )
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi"},
+        headers={
+            "Authorization": f"Bearer {foreign_token}",
+            "X-Request-ID": "trace-e2e-error",
+        },
+    )
+
+    assert response.status_code == 200
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["error"][0]["code"] == "WIDGET_NOT_FOUND"
+    assert grouped["error"][0]["request_id"] == "trace-e2e-error"
 
 
 async def test_widget_chat_requires_bearer_token(client) -> None:
@@ -365,6 +423,229 @@ async def test_widget_chat_rejects_spam(client) -> None:
     )
     grouped = _event_map(_sse_events(response.text))
     assert grouped["error"][0]["code"] == "SPAM_REJECTED"
+
+
+async def test_widget_chat_pre_stream_error_ends_with_failed_done(client) -> None:
+    """Audit S-04: every SSE failure ends with error + done(status=failed).
+
+    A widget that only saw the `error` frame could not distinguish a finished
+    (failed) turn from a dropped connection; the terminal pair closes that gap
+    without changing the error payload contract.
+    """
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    foreign_token, _ = create_widget_session_token(
+        widget_id=WIDGET_ID,
+        tenant_id=TENANT_ID,
+        website_id="other-website",
+        visitor_id="visitor-1",
+    )
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi"},
+        headers={"Authorization": f"Bearer {foreign_token}"},
+    )
+
+    grouped = _event_map(_sse_events(response.text))
+    error = grouped["error"][0]
+    done = grouped["done"][0]
+    assert error["code"] == "WIDGET_NOT_FOUND"
+    assert done["status"] == "failed"
+    assert done["code"] == error["code"]
+    assert done["message"] == error["message"]
+    # The stream ends on the terminal frame - nothing follows the failed done.
+    events_order = [event_name for event_name, _ in _sse_events(response.text)]
+    assert events_order == ["error", "done"]
+
+
+# ------------------------------------------------- visitor binding (P0-2)
+
+
+async def _start_conversation(test_client, visitor_id: str) -> tuple[str, str]:
+    """Ask one question as `visitor_id`; return (session_id, message_id)."""
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers(visitor_id),
+    )
+    assert response.status_code == 200
+    grouped = _event_map(_sse_events(response.text))
+    done = grouped["done"][0]
+    return str(done["session_id"]), str(done.get("message_id"))
+
+
+async def test_widget_chat_rejects_foreign_visitor_session(client) -> None:
+    """P0-2: a valid token for the same widget cannot resume another
+    visitor's conversation by replaying its session_id."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    session_id, _ = await _start_conversation(test_client, "visitor-a")
+    messages_before = len(chat_env.messages.messages)
+
+    intruder = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What else can you tell me?", "session_id": session_id},
+        headers=_chat_headers("visitor-b"),
+    )
+
+    assert intruder.status_code == 200
+    grouped = _event_map(_sse_events(intruder.text))
+    # Same code an unknown session produces - no existence oracle.
+    assert grouped["error"][0]["code"] == "SESSION_NOT_FOUND"
+    assert "message" not in grouped
+    # The victim conversation was neither read nor extended.
+    assert len(chat_env.messages.messages) == messages_before
+
+
+async def test_widget_chat_owner_can_resume_own_session(client) -> None:
+    """Positive control: the legitimate owner keeps full access (P0-2 must
+    not break the normal continue-conversation flow)."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+    session_id, _ = await _start_conversation(test_client, "visitor-a")
+
+    followup = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "And what about support?", "session_id": session_id},
+        headers=_chat_headers("visitor-a"),
+    )
+
+    assert followup.status_code == 200
+    grouped = _event_map(_sse_events(followup.text))
+    assert "error" not in grouped
+    assert grouped["done"][0]["session_id"] == session_id
+    assert grouped["done"][0].get("status", "completed") != "failed"
+    # Two turns persisted: 2 messages per turn.
+    assert len(chat_env.messages.messages) == 4
+
+
+async def test_widget_feedback_rejects_foreign_visitor_session(client) -> None:
+    """P0-2: feedback cannot be attached to another visitor's conversation,
+    even when the message exists and matches tenant/website/session."""
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    session_id, message_id = await _start_conversation(test_client, "visitor-a")
+
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 1,
+            "category": "wrong",
+        },
+        headers=_feedback_headers("visitor-b"),
+    )
+
+    assert result.status_code == 404
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
+    assert feedback_service._feedback.feedback == []  # noqa: SLF001
+
+
+async def test_widget_feedback_owner_can_rate_own_message(client) -> None:
+    """Positive control: the conversation owner can still rate answers."""
+    test_client, _, chat_env, feedback_service = client
+    await _ready_website(chat_env)
+    session_id, message_id = await _start_conversation(test_client, "visitor-a")
+
+    result = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": session_id,
+            "message_id": message_id,
+            "rating": 5,
+            "category": "helpful",
+        },
+        headers=_feedback_headers("visitor-a"),
+    )
+
+    assert result.status_code == 204
+    stored = feedback_service._feedback.feedback  # noqa: SLF001
+    assert len(stored) == 1
+    assert stored[0].message_id == message_id
+
+
+async def test_widget_chat_unknown_session_still_not_found(client) -> None:
+    """Unknown session ids keep the exact pre-P0-2 behavior/code."""
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    response = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "Hi there", "session_id": "does-not-exist"},
+        headers=_chat_headers("visitor-a"),
+    )
+
+    grouped = _event_map(_sse_events(response.text))
+    assert grouped["error"][0]["code"] == "SESSION_NOT_FOUND"
+
+
+# ------------------------------------------- per-IP burst budgets (P0-4)
+
+
+async def test_widget_sessions_http_429_over_ip_burst_budget(monkeypatch, client) -> None:
+    """P0-4 end-to-end: with the widget limiter enabled and a tight
+    WIDGET_SESSION_ISSUE_IP_LIMIT, minting beyond the IP budget is a 429,
+    and disabling the switch (localhost dev) restores access."""
+    import backend.api.deps as deps
+
+    from tests.test_rate_limit import FakeRateLimitStore
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_SESSION_ISSUE_IP_LIMIT", "2")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    test_client, _, _, _ = client
+
+    payload = {"widget_id": WIDGET_ID, "visitor_id": "visitor-burst"}
+    headers = {"Origin": "https://customer.example"}
+    for _ in range(2):
+        response = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+        assert response.status_code == 200
+
+    limited = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+
+    # Localhost development: master switch off -> no Redis needed, no 429.
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "false")
+    get_settings.cache_clear()
+    restored = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
+    assert restored.status_code == 200
+    get_settings.cache_clear()
+
+
+async def test_widget_chat_http_429_over_ip_burst_budget(monkeypatch, client) -> None:
+    """P0-4 end-to-end: SSE generation is bounded by its own per-IP burst
+    window; exceeding it fails fast with an HTTP 429 before any streaming."""
+    import backend.api.deps as deps
+
+    from tests.test_rate_limit import FakeRateLimitStore
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("WIDGET_RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("WIDGET_CHAT_IP_LIMIT", "1")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    test_client, _, chat_env, _ = client
+    await _ready_website(chat_env)
+
+    first = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers("visitor-burst"),
+    )
+    assert first.status_code == 200
+
+    limited = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers=_chat_headers("visitor-burst"),
+    )
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMIT_EXCEEDED"
+    get_settings.cache_clear()
 
 
 # --------------------------------------------------------------- CORS
@@ -515,7 +796,9 @@ async def test_widget_feedback_rejects_unknown_message(client) -> None:
         headers=_feedback_headers(),
     )
     assert result.status_code == 404
-    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    # P0-2 visitor binding rejects the unknown session before the message
+    # lookup runs (still 404, now with the session-scoped code).
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
     assert feedback_service._feedback.feedback == []  # noqa: SLF001
 
 
@@ -549,7 +832,9 @@ async def test_widget_feedback_rejects_foreign_website_token(client) -> None:
     )
 
     assert result.status_code == 404
-    assert result.json()["error"]["code"] == "MESSAGE_NOT_FOUND"
+    # The foreign-website token is rejected by P0-2 session binding before
+    # the message lookup (website mismatch under the same tenant).
+    assert result.json()["error"]["code"] == "SESSION_NOT_FOUND"
     assert feedback_service._feedback.feedback == []  # noqa: SLF001
 
 

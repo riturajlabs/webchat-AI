@@ -481,6 +481,8 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "rerank_input_count",
         "total_ms",
         "provider",
+        "model_name",
+        "estimated_cost",
         "embedding_cache",
         "retrieval_cache",
         "context_chars",
@@ -1168,3 +1170,168 @@ async def test_streaming_works_with_timing_enabled(monkeypatch) -> None:
     assert deltas
     done = _done_event(events)
     assert done["data"]["fallback"] is False
+
+
+# ---------------------------------------------------------------------------
+# Heading flows from chunk metadata into the model context (audit R-08)
+# ---------------------------------------------------------------------------
+
+
+async def test_chunk_heading_metadata_reaches_context_and_prompt() -> None:
+    """A chunk stored with metadata['heading'] must surface as ContextItem.heading
+    and render in the prompt block header instead of being dropped."""
+    from backend.models.knowledge_chunk import KnowledgeChunk
+    from backend.prompts.rag import render_context
+    from backend.services.chat.rag_service import ContextItem
+
+    env = build_chat_env()
+    chunk = KnowledgeChunk.new(
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        document_id="doc-1",
+        chunk_text="Starter costs nine dollars per month.",
+        embedding=[0.0] * 4,
+        chunk_index=0,
+        embedding_provider=env.embedder.embedding_identity.provider,
+        embedding_model=env.embedder.embedding_identity.model,
+        embedding_dimensions=env.embedder.embedding_identity.dimensions,
+        embedding_version=env.embedder.embedding_identity.version,
+        metadata={
+            "heading": "Pricing",
+            "source_url": "https://example.com/page",
+            "title": "Page",
+        },
+    )
+
+    items, _sources, _metrics = env.rag._build_context(
+        [type("R", (), {"chunk": chunk, "score": 0.9})()]
+    )
+    assert items[0].heading == "Pricing"
+
+    rendered = render_context(items, max_chars_per_chunk=2000)
+    assert "[1] Page - Pricing (https://example.com/page)" in rendered
+
+    # Chunks without heading metadata keep rendering exactly as before.
+    plain = ContextItem(url="u", title="T", heading=None, text="body")
+    assert "- " not in render_context([plain], max_chars_per_chunk=2000).split("\n")[0]
+
+
+# ---------------------------------------------------------------------------
+# Audit regressions: embedding identity fail-safe + citation validation
+# ---------------------------------------------------------------------------
+
+
+async def test_embedding_identity_mismatch_falls_back_safely(monkeypatch) -> None:
+    """An incompatible/mixed embedding corpus must degrade to the safe
+    fallback instead of surfacing an error event to the visitor."""
+    from backend.core.errors import EmbeddingCompatibilityError
+
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=2)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="We offer Pro and Team plans.")
+
+    async def _raise_incompatible(*args, **kwargs):
+        raise EmbeddingCompatibilityError(
+            "Stored knowledge chunk embedding identity is incompatible."
+        )
+
+    monkeypatch.setattr(env.vector, "similarity_search", _raise_incompatible)
+
+    events = await _stream(
+        env, tenant_id=TENANT_A, website_id=WEB_1, question="What plans do you offer?"
+    )
+
+    # No error event: the pipeline fails safely to the existing fallback.
+    assert not [event for event in events if event["event"] == "error"]
+    done = _done_event(events)
+    assert done["data"]["fallback"] is True
+    # The model is never called against an incompatible corpus.
+    assert env.generation.calls == []
+    _user, assistant = env.messages.messages
+    assert assistant.content == UNKNOWN_ANSWER_FALLBACK
+
+
+async def test_mixed_embedding_corpus_only_serves_active_identity() -> None:
+    """A corpus holding two embedding spaces must never mix them into one
+    result set (prevents cross-space similarity comparisons)."""
+    from backend.models.knowledge_chunk import KnowledgeChunk
+
+    env = build_chat_env()
+    stale = KnowledgeChunk.new(
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        document_id="doc-stale",
+        chunk_text="Chunk embedded by the previous provider.",
+        embedding=[0.0] * 4,
+        chunk_index=0,
+        embedding_provider="old-provider",
+        embedding_model="old-model",
+        embedding_dimensions=4,
+        embedding_version="v0",
+    )
+    await env.vector.insert_chunks([stale])
+    fresh = await make_chunk(
+        env, tenant_id=TENANT_A, website_id=WEB_1, text="Current provider chunk."
+    )
+
+    results = await env.vector.similarity_search(
+        TENANT_A,
+        WEB_1,
+        [0.0] * 4,
+        top_k=5,
+        embedding_identity=env.embedder.embedding_identity,
+    )
+    assert [result.chunk.id for result in results] == [fresh.id]
+
+    # Without an identity constraint (legacy callers) nothing is hidden.
+    unfiltered = await env.vector.similarity_search(TENANT_A, WEB_1, [0.0] * 4, top_k=5)
+    assert len(unfiltered) == 2
+
+
+async def test_invalid_citation_markers_are_stripped_from_answer() -> None:
+    """[N] markers beyond the retrieved source count are removed before the
+    answer is persisted; valid markers and unrelated brackets survive."""
+    env = build_chat_env(
+        deltas=["Plans start at $9 [1]. Compare tiers [7]. Release notes [2024]."]
+    )
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Starter costs $9.")
+
+    events = await _stream(
+        env, tenant_id=TENANT_A, website_id=WEB_1, question="How much is Starter?"
+    )
+    assert _done_event(events)["data"]["fallback"] is False
+
+    _user, assistant = env.messages.messages
+    assert (
+        assistant.content
+        == "Plans start at $9 [1]. Compare tiers . Release notes [2024]."
+    )
+
+
+def test_strip_invalid_citations_unit_cases() -> None:
+    from backend.services.chat.rag_service import _strip_invalid_citations as strip
+
+    # Valid markers pass through untouched.
+    assert strip("See [1] and [2] for details.", 2) == ("See [1] and [2] for details.", [])
+    # Out-of-range indexes are removed and reported.
+    assert strip("Claim [3] here.", 2) == ("Claim  here.", [3])
+    assert strip("Zero [0] and over [11].", 10) == ("Zero  and over .", [0, 11])
+    # No sources at all: every marker is unverifiable.
+    assert strip("Any [1] marker [2].", 0)[0] == "Any  marker ."
+    # Years, ranges and markdown links are never treated as citations.
+    text = "Since [2024], see [docs](https://x.y) and [1-2]."
+    assert strip(text, 5) == (text, [])
+
+
+async def test_fallback_answer_is_never_citation_sanitized() -> None:
+    """The canonical fallback carries no citations; sanitization must be a
+    no-op there (it is skipped entirely for substituted fallbacks)."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=0)
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Anything?")
+
+    assert _done_event(events)["data"]["fallback"] is True
+    _user, assistant = env.messages.messages
+    assert assistant.content == UNKNOWN_ANSWER_FALLBACK

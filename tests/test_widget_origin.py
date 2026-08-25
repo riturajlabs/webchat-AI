@@ -12,6 +12,11 @@ An empty allowlist is now *blocking*: browser embeds get
 `*` entry is the explicit open-embedding opt-in. In `development` the loopback
 hosts (`localhost` / `127.0.0.1`) are auto-permitted so a developer can test an
 embed without editing the allowlist; production never auto-permits them.
+
+P0-1 closes the missing-`Origin` bypass: `POST /sessions` requires an `Origin`
+header unconditionally; on chat/feedback a browser-shaped `User-Agent` without
+an `Origin` header is rejected, while genuine non-browser clients (curl,
+server-to-server) stay permitted (and per-IP rate limited).
 """
 
 import pytest
@@ -33,6 +38,7 @@ from fastapi.testclient import TestClient
 from tests.billing_helpers import build_billing_env
 from tests.chat_helpers import ChatEnv, build_chat_env, make_chunk, make_website
 from tests.fakes import (
+    FakeChatSessionRepository,
     FakeFeedbackRepository,
     FakeTenantRepository,
     FakeWebsiteRepository,
@@ -90,6 +96,9 @@ def _build_widget_service(
         websites=websites,
         store=store,
         settings=settings,
+        # P0-2 visitor binding lookup (unused by origin tests but wired the
+        # same way production builds the service).
+        sessions=FakeChatSessionRepository(),
     )
 
 
@@ -380,6 +389,114 @@ async def test_production_blocks_loopback_origin(production_client) -> None:
     body = response.json()["error"]
     assert body["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
     assert "localhost" in body["message"]
+
+
+# ------------------------------------------------ missing-Origin policy (P0-1)
+
+BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+
+async def test_sessions_without_origin_header_rejected(client) -> None:
+    """P0-1: session minting requires an Origin header unconditionally.
+
+    A browser-initiated cross-origin POST always carries `Origin`, so a
+    headerless request is not a widget embed and can never mint a token -
+    regardless of User-Agent.
+    """
+    test_client, _, _ = client
+    for headers in ({}, {"User-Agent": BROWSER_UA}, {"User-Agent": "curl/8.4.0"}):
+        response = test_client.post(
+            "/api/widget/v1/sessions",
+            json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+            headers=headers,
+        )
+        assert response.status_code == 403, headers
+        assert response.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED", headers
+
+
+async def test_null_origin_cannot_mint_session(client) -> None:
+    """`Origin: null` (sandboxed iframe) never mints a session either."""
+    test_client, _, _ = client
+    response = test_client.post(
+        "/api/widget/v1/sessions",
+        json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+        headers={"Origin": "null"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+
+
+async def test_missing_origin_with_browser_user_agent_rejected_on_chat_and_feedback(
+    client,
+) -> None:
+    """P0-1: a browser-shaped request without an Origin header must not slip
+    past the allowlist on authenticated routes (sandboxed iframe fetches,
+    privacy extensions stripping Origin)."""
+    test_client, _, chat_env = client
+    await _ready_website(chat_env)
+    auth = _token()
+    chat = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers={"User-Agent": BROWSER_UA, "Authorization": auth},
+    )
+    assert chat.status_code == 403
+    assert chat.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+
+    feedback = test_client.post(
+        "/api/widget/v1/feedback",
+        json={
+            "session_id": "s",
+            "message_id": "m",
+            "rating": 4,
+            "category": "helpful",
+        },
+        headers={"User-Agent": BROWSER_UA, "Authorization": auth},
+    )
+    assert feedback.status_code == 403
+    assert feedback.json()["error"]["code"] == "WIDGET_ORIGIN_NOT_ALLOWED"
+
+
+async def test_missing_origin_non_browser_still_allowed_on_chat(client) -> None:
+    """curl / server-to-server callers keep working without an Origin header
+    (bounded by the per-IP limiter, which these tests disable)."""
+    test_client, _, chat_env = client
+    await _ready_website(chat_env)
+    chat = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers={"User-Agent": "curl/8.4.0", "Authorization": _token()},
+    )
+    assert chat.status_code == 200
+    assert chat.headers["content-type"].startswith("text/event-stream")
+
+
+async def test_localhost_full_flow_still_works_in_development(client) -> None:
+    """P0-1 preserves the development loopback convenience end-to-end:
+    config + sessions + chat succeed from localhost in `development` without
+    editing the allowlist."""
+    test_client, _, chat_env = client
+    await _ready_website(chat_env)
+    origin = {"Origin": "http://localhost:5173"}
+
+    config = test_client.get(f"/api/widget/v1/config/{WIDGET_ID}", headers=origin)
+    assert config.status_code == 200
+
+    session = test_client.post(
+        "/api/widget/v1/sessions",
+        json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+        headers=origin,
+    )
+    assert session.status_code == 200
+    token = f"Bearer {session.json()['session_token']}"
+
+    chat = test_client.post(
+        "/api/widget/v1/chat",
+        json={"question": "What plans do you offer?"},
+        headers={**origin, "Authorization": token},
+    )
+    assert chat.status_code == 200
+    assert chat.headers["content-type"].startswith("text/event-stream")
 
 
 # ------------------------------------------------------ empty allowlist

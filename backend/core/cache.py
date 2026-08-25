@@ -33,7 +33,9 @@ class RedisCacheStore:
     caller receives the "miss" path, so the main request is never blocked.
     """
 
-    def __init__(self, redis: Redis, prefix: str = "rag") -> None:
+    def __init__(self, redis: Redis, *, prefix: str) -> None:
+        # No default prefix: every caller must opt into the same namespace its
+        # readers use, or invalidation silently misses the keys (audit R-01).
         self._redis = redis
         self._prefix = prefix
 

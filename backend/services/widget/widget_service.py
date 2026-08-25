@@ -21,6 +21,7 @@ from typing import Protocol
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     MessageLimitReachedError,
+    SessionNotFoundError,
     WebsiteNotReadyError,
     WidgetDisabledError,
     WidgetDomainNotConfiguredError,
@@ -28,10 +29,11 @@ from backend.core.errors import (
     WidgetOriginNotAllowedError,
 )
 from backend.core.security import create_widget_session_token, utcnow
+from backend.models.chat_session import ChatSession
 from backend.models.website import WEBSITE_STATUS_READY
 from backend.repositories import TenantRepository, WebsiteRepository, WidgetRepository
 from backend.schemas.widget import WidgetPublicConfig
-from backend.utils.origin import origin_allowed, origin_hostname
+from backend.utils.origin import looks_like_browser, origin_allowed, origin_hostname
 
 logger = logging.getLogger("webchat_ai")
 
@@ -60,6 +62,12 @@ class WidgetStore(Protocol):
     async def delete(self, key: str) -> None: ...
 
 
+class SessionLookup(Protocol):
+    """Minimal chat-session read surface for visitor binding (P0-2)."""
+
+    async def find_by_session_id(self, tenant_id: str, session_id: str) -> ChatSession | None: ...
+
+
 class WidgetService:
     """Public-facing widget business logic (config, sessions, chat guards)."""
 
@@ -71,21 +79,39 @@ class WidgetService:
         websites: WebsiteRepository,
         store: WidgetStore,
         settings: Settings | None = None,
+        sessions: SessionLookup | None = None,
     ) -> None:
         self._widgets = widgets
         self._tenants = tenants
         self._websites = websites
         self._store = store
+        self._sessions = sessions
         self._settings = settings or get_settings()
 
     # ------------------------------------------------------------ config
 
-    async def validate_origin(self, widget_id: str, origin: str | None) -> None:
+    async def validate_origin(
+        self,
+        widget_id: str,
+        origin: str | None,
+        *,
+        user_agent: str | None = None,
+        require_origin: bool = False,
+    ) -> None:
         """Reject browser embeds from origins outside the widget allowlist.
 
-        Policy (production hardening):
-          * no `Origin` header → allowed (non-browser clients; curl/SSE are
-            not an embed and cannot be validated anyway);
+        Policy (production hardening, P0-1):
+          * `POST /sessions` (`require_origin=True`): the `Origin` header is
+            mandatory - a browser-initiated cross-origin POST always carries
+            it, so a request without one is not a widget embed and can never
+            mint a session token (server-to-server/CLI clients are explicitly
+            not the audience of the public widget surface);
+          * chat/feedback/config with no `Origin` header: allowed only for
+            non-browser clients (empty or non-Mozilla `User-Agent`). A
+            browser-shaped request without an Origin (sandboxed iframe,
+            privacy extension, stripped header) is rejected with
+            `WIDGET_ORIGIN_NOT_ALLOWED` instead of silently bypassing the
+            allowlist;
           * widget has an empty allowlist → browser embeds are blocked with
             `WIDGET_DOMAIN_NOT_CONFIGURED` until the tenant configures at
             least one domain (or opts into open embedding with the literal
@@ -97,6 +123,10 @@ class WidgetService:
             iframe) is never allowed.
         """
         if origin is None:
+            if require_origin or looks_like_browser(user_agent):
+                raise WidgetOriginNotAllowedError(
+                    "A valid Origin header is required to use this widget."
+                )
             return
         widget = await self._widgets.find_by_widget_id(widget_id)
         if widget is None:
@@ -251,6 +281,44 @@ class WidgetService:
         website = await self._websites.find_by_id_any(website_id)
         if website is None or website.status != WEBSITE_STATUS_READY:
             raise WebsiteNotReadyError("This website is still being indexed.")
+
+    async def validate_session_access(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        visitor_id: str | None,
+        session_id: str | None,
+    ) -> None:
+        """Bind the conversation to the token identity before use (P0-2).
+
+        A widget-session token may only resume a conversation that belongs to
+        its own `(tenant_id, website_id, visitor_id)` triple. The `session_id`
+        in the request body is client-supplied and non-secret; without this
+        check any visitor holding a valid token for the same widget could
+        replay another visitor's conversation id and read their history or
+        append to their thread. Unknown sessions, sessions from a different
+        website under the same tenant, sessions whose stored visitor does not
+        match the token claim (including user-created dashboard threads),
+        all raise the same `SESSION_NOT_FOUND` code the RAG layer already
+        uses for unknown sessions - no existence oracle.
+
+        `session_id=None` starts a new conversation: RAG stamps it with this
+        token's visitor id, so nothing to re-bind here.
+        """
+        if session_id is None:
+            return
+        if self._sessions is None:
+            # Fail closed: without the lookup we cannot prove ownership.
+            logger.error("widget session lookup is not wired; denying access")
+            raise SessionNotFoundError("Chat session not found.")
+        session = await self._sessions.find_by_session_id(tenant_id, session_id)
+        if (
+            session is None
+            or session.website_id != website_id
+            or (session.visitor_id or "") != (visitor_id or "")
+        ):
+            raise SessionNotFoundError("Chat session not found.")
 
     async def check_message_cap(
         self,

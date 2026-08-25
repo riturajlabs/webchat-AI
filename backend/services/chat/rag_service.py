@@ -22,6 +22,7 @@ the streaming endpoint stays uniform.
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -29,7 +30,11 @@ from typing import Any
 from backend.ai.gemini import GenerationClient
 from backend.core.cache import CacheStore
 from backend.core.config import get_settings
-from backend.core.errors import AppError, SessionNotFoundError
+from backend.core.errors import (
+    AppError,
+    EmbeddingCompatibilityError,
+    SessionNotFoundError,
+)
 from backend.core.logging import get_request_id
 from backend.core.privacy import content_hash
 from backend.core.prompt_guard import validate_response
@@ -55,6 +60,12 @@ from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
 from backend.repositories.vector.reranker import EmbeddingReranker
 from backend.repositories.website_repository import WebsiteRepository
+from backend.services.billing.pricing import (
+    dollars_to_micros,
+    estimate_generation_cost,
+    get_model_price,
+    load_rate_card,
+)
 from backend.services.chat.confidence import ConfidenceMetrics, assess_confidence
 from backend.services.chat.context_optimizer import (
     OptimizationMetrics,
@@ -62,6 +73,11 @@ from backend.services.chat.context_optimizer import (
     remove_near_duplicates,
 )
 from backend.services.chat.query_classifier import QueryComplexity, classify_query
+from backend.services.chat.query_rewrite import (
+    DEFAULT_REWRITE_CONTEXT_CHARS,
+    build_search_query,
+    needs_conversation_context,
+)
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
     RetrievalMetricsInfo,
@@ -97,6 +113,20 @@ def _error_code(exc: Exception) -> str:
     if isinstance(exc, AppError):
         return exc.code
     return "INTERNAL_ERROR"
+
+
+def _generation_model_name(generation: Any) -> str:
+    """Rate-card key for the model that served the last request.
+
+    Prefers the router's ``active_model`` (the serving provider's id after a
+    fallback chain), then a concrete client's ``model_name``. Returns "" when
+    neither is available so cost accrues at 0 rather than misattributing.
+    """
+    for attr in ("active_model", "model_name"):
+        value = getattr(generation, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
 
 
 class RagService:
@@ -164,6 +194,8 @@ class RagService:
         self._adaptive_complex_top_k = settings.adaptive_complex_top_k
         self._adaptive_complex_rerank_top_k = settings.adaptive_complex_rerank_top_k
         self._adaptive_complex_max_context_chars = settings.adaptive_complex_max_context_chars
+        # Conversational query rewriting (multi-turn retrieval accuracy).
+        self._query_rewrite_enabled = settings.enable_conversational_query_rewrite
         # Retrieval strategy: explicit override or config-driven default.
         if retrieval_strategy is not None:
             self._retrieval_strategy = retrieval_strategy
@@ -184,6 +216,11 @@ class RagService:
             )
         else:
             self._reranker = None
+        # AI cost rate card (Phase 1). Parsed once at construction so a
+        # malformed AI_MODEL_PRICING_JSON fails fast instead of silently
+        # producing zero-cost traffic. Unpriced models warn once per process.
+        self._rate_card = load_rate_card(settings.ai_model_pricing_json)
+        self._warned_unpriced_models: set[str] = set()
 
     async def _embed_question(
         self, question: str
@@ -231,6 +268,7 @@ class RagService:
         tenant_id: str,
         website_id: str,
         question: str,
+        history_task: asyncio.Task[list[tuple[str, str]]] | None = None,
     ) -> tuple[
         list[float],
         list[VectorSearchResult],
@@ -253,6 +291,12 @@ class RagService:
         load_chunks_ms, rerank_ms, rerank_embedding_ms,
         rerank_input_count, hybrid_candidate_count,
         adaptive_max_context_chars)`.
+
+        When *history_task* is supplied and the question looks
+        context-dependent, the most recent user turn is prepended before
+        embedding so follow-up questions keep their conversation subject
+        (`enable_conversational_query_rewrite`).  Cache keys derive from the
+        final search query, so rewrites never collide with standalone asks.
         """
         # Adaptive retrieval: classify query complexity and determine params.
         complexity = classify_query(question)
@@ -265,8 +309,45 @@ class RagService:
             elif complexity == QueryComplexity.COMPLEX:
                 effective_top_k = self._adaptive_complex_top_k
                 adaptive_max_context_chars = self._adaptive_complex_max_context_chars
+
+        # Conversational query rewrite: retrieval-only contextualization.
+        search_query = question
+        if (
+            self._query_rewrite_enabled
+            and history_task is not None
+            and needs_conversation_context(question)
+        ):
+            try:
+                history = await history_task
+                rewritten = build_search_query(
+                    question,
+                    history,
+                    max_context_chars=DEFAULT_REWRITE_CONTEXT_CHARS,
+                )
+            except Exception:
+                # History load failed: fall back to the raw question.  The
+                # later history await still surfaces the error downstream.
+                logger.exception(
+                    "query rewrite skipped: conversation memory unavailable "
+                    "(tenant=%s website=%s)",
+                    tenant_id,
+                    website_id,
+                )
+            else:
+                if rewritten != question:
+                    search_query = rewritten
+                    logger.info(
+                        "rag_query_rewritten tenant=%s website=%s "
+                        "original_hash=%s search_hash=%s search_length=%d",
+                        tenant_id,
+                        website_id,
+                        content_hash(question),
+                        content_hash(search_query),
+                        len(search_query),
+                    )
+
         cache = self._cache
-        cache_key = f"{website_id}:{question.strip().lower()}"
+        cache_key = f"{website_id}:{search_query.strip().lower()}"
         now = _now()
         retrieval_enabled = (
             cache is not None and self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0
@@ -303,7 +384,7 @@ class RagService:
                         ) else 0
                         all_chunks = None
                         results, metrics = self._retrieval_strategy.search(
-                            query=question,
+                            query=search_query,
                             vector_results=raw_results,
                             all_chunks=all_chunks,
                             top_k=effective_top_k,
@@ -315,7 +396,7 @@ class RagService:
                         if self._reranker is not None and results:
                             rerank_input_count = len(results)
                             results, rerank_metrics = await self._reranker.rerank(
-                                question, results, query_embedding=vector
+                                search_query, results, query_embedding=vector
                             )
                             rerank_ms = rerank_metrics.rerank_ms
                             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
@@ -338,7 +419,9 @@ class RagService:
                     pass
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
-            query_vector, embedding_cache_hit, query_identity = await self._embed_question(question)
+            query_vector, embedding_cache_hit, query_identity = await self._embed_question(
+                search_query
+            )
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
         async with chat_stage("retrieval.vector_search"):
@@ -352,7 +435,7 @@ class RagService:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "mongodb_vector_search_debug question=%r vector_result_count=%d",
-                question,
+                search_query,
                 len(raw_results),
             )
             for result in raw_results:
@@ -391,7 +474,7 @@ class RagService:
         ) else 0
         all_chunks = None
         results, metrics = self._retrieval_strategy.search(
-            query=question,
+            query=search_query,
             vector_results=raw_results,
             all_chunks=all_chunks,
             top_k=effective_top_k,
@@ -403,7 +486,7 @@ class RagService:
         if self._reranker is not None and results:
             rerank_input_count = len(results)
             results, rerank_metrics = await self._reranker.rerank(
-                question, results, query_embedding=query_vector
+                search_query, results, query_embedding=query_vector
             )
             rerank_ms = rerank_metrics.rerank_ms
             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
@@ -503,12 +586,19 @@ class RagService:
         # Start the conversation-memory read up front so the Mongo query
         # overlaps the embedding + vector search (both are usually slower than a
         # recent-messages read).
-        history_task = asyncio.create_task(self._load_history(tenant_id, session.session_id))
+        history_task = asyncio.create_task(
+            self._load_history(
+                tenant_id,
+                session.session_id,
+                exclude_message_id=user_message.id,
+            )
+        )
         try:
             retrieval = await self._retrieve(
                 tenant_id=tenant_id,
                 website_id=website_id,
                 question=question,
+                history_task=history_task,
             )
             (
                 query_vector,
@@ -525,6 +615,29 @@ class RagService:
                 hybrid_candidate_count,
                 adaptive_max_context_chars,
             ) = retrieval
+        except EmbeddingCompatibilityError:
+            # Audit fix (embedding identity): a mixed/incompatible corpus must
+            # never surface as an error to the visitor. The repositories
+            # already refuse to mix embedding spaces; here we degrade to the
+            # existing safe fallback instead of an error event.
+            history_task.cancel()
+            logger.warning(
+                "rag_embedding_identity_mismatch tenant=%s website=%s session=%s",
+                tenant_id,
+                website_id,
+                session.session_id,
+            )
+            async for event in self._emit_fallback(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session=session,
+                started=started,
+                vector_queries=1,
+                reason="embedding_mismatch",
+                query=question,
+            ):
+                yield event
+            return
         except Exception as exc:
             history_task.cancel()
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
@@ -618,6 +731,27 @@ class RagService:
                 results, max_context_chars=adaptive_max_context_chars
             )
         context_ms = (time.perf_counter() - t_context) * 1000.0
+        # Context-empty guard: min_score filtering can drop every retrieved
+        # chunk even when raw retrieval returned hits (e.g. the confidence
+        # gate is disabled, or its threshold sits below ~0.7 * min_score).
+        # Calling the model with an empty context block would rely purely on
+        # prompt compliance to avoid hallucination, so emit the safe
+        # fallback instead — the model is never called without context.
+        if not context_items:
+            history_task.cancel()
+            async for event in self._emit_fallback(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session=session,
+                started=started,
+                vector_queries=1,
+                reason="context_empty",
+                query=question,
+                scores=retrieval_scores,
+                confidence_metrics=confidence_metrics,
+            ):
+                yield event
+            return
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "chat_context_build question=%r context_count=%d",
@@ -726,6 +860,38 @@ class RagService:
             return
 
         answer = "".join(deltas)
+        # Blank-generation guard: a provider can close the stream without
+        # emitting anything (no exception). Persisting an empty assistant
+        # turn and reporting success would leave the widget with nothing to
+        # render, so substitute the canonical fallback instead.
+        substituted_fallback = False
+        if not answer.strip():
+            logger.warning(
+                "rag_empty_generation tenant=%s website=%s session=%s delta_count=%d",
+                tenant_id,
+                website_id,
+                session.session_id,
+                delta_count,
+            )
+            answer = UNKNOWN_ANSWER_FALLBACK
+            substituted_fallback = True
+            yield {"event": "message", "data": {"delta": answer}}
+        # Citation validation (audit fix): the model may emit [N] markers that
+        # reference no retrieved source. Strip the invalid ones so the
+        # persisted answer and conversation history never carry an
+        # unverifiable citation; valid markers and formatting are untouched.
+        if not substituted_fallback:
+            answer, removed_citations = _strip_invalid_citations(answer, len(sources))
+            if removed_citations:
+                logger.info(
+                    "rag_invalid_citations_removed tenant=%s website=%s session=%s "
+                    "removed=%s source_count=%d",
+                    tenant_id,
+                    website_id,
+                    session.session_id,
+                    removed_citations,
+                    len(sources),
+                )
         output_issues = validate_response(answer)
         if output_issues:
             logger.warning(
@@ -737,7 +903,12 @@ class RagService:
             )
         # Faithfulness check: verify answer is grounded in retrieved context.
         faithfulness_score: float | None = None
-        if self._enable_faithfulness_check and context_items and answer:
+        if (
+            self._enable_faithfulness_check
+            and context_items
+            and answer
+            and not substituted_fallback
+        ):
             faithfulness_score = _check_faithfulness(answer, context_items)
             if faithfulness_score < self._faithfulness_warning_threshold:
                 logger.warning(
@@ -752,6 +923,31 @@ class RagService:
         response_time = time.monotonic() - started
         usage = self._generation.usage
 
+        # AI cost estimate (Phase 1 cost tracking). Computed from the serving
+        # model's reported token counts and the configured rate card; models
+        # without a rate accrue zero cost and warn once. Failed generations
+        # never reach this line, so errors stay non-billable by construction.
+        model_name = _generation_model_name(self._generation)
+        price = get_model_price(self._rate_card, model_name) if model_name else None
+        if price is None and model_name:
+            if model_name not in self._warned_unpriced_models:
+                self._warned_unpriced_models.add(model_name)
+                logger.warning(
+                    "cost_unpriced_model model=%s tenant=%s website=%s",
+                    model_name,
+                    tenant_id,
+                    website_id,
+                )
+        estimated_cost = (
+            estimate_generation_cost(
+                price,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            if price is not None
+            else 0.0
+        )
+
         assistant = ChatMessage.new(
             tenant_id=tenant_id,
             website_id=website_id,
@@ -763,6 +959,9 @@ class RagService:
         assistant.response_time = response_time
         assistant.input_tokens = usage.input_tokens
         assistant.output_tokens = usage.output_tokens
+        assistant.total_tokens = usage.input_tokens + usage.output_tokens
+        assistant.estimated_cost = round(estimated_cost, 6)
+        assistant.model_name = model_name
         # Persist the per-stage latency breakdown for the performance
         # dashboard (Phase 12.6). Durations only - never content or secrets.
         assistant.latency_embedding_ms = _round_ms(embedding_ms)
@@ -794,6 +993,7 @@ class RagService:
                     "messages": 2,
                     "input_tokens": usage.input_tokens,
                     "output_tokens": usage.output_tokens,
+                    "estimated_cost_micros": dollars_to_micros(estimated_cost),
                     "vector_queries": 1,
                 },
             ),
@@ -813,10 +1013,16 @@ class RagService:
             "session_id": session.session_id,
             "input_tokens": usage.input_tokens,
             "output_tokens": usage.output_tokens,
+            "total_tokens": assistant.total_tokens,
+            "estimated_cost": assistant.estimated_cost,
+            "model_name": model_name,
             "response_time_ms": int(response_time * 1000),
             "created_at": assistant.created_at.isoformat(),
             "prompt_version": self._prompt_version,
-            "fallback": False,
+            # True when the safe fallback replaced the answer (empty
+            # knowledge base, retrieval miss, low confidence, or a blank
+            # generation).
+            "fallback": substituted_fallback,
             # Confidence telemetry is always emitted (mirrors the fallback
             # path); the timing block below duplicates it for perf logs.
             "confidence_score": (
@@ -858,6 +1064,8 @@ class RagService:
                 "rerank_input_count": rerank_input_count,
                 "total_ms": round(total_ms, 2),
                 "provider": provider_name,
+                "model_name": model_name,
+                "estimated_cost": assistant.estimated_cost,
                 "embedding_cache": "hit" if embedding_cache_hit else "miss",
                 "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
                 "context_chars": context_chars,
@@ -1009,8 +1217,25 @@ class RagService:
             raise SessionNotFoundError("Chat session not found.")
         return existing
 
-    async def _load_history(self, tenant_id: str, session_id: str) -> list[tuple[str, str]]:
-        recent = await self._messages.list_recent(tenant_id, session_id, limit=self._memory_turns)
+    async def _load_history(
+        self,
+        tenant_id: str,
+        session_id: str,
+        *,
+        exclude_message_id: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Recent turns (oldest first), excluding the current user message.
+
+        The current turn is persisted before retrieval so failures still
+        leave a complete log; excluding it here keeps the prompt free of a
+        duplicated question and preserves the full `memory_turns` window for
+        genuinely prior context.
+        """
+        limit = self._memory_turns + 1 if exclude_message_id else self._memory_turns
+        recent = await self._messages.list_recent(tenant_id, session_id, limit=limit)
+        if exclude_message_id:
+            recent = [message for message in recent if message.id != exclude_message_id]
+            recent = recent[-self._memory_turns :]
         return [(message.role, message.content) for message in recent]
 
     async def _load_all_chunks(
@@ -1089,7 +1314,17 @@ class RagService:
             text = chunk.chunk_text
             if len(text) > self._max_chars_per_chunk:
                 text = text[: self._max_chars_per_chunk]
-            candidate_items.append(ContextItem(url=url, title=title, heading=None, text=text))
+            candidate_items.append(
+                ContextItem(
+                    url=url,
+                    title=title,
+                    # Audit R-08: the chunk's nearest heading (stored in
+                    # metadata at processing time) feeds the prompt's existing
+                    # heading slot instead of being dropped.
+                    heading=chunk.metadata.get("heading") or None,
+                    text=text,
+                )
+            )
             candidate_sources.append(
                 {
                     "chunk_id": chunk.id,
@@ -1153,7 +1388,10 @@ class RagService:
                     budget = 0
                 else:
                     budget -= len(text)
-            items.append(ContextItem(url=item.url, title=item.title, heading=None, text=text))
+            # Preserve the chunk's heading through budget capping (audit R-08).
+            items.append(
+                ContextItem(url=item.url, title=item.title, heading=item.heading, text=text)
+            )
             sources.append({**src, "citation": len(sources) + 1})
             if budget == 0:
                 break
@@ -1249,13 +1487,30 @@ def _safe_message(exc: Exception) -> str:
     return "An unexpected error occurred. Please try again later."
 
 
+def _significant_words(text: str) -> set[str]:
+    """Normalized significant tokens: alphanumeric runs longer than 3 chars.
+
+    Stripping non-alphanumeric characters (instead of dropping tokens that
+    contain them) keeps numeric and currency-bearing words — "$19", "99.9%",
+    "200ms" — eligible as grounding evidence.  The previous alpha-only rule
+    silently discarded them, systematically under-scoring pricing and
+    metric-heavy answers.
+    """
+    words: set[str] = set()
+    for token in text.lower().split():
+        normalized = "".join(char for char in token if char.isalnum())
+        if len(normalized) > 3:
+            words.add(normalized)
+    return words
+
+
 def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> float:
     """Score answer faithfulness by checking if each sentence is grounded in context.
 
     Returns a value between 0.0 (no support) and 1.0 (fully grounded).
     Each sentence in the answer is checked for significant word overlap
-    (>3 chars, alpha-only) with the context chunks.  Sentences with no
-    significant words (trivial fragments) are counted as *unsupported*
+    (>3 alphanumeric characters) with the context chunks.  Sentences with
+    no significant words (trivial fragments) are counted as *unsupported*
     since they contribute no verifiable content.  An empty answer is
     scored 0.0 because there is nothing to be faithful *to*.
     """
@@ -1266,15 +1521,11 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
         return 0.0
 
     context_lower = " ".join(item.text.lower() for item in context_items)
-    context_words = {
-        w for w in context_lower.split() if len(w) > 3 and w.isalpha()
-    }
+    context_words = _significant_words(context_lower)
 
     supported = 0
     for sentence in sentences:
-        words = {
-            w for w in sentence.lower().split() if len(w) > 3 and w.isalpha()
-        }
+        words = _significant_words(sentence)
         if not words:
             continue
         overlap = words & context_words
@@ -1282,6 +1533,38 @@ def _check_faithfulness(answer: str, context_items: list["ContextItem"]) -> floa
             supported += 1
 
     return round(supported / len(sentences), 3)
+
+
+# Citation markers are bracketed 1-2 digit indexes ("[1]", "[12]"). The digit
+# bound keeps years in brackets ("[2024]") and markdown footnote-style text
+# out of the matcher; sources never number past a few dozen.
+_CITATION_MARKER_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+def _strip_invalid_citations(answer: str, source_count: int) -> tuple[str, list[int]]:
+    """Drop ``[N]`` citation markers that reference no retrieved source.
+
+    Audit fix (citation validation): the model is instructed to cite
+    ``[1]..[n]``, but it can hallucinate an index beyond the rendered source
+    list. Invalid markers are removed so the persisted answer and future
+    conversation history never present an unverifiable citation; valid
+    markers and all other formatting pass through untouched.
+
+    Returns ``(sanitized_answer, removed_indexes)``.
+    """
+    if source_count <= 0:
+        return _CITATION_MARKER_RE.sub("", answer), []
+
+    removed: list[int] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        index = int(match.group(1))
+        if 1 <= index <= source_count:
+            return match.group(0)
+        removed.append(index)
+        return ""
+
+    return _CITATION_MARKER_RE.sub(_replace, answer), removed
 
 
 __all__ = ["RagService"]

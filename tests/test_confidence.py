@@ -70,3 +70,66 @@ class TestCalculateConfidence:
         assert metrics.minimum_score == 0.1
         assert metrics.average_score == 0.4
         assert metrics.rejected_chunks_count == 2
+
+    def test_negative_scores_clamped_to_zero(self) -> None:
+        # Reranker cosine scores can be negative; confidence telemetry must
+        # stay within [0, 1].
+        assert calculate_confidence([-0.5], min_score=0.25) == 0.0
+
+    def test_negative_scores_metrics_clamped_but_raw_min_kept(self) -> None:
+        metrics = assess_confidence([-0.4, -0.2], min_score=0.25)
+        assert metrics.confidence == 0.0
+        # Inputs are normalized into [0, 1] before aggregation, so the
+        # reported signals describe exactly what the decision consumed.
+        assert metrics.minimum_score == 0.0
+        assert metrics.average_score == 0.0
+
+    def test_mixed_negative_positive_scores_not_distorted(self) -> None:
+        # A dissimilar cosine (-0.2) clamps to 0 instead of dragging the
+        # average below the true similarity scale: avg=(0+0.9)/2=0.45,
+        # hit_ratio=0.5 (one of two >= 0.25), peak=0.9.
+        expected = round(0.50 * 0.45 + 0.30 * 0.5 + 0.20 * 0.9, 4)
+        assert calculate_confidence([-0.2, 0.9], min_score=0.25) == expected
+
+
+class TestScoreNormalization:
+    """Audit regression: mixed retrieval scales must not distort confidence.
+
+    Exact cosine scans produce [-1, 1] similarities, Atlas vectorSearchScore
+    is normalized similarity, and hybrid blends can exceed 1. Inputs are
+    clamped into [0, 1] before the weighted formula; in-range inputs are
+    unaffected.
+    """
+
+    def test_in_range_scores_are_unchanged(self) -> None:
+        # Normalization is a no-op on the calibrated cosine scale.
+        expected = round(0.50 * 0.75 + 0.30 * 0.75 + 0.20 * 0.9, 4)
+        assert calculate_confidence([0.9, 0.6]) == expected
+        assert calculate_confidence([0.9, 0.6]) == calculate_confidence([0.9, 0.6])
+
+    def test_above_one_scores_saturate_at_one(self) -> None:
+        # A dot-product/BM25-style scale must not push confidence past 1 or
+        # mask weaker results: everything maps onto the same [0, 1] scale.
+        assert calculate_confidence([2.5]) == calculate_confidence([1.0])
+        metrics = assess_confidence([1.8, 1.2, 0.4], min_score=0.25)
+        assert metrics.confidence <= 1.0
+        assert metrics.minimum_score == 0.4
+        assert metrics.rejected_chunks_count == 0
+
+    def test_below_zero_scores_clamp_to_zero(self) -> None:
+        assert assess_confidence([-0.7]).confidence == assess_confidence([0.0]).confidence
+
+    def test_mixed_scale_result_stays_bounded(self) -> None:
+        metrics = assess_confidence([1.4, -0.3, 0.8], min_score=0.25)
+        assert 0.0 <= metrics.confidence <= 1.0
+        # Clamped inputs: [-0.3 -> 0.0]; only that chunk misses the threshold.
+        assert metrics.minimum_score == 0.0
+        assert metrics.average_score == round((1.0 + 0.0 + 0.8) / 3, 4)
+        assert metrics.rejected_chunks_count == 1
+
+    def test_scale_change_does_not_flip_threshold_decision(self) -> None:
+        # The same relevance profile expressed on two different scales must
+        # produce the same above/below-threshold decision.
+        strong_cosine = assess_confidence([0.95, 0.9], min_score=0.5)
+        rescaled = assess_confidence([1.9, 1.8], min_score=0.5)
+        assert (strong_cosine.confidence >= 0.5) == (rescaled.confidence >= 0.5)

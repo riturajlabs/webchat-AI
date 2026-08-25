@@ -70,6 +70,7 @@ class KnowledgeProcessor:
         audit: Any,
         embedder: EmbeddingClient,
         usage: UsageRecordRepository | None = None,
+        cache: Any = None,
         chunk_size: int | None = None,
         overlap: int | None = None,
         max_retries: int | None = None,
@@ -85,6 +86,9 @@ class KnowledgeProcessor:
         self._audit = audit
         self._embedder = embedder
         self._usage = usage
+        # Audit R-03: optional CacheStore used to invalidate retrieval answers
+        # AFTER new chunks are stored (post-completion invalidation).
+        self._cache = cache
         self._chunk_size = chunk_size
         self._overlap = overlap
         self._max_retries = (
@@ -138,6 +142,11 @@ class KnowledgeProcessor:
         already stored); otherwise deletes stale chunks and rebuilds them.
         Returns a structured result; temporary embedding failures schedule a
         document-level retry through `on_retry` when retries remain.
+
+        Audit R-03: when processing completes successfully, the website's
+        retrieval cache is invalidated AFTER the new chunks are stored - an
+        answer cached from the old corpus mid-reindex cannot outlive the
+        completed reindex. Best-effort: a cache outage never fails processing.
         """
         document = await self._documents.find_by_id_any(document_id)
         if document is None:
@@ -293,7 +302,24 @@ class KnowledgeProcessor:
         await self._audit.create(
             AuditLog.new(action=AUDIT_KNOWLEDGE_PROCESSED, tenant_id=document.tenant_id)
         )
+        # Audit R-03: the new corpus is fully stored - drop any retrieval
+        # answers cached from the previous corpus while this document was
+        # re-processing, so stale entries cannot survive a completed reindex.
+        await self._invalidate_retrieval_cache(document.website_id)
         return {"status": "processed", "chunks": len(chunks)}
+
+    async def _invalidate_retrieval_cache(self, website_id: str) -> None:
+        """Best-effort retrieval-cache invalidation after successful processing."""
+        if self._cache is None:
+            return
+        try:
+            await self._cache.delete_by_prefix("retrieval", f"{website_id}:")
+        except Exception:  # noqa: BLE001 - cache outage must not fail processing
+            logger.warning(
+                "Failed to invalidate retrieval cache for website %s after processing",
+                website_id,
+                exc_info=True,
+            )
 
     def _build_chunks(
         self,
@@ -302,7 +328,7 @@ class KnowledgeProcessor:
         vectors: list[list[float]],
         embedding_identity: EmbeddingIdentity,
     ) -> list[KnowledgeChunk]:
-        metadata: dict[str, Any] = {
+        base_metadata: dict[str, Any] = {
             "source_url": document.url,
             "title": document.title,
             "document_id": document.id,
@@ -310,22 +336,30 @@ class KnowledgeProcessor:
             "website_id": document.website_id,
             "language": document.language,
         }
-        return [
-            KnowledgeChunk.new(
-                tenant_id=document.tenant_id,
-                website_id=document.website_id,
-                document_id=document.id,
-                chunk_text=text_chunks[i].text,
-                embedding=vectors[i],
-                chunk_index=text_chunks[i].index,
-                metadata=metadata,
-                embedding_provider=embedding_identity.provider,
-                embedding_model=embedding_identity.model,
-                embedding_dimensions=embedding_identity.dimensions,
-                embedding_version=embedding_identity.version,
+        chunks: list[KnowledgeChunk] = []
+        for i in range(len(text_chunks)):
+            metadata = dict(base_metadata)
+            # Audit R-08: carry the nearest heading into chunk metadata. The
+            # prompt's ContextItem already renders it; this only connects the
+            # existing field - the chunk schema itself is unchanged.
+            if text_chunks[i].heading:
+                metadata["heading"] = text_chunks[i].heading
+            chunks.append(
+                KnowledgeChunk.new(
+                    tenant_id=document.tenant_id,
+                    website_id=document.website_id,
+                    document_id=document.id,
+                    chunk_text=text_chunks[i].text,
+                    embedding=vectors[i],
+                    chunk_index=text_chunks[i].index,
+                    metadata=metadata,
+                    embedding_provider=embedding_identity.provider,
+                    embedding_model=embedding_identity.model,
+                    embedding_dimensions=embedding_identity.dimensions,
+                    embedding_version=embedding_identity.version,
+                )
             )
-            for i in range(len(text_chunks))
-        ]
+        return chunks
 
     async def _record_document(
         self,

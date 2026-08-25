@@ -44,6 +44,12 @@ class DocumentRepository(Protocol):
 
     async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]: ...
 
+    # Audit R-02: purge pages removed from the site (crawl reconciliation)
+    # and drop the whole corpus when the parent website is deleted.
+    async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int: ...
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
 
 class MongoDocumentRepository:
     """MongoDB-backed document repository (docs/05, Phase 4 ingestion)."""
@@ -124,6 +130,20 @@ class MongoDocumentRepository:
     async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]:
         cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
         return [Document.from_doc(doc) async for doc in cursor]
+
+    async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int:
+        if not document_ids:
+            return 0
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "_id": {"$in": document_ids}}
+        )
+        return int(result.deleted_count)
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return int(result.deleted_count)
 
 
 def update_payload(document: Document) -> dict[str, Any]:
