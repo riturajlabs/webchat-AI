@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AnalyticsPage } from './analytics-page';
@@ -350,12 +350,10 @@ describe('AnalyticsPage', () => {
 
   it('renders the charts once mounted', async () => {
     renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId('activity-chart')).toBeInTheDocument();
-    });
-    expect(screen.getByTestId('token-chart')).toBeInTheDocument();
-    expect(screen.getByTestId('top-websites-chart')).toBeInTheDocument();
-    expect(screen.getByTestId('popular-questions-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('activity-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('token-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('top-websites-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('popular-questions-chart')).toBeInTheDocument();
   });
 
   it('groups content into labelled sections for metric hierarchy', () => {
@@ -429,10 +427,10 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('42 ratings')).toBeInTheDocument();
   });
 
-  it('renders the 1-5 star distribution chart when ratings exist', () => {
+  it('renders the 1-5 star distribution chart when ratings exist', async () => {
     renderPage();
     // The BarChart inside the FeedbackDistributionChart carries the test id.
-    expect(screen.getByTestId('feedback-distribution-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('feedback-distribution-chart')).toBeInTheDocument();
     // Empty case is suppressed — the EmptyState should not appear here.
     expect(screen.queryByText('Awaiting first rating')).not.toBeInTheDocument();
   });
@@ -445,11 +443,11 @@ describe('AnalyticsPage', () => {
     expect(screen.getByText('Negative (4)')).toBeInTheDocument();
   });
 
-  it('renders the popular questions chart with the most-asked questions', () => {
+  it('renders the popular questions chart with the most-asked questions', async () => {
     renderPage();
     expect(screen.getByText('Popular questions')).toBeInTheDocument();
     // Top row (ranked) is sorted desc and reversed for the vertical layout.
-    expect(screen.getByTestId('popular-questions-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('popular-questions-chart')).toBeInTheDocument();
   });
 
   it('shows an empty state for popular questions when there are none', () => {

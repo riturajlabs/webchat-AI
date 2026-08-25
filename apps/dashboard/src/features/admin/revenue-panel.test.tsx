@@ -89,9 +89,9 @@ describe('RevenuePanel', () => {
     expect(screen.getByText('2 months')).toBeInTheDocument();
   });
 
-  it('renders the monthly revenue chart', () => {
+  it('renders the monthly revenue chart', async () => {
     renderPanel();
-    expect(screen.getByTestId('revenue-chart')).toBeInTheDocument();
+    expect(await screen.findByTestId('revenue-chart')).toBeInTheDocument();
   });
 
   it('lists recent payments with provider and amount', () => {

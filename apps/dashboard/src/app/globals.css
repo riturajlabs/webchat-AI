@@ -2,6 +2,15 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+ * WebChat AI brand palette.
+ *
+ * Brand blue (#2563EB) drives interactive surfaces: primary buttons, links,
+ * active navigation and focus rings. Brand yellow (#F59E0B) is exposed as
+ * `--accent-highlight` for highlights, badges and premium indicators — kept
+ * separate from shadcn's neutral `--accent` hover surface. Neutrals stay
+ * black/white/grey for background, cards and text hierarchy.
+ */
 :root {
   --background: hsl(0 0% 100%);
   --foreground: hsl(0 0% 3.9%);
@@ -9,19 +18,23 @@
   --card-foreground: hsl(0 0% 3.9%);
   --popover: hsl(0 0% 100%);
   --popover-foreground: hsl(0 0% 3.9%);
-  --primary: hsl(0 0% 9%);
-  --primary-foreground: hsl(0 0% 98%);
+  --primary: hsl(217.2 91.2% 59.8%);
+  --primary-foreground: hsl(0 0% 100%);
   --secondary: hsl(0 0% 96.1%);
   --secondary-foreground: hsl(0 0% 9%);
   --muted: hsl(0 0% 96.1%);
   --muted-foreground: hsl(0 0% 45.1%);
   --accent: hsl(0 0% 96.1%);
   --accent-foreground: hsl(0 0% 9%);
+  --accent-highlight: hsl(37.7 92.1% 50.2%);
+  --success: hsl(160.1 84.1% 39.4%);
+  --warning: hsl(37.7 92.1% 50.2%);
+  --info: hsl(198.6 88.7% 48.4%);
   --destructive: hsl(0 84.2% 60.2%);
   --destructive-foreground: hsl(0 0% 98%);
   --border: hsl(0 0% 89.8%);
   --input: hsl(0 0% 89.8%);
-  --ring: hsl(0 0% 3.9%);
+  --ring: hsl(217.2 91.2% 59.8%);
   --radius: 0.625rem;
 }
 
@@ -32,19 +45,23 @@
   --card-foreground: hsl(0 0% 98%);
   --popover: hsl(0 0% 3.9%);
   --popover-foreground: hsl(0 0% 98%);
-  --primary: hsl(0 0% 98%);
-  --primary-foreground: hsl(0 0% 9%);
+  --primary: hsl(217.2 91.2% 59.8%);
+  --primary-foreground: hsl(0 0% 100%);
   --secondary: hsl(0 0% 14.9%);
   --secondary-foreground: hsl(0 0% 98%);
   --muted: hsl(0 0% 14.9%);
   --muted-foreground: hsl(0 0% 63.9%);
   --accent: hsl(0 0% 14.9%);
   --accent-foreground: hsl(0 0% 98%);
+  --accent-highlight: hsl(37.7 92.1% 50.2%);
+  --success: hsl(160.1 84.1% 39.4%);
+  --warning: hsl(37.7 92.1% 50.2%);
+  --info: hsl(198.6 88.7% 48.4%);
   --destructive: hsl(0 62.8% 30.6%);
   --destructive-foreground: hsl(0 0% 98%);
   --border: hsl(0 0% 14.9%);
   --input: hsl(0 0% 14.9%);
-  --ring: hsl(0 0% 83.1%);
+  --ring: hsl(217.2 91.2% 59.8%);
 }
 
 @theme inline {
@@ -62,6 +79,10 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-accent-highlight: var(--accent-highlight);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
