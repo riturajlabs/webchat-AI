@@ -105,3 +105,26 @@
     font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
   }
 }
+
+/*
+ * Brand gradient utilities.
+ *
+ * These are consumed by marketing components that use the blue→yellow
+ * brand gradient as a decorative element (hero underline, widget header,
+ * pricing accent bar, CTA backgrounds). Keeping the gradient definition
+ * here means every usage stays in sync if the brand palette changes.
+ */
+.bg-brand-gradient {
+  background-image: linear-gradient(90deg, #2563eb, #f59e0b);
+}
+
+.bg-brand-gradient-subtle {
+  background-image: linear-gradient(135deg, rgba(37, 99, 235, 0.15), rgba(245, 158, 11, 0.1));
+}
+
+.text-brand-gradient {
+  background-image: linear-gradient(90deg, #2563eb, #f59e0b);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

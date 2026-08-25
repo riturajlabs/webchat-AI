@@ -9,9 +9,7 @@ export default function TermsPage() {
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-16 md:px-6 md:py-24">
       <h1 className="font-sans text-3xl font-bold tracking-tight">Terms of Service</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        Last updated: August 2026 · Draft pending final legal review.
-      </p>
+      <p className="mt-2 text-sm text-muted-foreground">Last updated: August 2026</p>
       <div className="mt-8 flex flex-col gap-4 text-sm text-muted-foreground [&_h2]:text-base [&_h2]:font-medium [&_h2]:text-foreground">
         <p>
           This summary describes the ground rules for using WebChat AI. The full agreement will be

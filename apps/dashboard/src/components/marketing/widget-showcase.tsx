@@ -14,10 +14,7 @@ export function WidgetShowcase() {
         aria-hidden="true"
       />
       <div className="relative overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xl">
-        <div
-          className="flex items-center gap-3 px-4 py-3"
-          style={{ backgroundImage: 'linear-gradient(135deg, #2563eb, #f59e0b)' }}
-        >
+        <div className="flex items-center gap-3 px-4 py-3 bg-brand-gradient">
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20">
             <Bot className="size-5 text-white" />
           </span>

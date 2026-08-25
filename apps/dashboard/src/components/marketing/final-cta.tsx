@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Clock, Code2, ShieldCheck } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 
@@ -20,7 +20,8 @@ export function FinalCta() {
             Ready to add an AI assistant to your website?
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-base text-blue-100">
-            Connect your site, train the knowledge base and embed the chatbot — in minutes.
+            Connect your site, train the knowledge base and embed the chatbot &mdash; in minutes,
+            not days.
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Button
@@ -30,7 +31,7 @@ export function FinalCta() {
             >
               <Link href="/signup">
                 Start Free
-                <ArrowRight aria-hidden="true" />
+                <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
             </Button>
             <Button
@@ -41,6 +42,21 @@ export function FinalCta() {
             >
               <Link href="/docs">View Docs</Link>
             </Button>
+          </div>
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+            {[
+              { icon: Clock, label: 'Live in minutes' },
+              { icon: Code2, label: 'Zero code' },
+              { icon: ShieldCheck, label: 'No credit card required' },
+            ].map(({ icon: Icon, label }) => (
+              <span
+                key={label}
+                className="flex items-center gap-1.5 text-xs font-medium text-blue-100"
+              >
+                <Icon className="size-3.5" aria-hidden="true" />
+                {label}
+              </span>
+            ))}
           </div>
         </div>
       </div>

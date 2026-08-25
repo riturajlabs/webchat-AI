@@ -16,8 +16,8 @@ const RESOURCE_LINKS = [
 ];
 
 const LEGAL_LINKS = [
-  { href: '#', label: 'Privacy Policy' },
-  { href: '#', label: 'Terms of Service' },
+  { href: '/privacy', label: 'Privacy Policy' },
+  { href: '/terms', label: 'Terms of Service' },
 ];
 
 function FooterColumn({

@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+import { Button } from '@/components/ui/button';
+
 const DOCS_NAV_ITEMS = [
   { href: '/docs', label: 'Overview' },
   { href: '/docs/quickstart', label: 'Quickstart' },
@@ -40,6 +42,16 @@ export function DocsSidebar() {
           </Link>
         ))}
       </nav>
+      <div className="mt-6 rounded-lg border border-border/60 bg-muted/50 p-3">
+        <p className="mb-2 text-xs font-medium text-muted-foreground">Ready to launch?</p>
+        <Button
+          asChild
+          size="sm"
+          className="w-full bg-blue-600 text-white hover:bg-blue-700 focus-visible:ring-blue-600"
+        >
+          <Link href="/signup">Get Started Free</Link>
+        </Button>
+      </div>
     </aside>
   );
 }
@@ -67,6 +79,12 @@ export function DocsMobileNav() {
             {label}
           </Link>
         ))}
+        <Link
+          href="/signup"
+          className="ml-auto flex shrink-0 items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Get Started
+        </Link>
       </nav>
     </div>
   );
