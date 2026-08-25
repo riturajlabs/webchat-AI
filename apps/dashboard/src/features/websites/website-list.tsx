@@ -10,7 +10,6 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PageHeader } from '@/components/layout/page-header';
 
 import { AddWebsiteDialog } from './add-website-dialog';
 import {
