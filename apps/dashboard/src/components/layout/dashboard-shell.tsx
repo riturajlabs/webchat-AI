@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { Bot, LogOut } from 'lucide-react';
 import { useState } from 'react';
 
@@ -9,12 +9,10 @@ import { useAuth } from '@/features/auth/auth-context';
 import { VerificationReminder } from '@/features/auth/verification-reminder';
 import { Button } from '@/components/ui/button';
 import { MobileNav } from '@/components/layout/mobile-nav';
-import { visibleNavItems } from '@/components/layout/nav-items';
+import { NavLinks } from '@/components/layout/nav-links';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { cn } from '@/lib/utils';
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
   const router = useRouter();
   const { user, logout } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -35,32 +33,14 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-muted/30">
       <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
-        <Link href="/" className="flex items-center gap-2 px-5 py-5 font-semibold">
+        <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Bot className="size-4" aria-hidden="true" />
           </span>
           WebChat AI
         </Link>
-        <nav className="flex-1 space-y-1 px-3" aria-label="Main navigation">
-          {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
-            const active = pathname === href;
-            return (
-              <Link
-                key={href}
-                href={href}
-                aria-current={active ? 'page' : undefined}
-                className={cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                  active
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                <Icon className="size-4" aria-hidden="true" />
-                {label}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 px-3 pb-4" aria-label="Main navigation">
+          <NavLinks role={user?.role} />
         </nav>
       </aside>
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">

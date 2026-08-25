@@ -170,8 +170,16 @@ describe('ConversationsPage', () => {
     renderListPage();
     expect(screen.getByText('No conversations yet')).toBeInTheDocument();
     expect(
-      screen.getByText('Chats from your widget and dashboard will appear here.'),
+      screen.getByText('Install your widget and start receiving customer questions.'),
     ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Install your widget/ })).toHaveAttribute(
+      'href',
+      '/widget',
+    );
+    expect(screen.getByRole('link', { name: /Widget Test/ })).toHaveAttribute(
+      'href',
+      '/widget-test',
+    );
   });
 
   it('shows an empty state with a clear action when filters match nothing', () => {
@@ -209,6 +217,11 @@ describe('ConversationsPage', () => {
     expect(within(link).getByText('Acme Inc')).toBeInTheDocument();
     expect(within(link).getByText('2 messages')).toBeInTheDocument();
     expect(within(link).getByText('Answered')).toBeInTheDocument();
+  });
+
+  it('shows the total conversation count above the list', () => {
+    renderListPage();
+    expect(screen.getByText('1 conversation')).toBeInTheDocument();
   });
 
   it('shows a friendly label for anonymous visitors', () => {
@@ -277,6 +290,41 @@ describe('ConversationDetailPage', () => {
     } as unknown as ReturnType<typeof useConversation>);
     renderDetailPage();
     expect(screen.getByRole('status', { name: 'Loading conversation' })).toBeInTheDocument();
+  });
+
+  it('renders the session header with visitor, dates and status', () => {
+    mockedUseConversation.mockReturnValue({
+      data: DETAIL,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useConversation>);
+    renderDetailPage();
+    expect(screen.getByRole('heading', { name: 'Pricing question' })).toBeInTheDocument();
+    expect(screen.getByText('visitor-1')).toBeInTheDocument();
+    expect(screen.getByText('Acme Inc')).toBeInTheDocument();
+    expect(screen.getByText('Answered')).toBeInTheDocument();
+    expect(screen.getByText('Visitor', { selector: 'span' })).toBeInTheDocument();
+    expect(screen.getByText('Started')).toBeInTheDocument();
+    expect(screen.getByText('Last activity')).toBeInTheDocument();
+  });
+
+  it('visually and semantically differentiates visitor and assistant messages', () => {
+    mockedUseConversation.mockReturnValue({
+      data: DETAIL,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useConversation>);
+    renderDetailPage();
+    const articles = screen.getAllByRole('article');
+    expect(articles).toHaveLength(2);
+    expect(articles[0]).toHaveAccessibleName('Visitor message');
+    expect(articles[1]).toHaveAccessibleName('Assistant message');
+    // Per-message timestamps render as <time> elements.
+    expect(screen.getAllByRole('time').length).toBeGreaterThanOrEqual(2);
   });
 
   it('renders the full message history with sources and usage', () => {

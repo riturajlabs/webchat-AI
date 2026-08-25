@@ -75,13 +75,29 @@ describe('UsagePage', () => {
 
     await waitFor(() => expect(screen.getByText('Usage & Billing')).toBeInTheDocument());
     expect(screen.getByText('Messages used')).toBeInTheDocument();
-    expect(screen.getByText('850')).toBeInTheDocument();
+    expect(screen.getAllByText('850').length).toBeGreaterThan(0);
     expect(screen.getByText('Of 1,000 this month')).toBeInTheDocument();
     expect(screen.getByText('Tokens used')).toBeInTheDocument();
     expect(screen.getByText('80k')).toBeInTheDocument();
     expect(screen.getAllByText('Documents').length).toBeGreaterThan(0);
     expect(screen.getByText('Current plan')).toBeInTheDocument();
-    expect(screen.getByText('Free')).toBeInTheDocument();
+    expect(screen.getAllByText('Free').length).toBeGreaterThan(0);
+  });
+
+  it('renders the four usage sections in hierarchy order', async () => {
+    mockedUseUsage.mockReturnValue({
+      data: makeUsage(),
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as never);
+
+    renderPage();
+
+    const headings = await screen.findAllByRole('heading', { level: 2 });
+    const names = headings.map((heading) => heading.textContent);
+    expect(names).toEqual(['Current usage', 'Limits', 'Consumption trends', 'Plan information']);
   });
 
   it('renders a progress bar per limited metric', async () => {

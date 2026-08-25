@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Puzzle } from 'lucide-react';
 
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useWebsites } from '@/features/websites/hooks';
 
@@ -27,6 +28,21 @@ function WidgetSkeleton() {
 export function WidgetPage() {
   const { data: websites, isPending, isError, error, refetch } = useWebsites();
   const [selectedId, setSelectedId] = useState<string>('');
+  const dirtyRef = useRef(false);
+  const handleDirtyChange = useCallback((isDirty: boolean) => {
+    dirtyRef.current = isDirty;
+  }, []);
+
+  function handleWebsiteChange(nextId: string) {
+    if (
+      nextId !== selected &&
+      dirtyRef.current &&
+      !window.confirm('You have unsaved widget changes. Switch website anyway?')
+    ) {
+      return;
+    }
+    setSelectedId(nextId);
+  }
 
   const selected = selectedId || websites?.[0]?.id || null;
   const {
@@ -52,12 +68,7 @@ export function WidgetPage() {
   if (isError) {
     return (
       <div className="flex flex-col gap-6">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">Widget</h1>
-          <p className="text-sm text-muted-foreground">
-            Customize the chat widget for your websites.
-          </p>
-        </div>
+        <PageHeader title="Widget" description="Customize the chat widget for your websites." />
         <EmptyState
           title="Could not load websites"
           description={error instanceof Error ? error.message : 'Something went wrong.'}
@@ -73,12 +84,7 @@ export function WidgetPage() {
   if (widgets.length === 0) {
     return (
       <div className="flex flex-col gap-6">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">Widget</h1>
-          <p className="text-sm text-muted-foreground">
-            Customize the chat widget for your websites.
-          </p>
-        </div>
+        <PageHeader title="Widget" description="Customize the chat widget for your websites." />
         <EmptyState
           icon={Puzzle}
           title="No websites yet"
@@ -90,26 +96,24 @@ export function WidgetPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">Widget</h1>
-          <p className="text-sm text-muted-foreground">
-            Customize the chat widget for your websites.
-          </p>
-        </div>
-        <select
-          aria-label="Select website"
-          value={selected ?? ''}
-          onChange={(event) => setSelectedId(event.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          {widgets.map((site) => (
-            <option key={site.id} value={site.id}>
-              {site.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <PageHeader
+        title="Widget"
+        description="Customize the chat widget for your websites."
+        actions={
+          <select
+            aria-label="Select website"
+            value={selected ?? ''}
+            onChange={(event) => handleWebsiteChange(event.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            {widgets.map((site) => (
+              <option key={site.id} value={site.id}>
+                {site.name}
+              </option>
+            ))}
+          </select>
+        }
+      />
 
       {widgetPending ? (
         <WidgetSkeleton />
@@ -127,6 +131,7 @@ export function WidgetPage() {
           key={selected}
           config={widgetResponse.widget}
           embedScript={widgetResponse.embed_script}
+          onDirtyChange={handleDirtyChange}
         />
       )}
     </div>

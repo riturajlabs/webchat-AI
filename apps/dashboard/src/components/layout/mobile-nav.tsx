@@ -7,8 +7,7 @@ import { Bot, Menu, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/features/auth/auth-context';
-import { visibleNavItems } from '@/components/layout/nav-items';
-import { cn } from '@/lib/utils';
+import { NavLinks } from '@/components/layout/nav-links';
 
 export function MobileNav() {
   const pathname = usePathname();
@@ -60,7 +59,7 @@ export function MobileNav() {
         type="button"
         variant="ghost"
         size="icon"
-        className="md:hidden"
+        className="h-11 w-11 md:hidden"
         aria-label="Open navigation"
         aria-expanded={open}
         aria-controls="mobile-nav"
@@ -81,7 +80,11 @@ export function MobileNav() {
             className="absolute inset-y-0 left-0 flex w-64 max-w-[85vw] flex-col border-r bg-background shadow-lg outline-none"
           >
             <div className="flex items-center justify-between gap-2 px-5 py-5">
-              <Link href="/" className="flex items-center gap-2 font-semibold" onClick={close}>
+              <Link
+                href="/dashboard"
+                className="flex items-center gap-2 font-semibold"
+                onClick={close}
+              >
                 <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
                   <Bot className="size-4" aria-hidden="true" />
                 </span>
@@ -91,6 +94,7 @@ export function MobileNav() {
                 type="button"
                 variant="ghost"
                 size="icon"
+                className="h-11 w-11"
                 aria-label="Close navigation"
                 onClick={close}
               >
@@ -98,27 +102,8 @@ export function MobileNav() {
               </Button>
             </div>
 
-            <nav className="flex-1 space-y-1 px-3" aria-label="Mobile navigation">
-              {visibleNavItems(user?.role).map(({ href, label, icon: Icon }) => {
-                const active = pathname === href;
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    aria-current={active ? 'page' : undefined}
-                    onClick={close}
-                    className={cn(
-                      'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                      active
-                        ? 'bg-primary text-primary-foreground'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                    )}
-                  >
-                    <Icon className="size-4" aria-hidden="true" />
-                    {label}
-                  </Link>
-                );
-              })}
+            <nav className="flex-1 px-3 pb-4" aria-label="Mobile navigation">
+              <NavLinks role={user?.role} onNavigate={close} />
             </nav>
           </div>
         </div>

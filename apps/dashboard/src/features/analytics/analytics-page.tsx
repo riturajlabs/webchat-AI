@@ -1,8 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { BarChart3, CircleDollarSign, Gauge, MessagesSquare, Star, Timer } from 'lucide-react';
+import {
+  BarChart3,
+  CircleDollarSign,
+  Gauge,
+  MessagesSquare,
+  Minus,
+  Star,
+  Timer,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react';
 import {
   Area,
   AreaChart,
@@ -20,6 +30,8 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { useWebsites } from '@/features/websites/hooks';
@@ -59,20 +71,37 @@ function StatCard({
   value,
   hint,
   icon: Icon,
+  emphasis = false,
+  accent = false,
 }: {
   label: string;
   value: string;
   hint?: string;
   icon: typeof Timer;
+  /** Primary KPIs render larger values so the page reads top-down. */
+  emphasis?: boolean;
+  /** Blue accent reserved for primary metrics (design tokens §5). */
+  accent?: boolean;
 }) {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
         <CardDescription>{label}</CardDescription>
-        <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+        <Icon
+          className={accent ? 'size-4 text-blue-600' : 'size-4 text-muted-foreground'}
+          aria-hidden="true"
+        />
       </CardHeader>
       <CardContent>
-        <p className="font-sans text-3xl font-bold tracking-tight">{value}</p>
+        <p
+          className={
+            emphasis
+              ? 'font-sans text-3xl font-bold tabular-nums tracking-tight'
+              : 'font-sans text-xl font-semibold tabular-nums tracking-tight'
+          }
+        >
+          {value}
+        </p>
         {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
       </CardContent>
     </Card>
@@ -81,21 +110,47 @@ function StatCard({
 
 function StatGridSkeleton() {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {[0, 1, 2, 3, 4, 5, 6].map((index) => (
-        <Card key={index}>
-          <CardHeader>
-            <Skeleton className="h-4 w-24" />
-          </CardHeader>
-          <CardContent>
-            <Skeleton className="h-8 w-16" />
-          </CardContent>
-        </Card>
-      ))}
+    <div role="status" aria-label="Loading analytics" className="flex flex-col gap-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((index) => (
+          <Card key={index}>
+            <CardHeader>
+              <Skeleton className="h-4 w-24" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-9 w-16" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {[0, 1, 2, 3, 4].map((index) => (
+          <Card key={index}>
+            <CardHeader>
+              <Skeleton className="h-4 w-24" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-6 w-14" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
 
+function SectionHeading({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <h2 id={id} className="font-sans text-lg font-semibold tracking-tight">
+      {children}
+    </h2>
+  );
+}
+
+/**
+ * Card wrapper for every chart: title + description double as the chart's
+ * accessible name/description via aria-labelledby/aria-describedby.
+ */
 function ChartShell({
   title,
   description,
@@ -105,11 +160,13 @@ function ChartShell({
   description: string;
   children: React.ReactNode;
 }) {
+  const titleId = useId();
+  const descriptionId = useId();
   return (
-    <Card>
+    <Card aria-labelledby={titleId} aria-describedby={descriptionId}>
       <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
+        <CardTitle id={titleId}>{title}</CardTitle>
+        <CardDescription id={descriptionId}>{description}</CardDescription>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -144,7 +201,11 @@ function ActivityChart({
     return <ChartPlaceholder />;
   }
   return (
-    <div className="h-72 w-full">
+    <div
+      className="h-72 w-full"
+      role="img"
+      aria-label="Bar and line chart of daily messages and conversations"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
@@ -192,7 +253,11 @@ function TokenChart({
     return <ChartPlaceholder />;
   }
   return (
-    <div className="h-72 w-full">
+    <div
+      className="h-72 w-full"
+      role="img"
+      aria-label="Stacked area chart of daily input and output tokens"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
@@ -253,7 +318,11 @@ function TopWebsitesChart({
     .slice(0, 6)
     .reverse();
   return (
-    <div className="h-80 w-full">
+    <div
+      className="h-80 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of conversations per website"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={sorted}
@@ -301,7 +370,11 @@ function PopularQuestionsChart({ data, mounted }: { data: QuestionCount[]; mount
     .slice(0, 8)
     .reverse();
   return (
-    <div className="h-80 w-full">
+    <div
+      className="h-80 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of most-asked questions"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={sorted}
@@ -356,7 +429,11 @@ function FeedbackDistributionChart({
     return <ChartPlaceholder height={220} />;
   }
   return (
-    <div className="h-56 w-full">
+    <div
+      className="h-56 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of 1 to 5 star ratings"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={data}
@@ -413,13 +490,19 @@ export function AnalyticsPage() {
     error,
     refetch,
   } = useAnalyticsSummary(days, websiteId);
-  const { data: timeseries } = useAnalyticsTimeseries(days, websiteId);
-  const { data: topWebsites } = useAnalyticsTopWebsites(days);
+  const { data: timeseries, isPending: timeseriesPending } = useAnalyticsTimeseries(
+    days,
+    websiteId,
+  );
+  const { data: topWebsites, isPending: topWebsitesPending } = useAnalyticsTopWebsites(days);
   const { data: performance } = useAnalyticsPerformance(days, websiteId);
   const { data: feedback } = useFeedbackSummary(days, websiteId);
   const { data: overview } = useAnalyticsOverview(days, websiteId);
-  const { data: questions } = useAnalyticsQuestions(days, websiteId);
-  const { data: feedbackAnalytics } = useAnalyticsFeedback(days, websiteId);
+  const { data: questions, isPending: questionsPending } = useAnalyticsQuestions(days, websiteId);
+  const { data: feedbackAnalytics, isPending: feedbackPending } = useAnalyticsFeedback(
+    days,
+    websiteId,
+  );
 
   const activityData = useMemo(
     () =>
@@ -449,6 +532,28 @@ export function AnalyticsPage() {
       })),
     [feedback],
   );
+
+  const usageTrend = useMemo(() => {
+    const series = timeseries ?? [];
+    if (series.length < 2) {
+      return null;
+    }
+    const half = Math.floor(series.length / 2);
+    const firstHalf = series.slice(0, half).reduce((sum, point) => sum + point.messages, 0);
+    const secondHalf = series.slice(half).reduce((sum, point) => sum + point.messages, 0);
+    if (firstHalf === 0) {
+      return secondHalf > 0 ? { direction: 'up' as const, label: 'New' } : null;
+    }
+    const change = Math.round(((secondHalf - firstHalf) / firstHalf) * 100);
+    return {
+      direction: change >= 0 ? ('up' as const) : ('down' as const),
+      label: `${change >= 0 ? '+' : ''}${change}%`,
+    };
+  }, [timeseries]);
+
+  const hasActivity = activityData.some((point) => point.messages > 0 || point.conversations > 0);
+  const hasTokens = tokenData.some((point) => point.input_tokens > 0 || point.output_tokens > 0);
+  const hasTopWebsites = (topWebsites ?? []).some((item) => item.conversations > 0);
 
   const rangeLabel = RANGE_OPTIONS.find((option) => option.value === days)?.label.toLowerCase();
 
@@ -508,136 +613,206 @@ export function AnalyticsPage() {
       {summaryPending ? <StatGridSkeleton /> : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">
-            {error?.message ?? 'Failed to load analytics.'}
-          </p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load analytics.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!summaryPending && !isError && summary ? (
         <>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard
-              label="Conversations"
-              value={formatNumber(summary.total_conversations)}
-              hint={`Last ${rangeLabel}`}
-              icon={MessagesSquare}
-            />
-            <StatCard
-              label="Messages"
-              value={formatNumber(summary.total_messages)}
-              hint={`Last ${rangeLabel}`}
-              icon={MessagesSquare}
-            />
-            <StatCard
-              label="Resolution Rate"
-              value={formatPercent(overview?.resolution_rate ?? 0)}
-              hint={
-                overview
-                  ? `${formatNumber(overview.successful_answers)} of ${formatNumber(
-                      overview.total_ai_responses,
-                    )} answers resolved`
-                  : 'Assistant answers'
-              }
-              icon={BarChart3}
-            />
-            <StatCard
-              label="Avg response time"
-              value={formatSeconds(overview?.avg_response_time ?? summary.avg_response_time)}
-              hint="Assistant latency"
-              icon={Timer}
-            />
-            <StatCard
-              label="Fallback rate"
-              value={formatPercent(overview?.fallback_percentage ?? 0)}
-              hint={
-                overview
-                  ? `${formatNumber(overview.fallback_responses)} unanswered ${
-                      overview.fallback_responses === 1 ? 'question' : 'questions'
-                    }`
-                  : 'No-context answers'
-              }
-              icon={Gauge}
-            />
-            <StatCard
-              label="Tokens"
-              value={formatCompact(summary.total_tokens)}
-              hint={`${formatNumber(summary.total_input_tokens)} in / ${formatNumber(
-                summary.total_output_tokens,
-              )} out`}
-              icon={Gauge}
-            />
-            <StatCard
-              label="Estimated cost"
-              value={formatCost(summary.estimated_cost)}
-              hint="At list prices"
-              icon={CircleDollarSign}
-            />
-            <StatCard
-              label="User satisfaction"
-              value={formatRating(feedback?.average_rating ?? null)}
-              hint={
-                feedback && feedback.total > 0
-                  ? `${formatNumber(feedback.total)} rating${feedback.total === 1 ? '' : 's'}`
-                  : 'No ratings yet'
-              }
-              icon={Star}
-            />
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            <div className="flex flex-col gap-4 lg:col-span-2">
-              <ChartShell
-                title="Activity over time"
-                description="Messages and conversations per day."
-              >
-                <ActivityChart data={activityData} mounted={mounted} />
-              </ChartShell>
-              <ChartShell
-                title="Popular questions"
-                description="Most-asked questions in the selected period."
-              >
-                {questions && questions.length > 0 ? (
-                  <PopularQuestionsChart data={questions} mounted={mounted} />
-                ) : (
-                  <EmptyState
-                    icon={BarChart3}
-                    title="No questions yet"
-                    description="Once visitors ask the assistant, the most common questions show up here."
-                  />
-                )}
-              </ChartShell>
-              <ChartShell title="Token usage" description="Input and output tokens per day.">
-                <TokenChart data={tokenData} mounted={mounted} />
-              </ChartShell>
+          <section aria-labelledby="kpi-heading" className="flex flex-col gap-4">
+            <SectionHeading id="kpi-heading">Key metrics</SectionHeading>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Conversations"
+                value={formatNumber(summary.total_conversations)}
+                hint={`Last ${rangeLabel}`}
+                icon={MessagesSquare}
+                emphasis
+                accent
+              />
+              <StatCard
+                label="Messages"
+                value={formatNumber(summary.total_messages)}
+                hint={`Last ${rangeLabel}`}
+                icon={BarChart3}
+                emphasis
+                accent
+              />
+              <StatCard
+                label="Resolution Rate"
+                value={formatPercent(overview?.resolution_rate ?? 0)}
+                hint={
+                  overview
+                    ? `${formatNumber(overview.successful_answers)} of ${formatNumber(
+                        overview.total_ai_responses,
+                      )} answers resolved`
+                    : 'Assistant answers'
+                }
+                icon={Gauge}
+                emphasis
+                accent
+              />
+              <StatCard
+                label="Usage trend"
+                value={usageTrend ? usageTrend.label : '—'}
+                hint={
+                  usageTrend
+                    ? 'Messages vs earlier in the period'
+                    : 'Not enough data for a trend yet'
+                }
+                icon={
+                  usageTrend ? (usageTrend.direction === 'up' ? TrendingUp : TrendingDown) : Minus
+                }
+                emphasis
+                accent
+              />
             </div>
-            <div className="flex flex-col gap-4">
-              <ChartShell
-                title="Top websites"
-                description="Most active assistants by conversations."
-              >
-                <TopWebsitesChart
-                  data={(topWebsites ?? []).map((item) => ({
-                    website_name: item.website_name,
-                    conversations: item.conversations,
-                  }))}
-                  mounted={mounted}
-                />
-              </ChartShell>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+              <StatCard
+                label="Avg response time"
+                value={formatSeconds(overview?.avg_response_time ?? summary.avg_response_time)}
+                hint="Assistant latency"
+                icon={Timer}
+              />
+              <StatCard
+                label="Fallback rate"
+                value={formatPercent(overview?.fallback_percentage ?? 0)}
+                hint={
+                  overview
+                    ? `${formatNumber(overview.fallback_responses)} unanswered ${
+                        overview.fallback_responses === 1 ? 'question' : 'questions'
+                      }`
+                    : 'No-context answers'
+                }
+                icon={Gauge}
+              />
+              <StatCard
+                label="Tokens"
+                value={formatCompact(summary.total_tokens)}
+                hint={`${formatNumber(summary.total_input_tokens)} in / ${formatNumber(
+                  summary.total_output_tokens,
+                )} out`}
+                icon={Gauge}
+              />
+              <StatCard
+                label="Estimated cost"
+                value={formatCost(summary.estimated_cost)}
+                hint="At list prices"
+                icon={CircleDollarSign}
+              />
+              <StatCard
+                label="User satisfaction"
+                value={formatRating(feedback?.average_rating ?? null)}
+                hint={
+                  feedback && feedback.total > 0
+                    ? `${formatNumber(feedback.total)} rating${feedback.total === 1 ? '' : 's'}`
+                    : 'No ratings yet'
+                }
+                icon={Star}
+              />
+            </div>
+          </section>
+
+          <section aria-labelledby="engagement-heading" className="flex flex-col gap-3">
+            <SectionHeading id="engagement-heading">Activity &amp; engagement</SectionHeading>
+            <p className="text-sm text-muted-foreground">
+              How visitors find your assistants and what they ask.
+            </p>
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="flex flex-col gap-4 lg:col-span-2">
+                <ChartShell
+                  title="Activity over time"
+                  description="Messages and conversations per day."
+                >
+                  {timeseriesPending ? (
+                    <ChartPlaceholder />
+                  ) : hasActivity ? (
+                    <ActivityChart data={activityData} mounted={mounted} />
+                  ) : (
+                    <EmptyState
+                      icon={MessagesSquare}
+                      title="No conversations yet"
+                      description="Install your widget on your website to start collecting chats."
+                      actionLabel="Set up widget"
+                      onAction={() => router.push('/widget')}
+                    />
+                  )}
+                </ChartShell>
+                <ChartShell
+                  title="Popular questions"
+                  description="Most-asked questions in the selected period."
+                >
+                  {questionsPending ? (
+                    <ChartPlaceholder height={320} />
+                  ) : questions && questions.length > 0 ? (
+                    <PopularQuestionsChart data={questions} mounted={mounted} />
+                  ) : (
+                    <EmptyState
+                      icon={BarChart3}
+                      title="No questions yet"
+                      description="Once visitors ask the assistant, the most common questions show up here."
+                    />
+                  )}
+                </ChartShell>
+                <ChartShell title="Token usage" description="Input and output tokens per day.">
+                  {timeseriesPending ? (
+                    <ChartPlaceholder />
+                  ) : hasTokens ? (
+                    <TokenChart data={tokenData} mounted={mounted} />
+                  ) : (
+                    <EmptyState
+                      icon={Gauge}
+                      title="No token usage yet"
+                      description="Token consumption appears once your assistant starts answering questions."
+                    />
+                  )}
+                </ChartShell>
+              </div>
+              <div className="flex flex-col gap-4">
+                <ChartShell
+                  title="Top websites"
+                  description="Most active assistants by conversations."
+                >
+                  {topWebsitesPending ? (
+                    <ChartPlaceholder height={320} />
+                  ) : hasTopWebsites ? (
+                    <TopWebsitesChart
+                      data={(topWebsites ?? []).map((item) => ({
+                        website_name: item.website_name,
+                        conversations: item.conversations,
+                      }))}
+                      mounted={mounted}
+                    />
+                  ) : (
+                    <EmptyState
+                      icon={MessagesSquare}
+                      title="No conversations yet"
+                      description="Once visitors chat with your assistants, the most active websites appear here."
+                    />
+                  )}
+                </ChartShell>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="quality-heading" className="flex flex-col gap-3">
+            <SectionHeading id="quality-heading">Quality &amp; performance</SectionHeading>
+            <p className="text-sm text-muted-foreground">
+              Answer quality, latency, and how visitors rate responses.
+            </p>
+            <div className="grid gap-4 lg:grid-cols-2">
               <PerformanceCard
                 avg={performance?.avg_response_time ?? null}
                 fastest={performance?.fastest_response_time ?? null}
                 slowest={performance?.slowest_response_time ?? null}
               />
               <ChartShell title="User satisfaction" description="How visitors rated the assistant.">
-                {feedbackAnalytics && feedbackAnalytics.total > 0 ? (
+                {feedbackPending ? (
+                  <ChartPlaceholder height={220} />
+                ) : feedbackAnalytics && feedbackAnalytics.total > 0 ? (
                   <div className="flex flex-col gap-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="rounded-lg border border-border bg-muted/30 p-3">
@@ -668,7 +843,7 @@ export function AnalyticsPage() {
                 )}
               </ChartShell>
             </div>
-          </div>
+          </section>
         </>
       ) : null}
     </div>
@@ -710,11 +885,9 @@ function PerformanceCard({
 
 function Header() {
   return (
-    <div>
-      <h1 className="font-sans text-2xl font-bold tracking-tight">Analytics</h1>
-      <p className="text-sm text-muted-foreground">
-        Chat, token, and assistant-performance usage statistics.
-      </p>
-    </div>
+    <PageHeader
+      title="Analytics overview"
+      description="Chat, token, and assistant-performance usage statistics."
+    />
   );
 }

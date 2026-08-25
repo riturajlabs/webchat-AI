@@ -45,7 +45,7 @@ describe('LoginForm', () => {
     await waitFor(() => {
       expect(login).toHaveBeenCalledWith('jane@example.com', 'Str0ngPass!123');
     });
-    expect(replace).toHaveBeenCalledWith('/');
+    expect(replace).toHaveBeenCalledWith('/dashboard');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
@@ -55,7 +55,7 @@ describe('LoginForm', () => {
     render(<LoginForm />);
     fill();
 
-    await waitFor(() => expect(replace).toHaveBeenCalledWith('/'));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dashboard'));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

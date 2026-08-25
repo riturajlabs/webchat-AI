@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Banknote, CalendarRange, Receipt, TrendingUp } from 'lucide-react';
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -83,15 +83,10 @@ export function RevenuePanel() {
       ) : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">{error?.message ?? 'Failed to load revenue.'}</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load revenue.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError && data ? (

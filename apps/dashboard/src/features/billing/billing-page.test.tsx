@@ -178,7 +178,7 @@ describe('BillingPage', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Current plan')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Current plan').length).toBeGreaterThan(0));
     expect(screen.getAllByText('Pro').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Active').length).toBeGreaterThan(0);
     expect(screen.getByText(/Paid via stripe/)).toBeInTheDocument();
@@ -200,7 +200,9 @@ describe('BillingPage', () => {
   });
 
   it('lists plans with prices and starts a checkout on upgrade', async () => {
-    mockReport();
+    mockReport({
+      data: { subscription: { ...SUBSCRIPTION, plan_id: 'free', plan_name: 'Free' }, payments: [] },
+    });
     mockUsage();
     mockPlans();
     const mutate = mockCheckout();
@@ -219,6 +221,19 @@ describe('BillingPage', () => {
       },
       expect.objectContaining({ onError: expect.any(Function) }),
     );
+  });
+
+  it('marks the active plan as current without an upgrade CTA', async () => {
+    mockReport();
+    mockUsage();
+    mockPlans();
+    mockCheckout();
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Manage' })).toBeInTheDocument());
+    expect(screen.queryAllByRole('button', { name: 'Upgrade' })).toHaveLength(0);
+    expect(screen.getAllByText('Unlimited').length).toBeGreaterThan(0);
   });
 
   it('shows non-purchasable plans without an upgrade button', async () => {
@@ -242,7 +257,9 @@ describe('BillingPage', () => {
 
     renderPage();
 
-    await waitFor(() => expect(screen.getByText('Payment history')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Billing history' })).toBeInTheDocument(),
+    );
     expect(screen.getByRole('table')).toBeInTheDocument();
     expect(screen.getAllByText('Pro').length).toBeGreaterThan(0);
     expect(screen.getAllByText('$29.00').length).toBeGreaterThan(0);

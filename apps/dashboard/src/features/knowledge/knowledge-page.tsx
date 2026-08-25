@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useWebsites } from '@/features/websites/hooks';
 import type { KnowledgeStatus } from '@/features/websites/types';
@@ -268,12 +270,10 @@ export function KnowledgePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Knowledge Base</h1>
-        <p className="text-sm text-muted-foreground">
-          Content extracted from your websites and embedded for retrieval.
-        </p>
-      </div>
+      <PageHeader
+        title="Knowledge Base"
+        description="Content extracted from your websites and embedded for retrieval."
+      />
 
       {isPending ? (
         <div className="grid gap-4 sm:grid-cols-3">
@@ -291,17 +291,10 @@ export function KnowledgePage() {
       ) : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">
-            {error?.message ?? 'Failed to load knowledge base.'}
-          </p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load knowledge base.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError ? (

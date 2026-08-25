@@ -230,7 +230,7 @@ export async function request<T>(
     }
     clearSession();
     redirectToLogin();
-    return undefined as T;
+    throw new ApiError(401, 'session_expired', 'Session expired. Please sign in again.');
   }
 
   if (response.status === 204) {

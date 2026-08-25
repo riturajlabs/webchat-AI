@@ -70,5 +70,7 @@ export function formatDate(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return '—';
   }
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+  // Calendar-date semantics: timestamps are recorded at UTC midnight, so format
+  // in UTC to avoid showing the previous day west of UTC.
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeZone: 'UTC' }).format(date);
 }

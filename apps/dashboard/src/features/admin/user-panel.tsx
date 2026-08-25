@@ -5,6 +5,7 @@ import { LogOut, Search, UserX } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
@@ -150,15 +151,10 @@ export function UserPanel() {
         ) : null}
 
         {isError ? (
-          <div
-            role="alert"
-            className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-          >
-            <p className="text-sm text-destructive">{error?.message ?? 'Failed to load users.'}</p>
-            <Button variant="outline" size="sm" onClick={() => void refetch()}>
-              Try again
-            </Button>
-          </div>
+          <ErrorState
+            message={error?.message ?? 'Failed to load users.'}
+            onRetry={() => void refetch()}
+          />
         ) : null}
 
         {!isPending && !isError && users.length === 0 ? (

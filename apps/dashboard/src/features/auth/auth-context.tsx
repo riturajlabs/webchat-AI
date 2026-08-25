@@ -40,6 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(response.user);
       return true;
     } catch {
+      setUser(null);
       return false;
     }
   }, []);

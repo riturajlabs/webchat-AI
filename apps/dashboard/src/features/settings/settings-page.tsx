@@ -4,6 +4,7 @@ import { Settings as SettingsIcon } from 'lucide-react';
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
 
 /**
  * Settings editing is read-only in this phase: the backend has no settings
@@ -13,12 +14,10 @@ import { EmptyState } from '@/components/ui/empty-state';
 export function SettingsPage() {
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Settings</h1>
-        <p className="text-sm text-muted-foreground">
-          Configure your account and workspace preferences.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Configure your account and workspace preferences."
+      />
 
       <Card>
         <CardHeader>

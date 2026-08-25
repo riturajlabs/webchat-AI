@@ -2,8 +2,9 @@
 
 import { Banknote, BarChart3, Building2, Gauge, MessagesSquare, Server, Users } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { AdminNav } from './admin-nav';
@@ -62,27 +63,20 @@ export function AdminOverviewPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Admin overview</h1>
-        <p className="text-sm text-muted-foreground">
-          Platform KPIs, subscriptions, and revenue at a glance (Phase 15).
-        </p>
-      </div>
+      <PageHeader
+        title="Admin overview"
+        description="Platform KPIs, subscriptions, and revenue at a glance (Phase 15)."
+      />
 
       <AdminNav />
 
       {isPending ? <StatsSkeleton /> : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">{error?.message ?? 'Failed to load stats.'}</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load stats.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError && data ? (

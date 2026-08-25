@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { CreateApiKeyDialog } from './create-api-key-dialog';
@@ -13,7 +15,7 @@ import { useApiKeys, useRevokeApiKey } from './hooks';
 import type { ApiKey } from './types';
 
 function formatDate(value: string): string {
-  return new Date(value).toLocaleDateString();
+  return new Date(value).toLocaleDateString(undefined, { timeZone: 'UTC' });
 }
 
 export function ApiKeysPage() {
@@ -42,18 +44,16 @@ export function ApiKeysPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">API Keys</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage programmatic access to your assistants.
-          </p>
-        </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus aria-hidden="true" />
-          Create API key
-        </Button>
-      </div>
+      <PageHeader
+        title="API Keys"
+        description="Manage programmatic access to your assistants."
+        actions={
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus aria-hidden="true" />
+            Create API key
+          </Button>
+        }
+      />
 
       {isPending ? (
         <div role="status" aria-label="Loading API keys" className="flex flex-col gap-3">
@@ -73,15 +73,10 @@ export function ApiKeysPage() {
       ) : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">{error?.message ?? 'Failed to load API keys.'}</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load API keys.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError && apiKeys.length === 0 ? (

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { MessageSquareText } from 'lucide-react';
 
+import { cn } from '@/lib/utils';
+
 import { formatDateTime, formatMessageCount, visitorLabel } from './format';
 import { ConversationStatusBadge } from './status-badge';
 import type { ConversationSummary } from './types';
@@ -16,25 +18,28 @@ export function ConversationListItem({
     <li>
       <Link
         href={`/conversations/${encodeURIComponent(item.id)}`}
-        className="grid gap-2 rounded-lg border bg-card p-4 shadow-sm transition-colors hover:bg-accent/50 md:grid-cols-[minmax(0,2fr)_8rem_8rem_5.5rem_auto] md:items-center"
+        className="flex flex-col gap-2 rounded-lg border bg-card p-4 shadow-sm transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex items-center justify-between gap-3">
           <span className="truncate font-medium">{visitorLabel(item.visitor_id)}</span>
-          <span className="truncate text-sm text-muted-foreground" title={item.title}>
-            {item.last_message || item.title}
+          <ConversationStatusBadge status={item.status} />
+        </div>
+        <p
+          className={cn(
+            'truncate text-sm',
+            item.last_message ? '' : 'italic text-muted-foreground',
+          )}
+        >
+          {item.last_message || item.title}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span>{formatDateTime(item.updated_at)}</span>
+          <span className="truncate">{websiteName ?? item.website_id}</span>
+          <span className="inline-flex items-center gap-1">
+            <MessageSquareText className="size-3.5" aria-hidden="true" />
+            {formatMessageCount(item.message_count)}
           </span>
         </div>
-        <span className="text-sm text-muted-foreground">{formatDateTime(item.created_at)}</span>
-        <span className="truncate text-sm text-muted-foreground">
-          {websiteName ?? item.website_id}
-        </span>
-        <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <MessageSquareText className="size-4" aria-hidden="true" />
-          {formatMessageCount(item.message_count)}
-        </span>
-        <span className="justify-self-start">
-          <ConversationStatusBadge status={item.status} />
-        </span>
       </Link>
     </li>
   );

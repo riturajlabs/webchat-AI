@@ -1,11 +1,12 @@
 'use client';
 
-import { ArrowLeft, BookOpen, Clock, Trash2 } from 'lucide-react';
+import { ArrowLeft, Bot, Clock, Trash2, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -17,47 +18,86 @@ import { useConversation, useDeleteConversation } from './hooks';
 import { ConversationStatusBadge } from './status-badge';
 import type { ConversationMessage } from './types';
 
+function MessageSources({ sources }: { sources: ConversationMessage['sources'] }) {
+  if (sources.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mt-1 flex flex-col gap-1.5 border-t pt-3">
+      <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">Sources</p>
+      <ol className="flex flex-col gap-1">
+        {sources.map((source) => (
+          <li key={`${source.citation}-${source.url}`} className="text-sm">
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex max-w-full items-center gap-1.5 text-blue-600 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-blue-400"
+            >
+              <span
+                aria-hidden="true"
+                className="shrink-0 rounded bg-blue-50 px-1.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+              >
+                [{source.citation}]
+              </span>
+              <span className="truncate">{source.title || source.url}</span>
+            </a>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * Chat-style transcript rows: visitor messages sit right-aligned on a neutral
+ * surface, assistant messages left-aligned with source citations (blue links).
+ */
 function MessageBubble({ message }: { message: ConversationMessage }) {
   const isUser = message.role === 'user';
   return (
     <article
-      className={cn(
-        'flex flex-col gap-2 rounded-lg border p-4 shadow-sm',
-        isUser ? 'bg-primary/5' : 'bg-card',
-      )}
+      aria-label={`${isUser ? 'Visitor' : 'Assistant'} message`}
+      className={cn('flex w-full', isUser ? 'justify-end' : 'justify-start')}
     >
-      <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
-
-      {!isUser && message.sources.length > 0 ? (
-        <div className="mt-1 flex flex-col gap-1.5 border-t pt-3">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <BookOpen className="size-3.5" aria-hidden="true" />
-            Sources
-          </p>
-          <ul className="flex flex-col gap-1">
-            {message.sources.map((source) => (
-              <li key={`${source.citation}-${source.url}`} className="text-sm">
-                <a
-                  href={source.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-2 hover:underline"
-                >
-                  {source.title || source.url}
-                </a>
-              </li>
-            ))}
-          </ul>
+      <div
+        className={cn(
+          'flex max-w-[85%] flex-col gap-2 rounded-2xl p-4',
+          isUser
+            ? 'rounded-br-md bg-secondary text-secondary-foreground'
+            : 'rounded-bl-md border bg-card shadow-sm',
+        )}
+      >
+        <div
+          className={cn(
+            'flex items-center gap-2 text-xs font-medium',
+            isUser ? 'text-muted-foreground' : 'text-blue-600 dark:text-blue-400',
+          )}
+        >
+          {isUser ? (
+            <User className="size-3.5" aria-hidden="true" />
+          ) : (
+            <Bot className="size-3.5" aria-hidden="true" />
+          )}
+          <span>{isUser ? 'Visitor' : 'Assistant'}</span>
+          <time dateTime={message.created_at} className="font-normal text-muted-foreground">
+            {formatDateTime(message.created_at)}
+          </time>
         </div>
-      ) : null}
 
-      {!isUser ? (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Clock className="size-3.5" aria-hidden="true" />
-          {message.input_tokens} in / {message.output_tokens} out tokens ·{' '}
-          {formatResponseTime(message.response_time)}
-        </p>
-      ) : null}
+        <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+
+        {!isUser ? (
+          <>
+            <MessageSources sources={message.sources} />
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Clock className="size-3.5" aria-hidden="true" />
+              {message.input_tokens} in / {message.output_tokens} out tokens ·{' '}
+              {formatResponseTime(message.response_time)}
+            </p>
+          </>
+        ) : null}
+      </div>
     </article>
   );
 }
@@ -113,17 +153,10 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
       );
     }
     return (
-      <div
-        role="alert"
-        className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-      >
-        <p className="text-sm text-destructive">
-          {error?.message ?? 'Failed to load conversation.'}
-        </p>
-        <Button variant="outline" size="sm" onClick={() => void refetch()}>
-          Try again
-        </Button>
-      </div>
+      <ErrorState
+        message={error?.message ?? 'Failed to load conversation.'}
+        onRetry={() => void refetch()}
+      />
     );
   }
 
@@ -133,38 +166,66 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-2">
-          <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" asChild>
-            <Link href="/conversations">
-              <ArrowLeft aria-hidden="true" />
-              Conversations
-            </Link>
-          </Button>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">{data.title}</h1>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-            <span>{visitorLabel(data.visitor_id)}</span>
-            {websiteName ? <span>{websiteName}</span> : null}
-            <span>Started {formatDateTime(data.created_at)}</span>
-            <span>Updated {formatDateTime(data.updated_at)}</span>
-            <ConversationStatusBadge status={data.status} />
-          </div>
-        </div>
-        <Button variant="destructive" size="sm" onClick={() => void handleDelete()}>
-          <Trash2 aria-hidden="true" />
-          Delete
+      <header className="flex flex-col gap-4 border-b pb-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="-ml-2 self-start text-muted-foreground"
+          asChild
+        >
+          <Link href="/conversations">
+            <ArrowLeft aria-hidden="true" />
+            Conversations
+          </Link>
         </Button>
-      </div>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="truncate font-sans text-2xl font-bold tracking-tight">{data.title}</h1>
+              <ConversationStatusBadge status={data.status} />
+            </div>
+            <dl className="flex flex-wrap gap-x-8 gap-y-2">
+              <div className="flex flex-col">
+                <dt className="text-xs uppercase tracking-wide text-muted-foreground">Visitor</dt>
+                <dd className="text-sm font-medium">{visitorLabel(data.visitor_id)}</dd>
+              </div>
+              {websiteName ? (
+                <div className="flex flex-col">
+                  <dt className="text-xs uppercase tracking-wide text-muted-foreground">Website</dt>
+                  <dd className="text-sm font-medium">{websiteName}</dd>
+                </div>
+              ) : null}
+              <div className="flex flex-col">
+                <dt className="text-xs uppercase tracking-wide text-muted-foreground">Started</dt>
+                <dd className="text-sm font-medium">{formatDateTime(data.created_at)}</dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Last activity
+                </dt>
+                <dd className="text-sm font-medium">{formatDateTime(data.updated_at)}</dd>
+              </div>
+            </dl>
+          </div>
+          <Button variant="destructive" size="sm" onClick={() => void handleDelete()}>
+            <Trash2 aria-hidden="true" />
+            Delete
+          </Button>
+        </div>
+      </header>
 
-      <ol className="flex flex-col gap-3">
-        {data.messages.map((message) => (
-          <li
-            key={`${message.role}-${message.created_at}-${message.output_tokens}-${message.content.length}`}
-          >
-            <MessageBubble message={message} />
-          </li>
-        ))}
-      </ol>
+      <section aria-labelledby="conversation-messages-heading" className="flex flex-col gap-4">
+        <h2 id="conversation-messages-heading" className="sr-only">
+          Messages
+        </h2>
+        <ol className="flex flex-col gap-4">
+          {data.messages.map((message, index) => (
+            <li key={`${message.role}-${index}`}>
+              <MessageBubble message={message} />
+            </li>
+          ))}
+        </ol>
+      </section>
     </div>
   );
 }

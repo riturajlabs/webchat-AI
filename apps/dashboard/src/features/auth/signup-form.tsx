@@ -39,7 +39,7 @@ export function SignupForm() {
     setError(null);
     try {
       await register(name.trim(), trimmedEmail, password);
-      router.replace('/');
+      router.replace('/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create your account.');
     } finally {

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { Toaster } from '@/components/ui/toaster';
+import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -15,12 +16,25 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: {
-    default: 'WebChat AI',
-    template: '%s | WebChat AI',
+    default: `${SITE_NAME} - AI Chatbot for Your Website`,
+    template: `%s | ${SITE_NAME}`,
   },
-  description:
-    'Multi-tenant AI SaaS platform. Create a website-specific AI assistant in minutes with zero code.',
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  openGraph: {
+    type: 'website',
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} - AI Chatbot for Your Website`,
+    description: SITE_DESCRIPTION,
+    url: '/',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: `${SITE_NAME} - AI Chatbot for Your Website`,
+    description: SITE_DESCRIPTION,
+  },
 };
 
 export default function RootLayout({

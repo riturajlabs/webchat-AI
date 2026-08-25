@@ -13,7 +13,7 @@ export function LoginForm() {
   const { login } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectTo = searchParams.get('redirect') ?? '/';
+  const redirectTo = searchParams.get('redirect') ?? '/dashboard';
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -29,7 +29,7 @@ export function LoginForm() {
     setError(null);
     try {
       await login(email.trim(), password);
-      router.replace(redirectTo.startsWith('/') ? redirectTo : '/');
+      router.replace(redirectTo.startsWith('/') ? redirectTo : '/dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to sign in.');
     } finally {

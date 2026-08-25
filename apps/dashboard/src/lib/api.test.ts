@@ -143,9 +143,8 @@ describe('api client', () => {
       .mockResolvedValueOnce(jsonResponse({ error: { code: 'token_expired' } }, 401))
       .mockResolvedValueOnce(jsonResponse({}, 401));
 
-    // After refresh failure, the client redirects and returns without throwing.
-    const result = await api.get('/api/websites');
-    expect(result).toBeUndefined();
+    // After refresh failure, the client clears the session, redirects, and throws.
+    await expect(api.get('/api/websites')).rejects.toThrow('Session expired');
 
     expect(getAccessToken()).toBeNull();
     expect(getCsrfToken()).toBeNull();

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Label } from '@/components/ui/label';
@@ -75,17 +76,10 @@ export function CrawlPanel() {
         ) : null}
 
         {isError ? (
-          <div
-            role="alert"
-            className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-          >
-            <p className="text-sm text-destructive">
-              {error?.message ?? 'Failed to load crawl jobs.'}
-            </p>
-            <Button variant="outline" size="sm" onClick={() => void refetch()}>
-              Try again
-            </Button>
-          </div>
+          <ErrorState
+            message={error?.message ?? 'Failed to load crawl jobs.'}
+            onRetry={() => void refetch()}
+          />
         ) : null}
 
         {!isPending && !isError && jobs.length === 0 ? (

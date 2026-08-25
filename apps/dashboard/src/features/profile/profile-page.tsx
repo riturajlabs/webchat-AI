@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { useAuth } from '@/features/auth/auth-context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
@@ -151,10 +152,7 @@ export function ProfilePage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Profile</h1>
-        <p className="text-sm text-muted-foreground">Your account details.</p>
-      </div>
+      <PageHeader title="Profile" description="Your account details." />
 
       <Card>
         <CardHeader>

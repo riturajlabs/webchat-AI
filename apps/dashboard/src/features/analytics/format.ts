@@ -19,17 +19,10 @@ export function formatDay(date: string): string {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(parsed);
 }
 
-/** 1234 -> "1,234"; compact for very large values. */
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined).format(value);
-}
+/** 1234 -> "1,234"; compact for very large values. Shared helpers. */
+export { formatCompact, formatNumber } from '@/lib/format';
 
 /** 1500 -> "1.5K"; 2.3M etc. */
-export function formatCompact(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-    .format(value)
-    .toLowerCase();
-}
 
 /** 0.00105 -> "$0.001" (USD, per-million-token list prices). */
 export function formatCost(value: number): string {

@@ -43,20 +43,13 @@ export function formatDate(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return '—';
   }
-  return date.toLocaleDateString();
+  // Calendar-date semantics: format in UTC so UTC-midnight timestamps render
+  // the same day regardless of the viewer's timezone.
+  return date.toLocaleDateString(undefined, { timeZone: 'UTC' });
 }
 
-/** 1234 -> "1,234"; compact for very large values. */
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined).format(value);
-}
-
-/** 1500 -> "1.5K". */
-export function formatCompact(value: number): string {
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
-    .format(value)
-    .toLowerCase();
-}
+/** 1234 -> "1,234"; compact for very large values. Shared helpers. */
+export { formatCompact, formatNumber } from '@/lib/format';
 
 /** Minor units (cents) -> localized currency, e.g. 2900 -> "$29.00". */
 export function formatCents(cents: number | null | undefined, currency = 'USD'): string {

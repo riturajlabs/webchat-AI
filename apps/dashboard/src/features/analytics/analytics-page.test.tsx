@@ -358,6 +358,27 @@ describe('AnalyticsPage', () => {
     expect(screen.getByTestId('popular-questions-chart')).toBeInTheDocument();
   });
 
+  it('groups content into labelled sections for metric hierarchy', () => {
+    renderPage();
+    expect(screen.getByRole('heading', { name: 'Key metrics' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Activity & engagement' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Quality & performance' })).toBeInTheDocument();
+  });
+
+  it('shows chart placeholders while timeseries loads instead of empty states', () => {
+    mockedUseTimeseries.mockReturnValue({
+      data: undefined,
+      isPending: true,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useAnalyticsTimeseries>);
+    renderPage();
+
+    expect(screen.getAllByLabelText('Loading chart').length).toBeGreaterThan(0);
+    expect(screen.queryByText('No conversations yet')).not.toBeInTheDocument();
+  });
+
   it('switches the time range', () => {
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: '30 days' }));
@@ -450,10 +471,34 @@ describe('AnalyticsPage', () => {
       isPending: true,
       isError: false,
       error: null,
-      refetch: vi.fn().mockResolvedValue(undefined),
+      refetch: vi.fn(),
     } as unknown as ReturnType<typeof useAnalyticsOverview>);
     renderPage();
     expect(screen.getAllByText('0%').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('computes the usage trend from timeseries halves', () => {
+    renderPage();
+    expect(screen.getByText('Usage trend')).toBeInTheDocument();
+    expect(screen.getByText('+109%')).toBeInTheDocument();
+  });
+
+  it('shows an empty state instead of the activity chart when there is no activity', () => {
+    mockedUseTimeseries.mockReturnValue({
+      data: [],
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useAnalyticsTimeseries>);
+    renderPage();
+
+    expect(screen.getByText('No conversations yet')).toBeInTheDocument();
+    expect(
+      screen.getByText('Install your widget on your website to start collecting chats.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId('activity-chart')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('token-chart')).not.toBeInTheDocument();
   });
 
   it('shows an empty state for the satisfaction chart when there are no ratings', () => {

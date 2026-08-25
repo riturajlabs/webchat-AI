@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { ChevronDown, Save } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { Check, Loader2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -49,23 +50,22 @@ const EDITABLE_FIELDS: (keyof WidgetConfigChanges)[] = [
   'launcher_size',
 ];
 
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}) {
+const UNSAVED_MESSAGE = 'You have unsaved widget changes. Leave anyway?';
+
+function GroupHeading({ children }: { children: React.ReactNode }) {
   return (
-    <Card>
-      <CardHeader className="p-4 pb-2">
-        <CardTitle className="text-base">{title}</CardTitle>
-        <CardDescription className="text-sm">{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4 p-4 pt-2">{children}</CardContent>
-    </Card>
+    <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </h2>
+  );
+}
+
+function Field({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+    </div>
   );
 }
 
@@ -93,8 +93,8 @@ function Toggle({
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={cn(
-          'relative h-6 w-11 shrink-0 rounded-full transition-colors',
-          checked ? 'bg-primary' : 'bg-input',
+          'relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          checked ? 'bg-blue-600' : 'bg-input',
         )}
       >
         <span
@@ -125,7 +125,7 @@ function OptionalColorPicker({
           type="button"
           onClick={() => onChange(null)}
           disabled={value === null}
-          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
+          className="rounded text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
         >
           Reset to default
         </button>
@@ -135,37 +135,18 @@ function OptionalColorPicker({
   );
 }
 
-function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="rounded-lg border border-border bg-card">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-sm font-medium transition-colors hover:bg-accent/50"
-      >
-        {title}
-        <ChevronDown
-          aria-hidden="true"
-          className={cn('size-4 text-muted-foreground transition-transform', open && 'rotate-180')}
-        />
-      </button>
-      {open ? (
-        <div className="flex flex-col gap-4 border-t border-border p-3">{children}</div>
-      ) : null}
-    </div>
-  );
-}
-
 export function WidgetEditor({
   config,
   embedScript,
+  onDirtyChange,
 }: {
   config: WidgetConfig;
   embedScript: string;
+  onDirtyChange?: (isDirty: boolean) => void;
 }) {
+  const router = useRouter();
   const [draft, setDraft] = useState<WidgetConfig>(config);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const updateWidget = useUpdateWidgetConfig();
 
   const changes = useMemo(() => {
@@ -186,6 +167,58 @@ export function WidgetEditor({
 
   const isDirty = Object.keys(changes).length > 0;
 
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!isDirty) {
+      return;
+    }
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
+
+  useEffect(() => {
+    if (!isDirty) {
+      return;
+    }
+    function handleClick(event: MouseEvent) {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const anchor = (event.target as Element | null)?.closest('a[href]');
+      if (!anchor) {
+        return;
+      }
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#')) {
+        return;
+      }
+      if (!window.confirm(UNSAVED_MESSAGE)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      router.push(href);
+    }
+    document.addEventListener('click', handleClick, true);
+    return () => document.removeEventListener('click', handleClick, true);
+  }, [isDirty, router]);
+
   function patch(partial: Partial<WidgetConfigChanges>) {
     setDraft((current) => ({ ...current, ...partial }));
   }
@@ -194,301 +227,363 @@ export function WidgetEditor({
     try {
       const result = await updateWidget.mutateAsync({ websiteId: config.website_id, changes });
       setDraft(result.widget);
+      setLastSavedAt(Date.now());
       toast.success('Widget settings saved');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to save widget settings.');
     }
   }
 
+  const saveStatus = updateWidget.isPending
+    ? 'saving'
+    : isDirty
+      ? 'unsaved'
+      : lastSavedAt !== null
+        ? 'saved'
+        : 'idle';
+
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr] xl:grid-cols-[minmax(0,460px)_1fr]">
-      <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
+      <div className="flex min-w-0 flex-col gap-5">
+        <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-b bg-background/95 px-1 pb-3 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="min-w-0">
             <h2 className="font-sans text-lg font-semibold">Customize widget</h2>
             <p className="text-sm text-muted-foreground">
               Changes appear in the preview instantly.
             </p>
           </div>
-          <Button onClick={save} disabled={!isDirty || updateWidget.isPending}>
-            {updateWidget.isPending ? (
-              <span className="flex items-center gap-2">
-                <span className="size-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                Saving…
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Save aria-hidden="true" />
-                Save changes
-              </span>
-            )}
-          </Button>
+          <div className="flex items-center gap-3">
+            <span aria-live="polite" className="text-sm">
+              {saveStatus === 'saving' ? (
+                <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Saving…
+                </span>
+              ) : saveStatus === 'unsaved' ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+                  <span className="size-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+                  Unsaved changes
+                </span>
+              ) : saveStatus === 'saved' ? (
+                <span className="inline-flex items-center gap-1.5 text-green-700 dark:text-green-400">
+                  <Check className="size-4" aria-hidden="true" />
+                  Saved
+                </span>
+              ) : null}
+            </span>
+            <Button onClick={save} disabled={!isDirty || updateWidget.isPending}>
+              {updateWidget.isPending ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Saving…
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <Save aria-hidden="true" />
+                  Save changes
+                </span>
+              )}
+            </Button>
+          </div>
         </div>
 
-        <Section
-          title="Preset theme"
-          description="Start from a curated palette, then fine-tune with the advanced options below."
-        >
-          <ThemeSelector
-            value={draft.theme_preset}
-            onChange={(theme_preset) => patch({ theme_preset })}
-          />
-          {draft.theme_preset ? (
-            <p className="text-xs text-muted-foreground">
-              Custom colors set in the advanced options override this preset.
-            </p>
-          ) : null}
-        </Section>
-
-        <Section
-          title="Appearance"
-          description="Colors, fonts and how the widget looks on your site."
-        >
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="theme">Theme</Label>
-            <select
-              id="theme"
-              value={draft.theme}
-              onChange={(event) => patch({ theme: event.target.value as WidgetConfig['theme'] })}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-              <option value="auto">Auto</option>
-            </select>
-          </div>
-
-          <Collapsible title="Advanced customization">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="position">Position</Label>
-              <select
-                id="position"
-                value={draft.position}
-                onChange={(event) =>
-                  patch({ position: event.target.value as WidgetConfig['position'] })
-                }
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="bottom-right">Bottom Right</option>
-                <option value="bottom-left">Bottom Left</option>
-              </select>
-            </div>
-
-            <ColorPicker
-              label="Primary color"
-              value={draft.primary_color}
-              onChange={(primary_color) => patch({ primary_color })}
-            />
-            <ColorPicker
-              label="Accent color"
-              value={draft.accent_color}
-              onChange={(accent_color) => patch({ accent_color })}
-            />
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="font-size">Font size</Label>
-              <select
-                id="font-size"
-                value={draft.font_size}
-                onChange={(event) =>
-                  patch({ font_size: event.target.value as WidgetConfig['font_size'] })
-                }
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="sm">Small</option>
-                <option value="md">Medium</option>
-                <option value="lg">Large</option>
-              </select>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="logo-url">Logo URL</Label>
-              <Input
-                id="logo-url"
-                value={draft.logo_url ?? ''}
-                placeholder="https://…"
-                onChange={(event) => patch({ logo_url: event.target.value || null })}
+        <section aria-labelledby="appearance-heading" className="flex flex-col gap-3">
+          <GroupHeading>
+            <span id="appearance-heading">Appearance</span>
+          </GroupHeading>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-base">Theme &amp; colors</CardTitle>
+              <CardDescription className="text-sm">
+                Pick a curated palette or fine-tune every color yourself.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 p-4 pt-2">
+              <ThemeSelector
+                value={draft.theme_preset}
+                onChange={(theme_preset) => patch({ theme_preset })}
               />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="avatar-url">Avatar URL</Label>
-              <Input
-                id="avatar-url"
-                value={draft.avatar_url ?? ''}
-                placeholder="https://…"
-                onChange={(event) => patch({ avatar_url: event.target.value || null })}
+              {draft.theme_preset ? (
+                <p className="text-xs text-muted-foreground">
+                  Custom colors set below override this preset.
+                </p>
+              ) : null}
+              <Field id="theme" label="Theme">
+                <select
+                  id="theme"
+                  value={draft.theme}
+                  onChange={(event) =>
+                    patch({ theme: event.target.value as WidgetConfig['theme'] })
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                  <option value="auto">Auto</option>
+                </select>
+              </Field>
+              <ColorPicker
+                label="Primary color"
+                value={draft.primary_color}
+                onChange={(primary_color) => patch({ primary_color })}
               />
-            </div>
-
-            <Toggle
-              label="Show branding"
-              description="Display the WebChat AI badge on the widget."
-              checked={draft.branding}
-              onChange={(branding) => patch({ branding })}
-            />
-          </Collapsible>
-        </Section>
-
-        <Section
-          title="Branding"
-          description="Bot identity, colors and window sizing shown to visitors."
-        >
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="bot-name">Bot name</Label>
-            <Input
-              id="bot-name"
-              value={draft.bot_name}
-              maxLength={60}
-              placeholder="WebChat AI"
-              onChange={(event) => patch({ bot_name: event.target.value })}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="bot-status">Status text</Label>
-            <Input
-              id="bot-status"
-              value={draft.bot_status_text}
-              maxLength={40}
-              placeholder="Online"
-              onChange={(event) => patch({ bot_status_text: event.target.value })}
-            />
-          </div>
-
-          <OptionalColorPicker
-            label="Header color"
-            value={draft.header_color}
-            onChange={(header_color) => patch({ header_color })}
-          />
-          <OptionalColorPicker
-            label="Secondary color"
-            value={draft.secondary_color}
-            onChange={(secondary_color) => patch({ secondary_color })}
-          />
-          <OptionalColorPicker
-            label="Background color"
-            value={draft.background_color}
-            onChange={(background_color) => patch({ background_color })}
-          />
-          <OptionalColorPicker
-            label="Text color"
-            value={draft.text_color}
-            onChange={(text_color) => patch({ text_color })}
-          />
-
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="font-family">Font family</Label>
-            <Input
-              id="font-family"
-              value={draft.font_family ?? ''}
-              maxLength={100}
-              placeholder="System default"
-              onChange={(event) => patch({ font_family: event.target.value || null })}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="width">Width</Label>
-              <Input
-                id="width"
-                value={draft.width}
-                maxLength={20}
-                placeholder="420px"
-                onChange={(event) => patch({ width: event.target.value })}
+              <ColorPicker
+                label="Accent color"
+                value={draft.accent_color}
+                onChange={(accent_color) => patch({ accent_color })}
               />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="height">Height</Label>
-              <Input
-                id="height"
-                value={draft.height}
-                maxLength={20}
-                placeholder="650px"
-                onChange={(event) => patch({ height: event.target.value })}
+              <OptionalColorPicker
+                label="Header color"
+                value={draft.header_color}
+                onChange={(header_color) => patch({ header_color })}
               />
-            </div>
-          </div>
+              <OptionalColorPicker
+                label="Secondary color"
+                value={draft.secondary_color}
+                onChange={(secondary_color) => patch({ secondary_color })}
+              />
+              <OptionalColorPicker
+                label="Background color"
+                value={draft.background_color}
+                onChange={(background_color) => patch({ background_color })}
+              />
+              <OptionalColorPicker
+                label="Text color"
+                value={draft.text_color}
+                onChange={(text_color) => patch({ text_color })}
+              />
+              <Field id="font-family" label="Font family">
+                <Input
+                  id="font-family"
+                  value={draft.font_family ?? ''}
+                  maxLength={100}
+                  placeholder="System default"
+                  onChange={(event) => patch({ font_family: event.target.value || null })}
+                />
+              </Field>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-base">Brand &amp; identity</CardTitle>
+              <CardDescription className="text-sm">
+                Bot name, avatar and logos shown to visitors.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 p-4 pt-2">
+              <Field id="bot-name" label="Bot name">
+                <Input
+                  id="bot-name"
+                  value={draft.bot_name}
+                  maxLength={60}
+                  placeholder="WebChat AI"
+                  onChange={(event) => patch({ bot_name: event.target.value })}
+                />
+              </Field>
+              <Field id="bot-status" label="Status text">
+                <Input
+                  id="bot-status"
+                  value={draft.bot_status_text}
+                  maxLength={40}
+                  placeholder="Online"
+                  onChange={(event) => patch({ bot_status_text: event.target.value })}
+                />
+              </Field>
+              <Field id="logo-url" label="Logo URL">
+                <Input
+                  id="logo-url"
+                  value={draft.logo_url ?? ''}
+                  placeholder="https://…"
+                  onChange={(event) => patch({ logo_url: event.target.value || null })}
+                />
+              </Field>
+              <Field id="avatar-url" label="Avatar URL">
+                <Input
+                  id="avatar-url"
+                  value={draft.avatar_url ?? ''}
+                  placeholder="https://…"
+                  onChange={(event) => patch({ avatar_url: event.target.value || null })}
+                />
+              </Field>
+              <Toggle
+                label="Show branding"
+                description="Display the WebChat AI badge on the widget."
+                checked={draft.branding}
+                onChange={(branding) => patch({ branding })}
+              />
+            </CardContent>
+          </Card>
+        </section>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="border-radius">Corner radius</Label>
-              <Input
-                id="border-radius"
-                value={draft.border_radius}
-                maxLength={20}
-                placeholder="20px"
-                onChange={(event) => patch({ border_radius: event.target.value })}
+        <section aria-labelledby="behavior-heading" className="flex flex-col gap-3">
+          <GroupHeading>
+            <span id="behavior-heading">Chat behavior</span>
+          </GroupHeading>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-base">Messages</CardTitle>
+              <CardDescription className="text-sm">
+                Greeting, placeholder and suggested questions for new visitors.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 p-4 pt-2">
+              <Field id="welcome-message" label="Welcome message">
+                <Input
+                  id="welcome-message"
+                  value={draft.welcome_message}
+                  maxLength={500}
+                  onChange={(event) => patch({ welcome_message: event.target.value })}
+                />
+              </Field>
+              <Field id="placeholder" label="Input placeholder">
+                <Input
+                  id="placeholder"
+                  value={draft.placeholder}
+                  maxLength={120}
+                  onChange={(event) => patch({ placeholder: event.target.value })}
+                />
+              </Field>
+              <QuestionEditor
+                questions={draft.suggested_questions}
+                onChange={(suggested_questions) => patch({ suggested_questions })}
               />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="launcher-size">Launcher size</Label>
-              <Input
-                id="launcher-size"
-                value={draft.launcher_size}
-                maxLength={20}
-                placeholder="58px"
-                onChange={(event) => patch({ launcher_size: event.target.value })}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-base">Engagement</CardTitle>
+              <CardDescription className="text-sm">
+                How and when the widget engages visitors.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 p-4 pt-2">
+              <Toggle
+                label="Auto open"
+                description="Open the chat window automatically for new visitors."
+                checked={draft.auto_open}
+                onChange={(auto_open) => patch({ auto_open })}
               />
-            </div>
-          </div>
-        </Section>
+              <Toggle
+                label="Enabled"
+                description="Disable to hide the widget from your site entirely."
+                checked={draft.enabled}
+                onChange={(enabled) => patch({ enabled })}
+              />
+            </CardContent>
+          </Card>
+        </section>
 
-        <Section title="Messages" description="Greeting and suggested questions for new visitors.">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="welcome-message">Welcome message</Label>
-            <Input
-              id="welcome-message"
-              value={draft.welcome_message}
-              maxLength={500}
-              onChange={(event) => patch({ welcome_message: event.target.value })}
+        <section aria-labelledby="position-heading" className="flex flex-col gap-3">
+          <GroupHeading>
+            <span id="position-heading">Position &amp; size</span>
+          </GroupHeading>
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-base">Placement</CardTitle>
+              <CardDescription className="text-sm">
+                Where the widget sits and how large it renders.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 p-4 pt-2">
+              <Field id="position" label="Position">
+                <select
+                  id="position"
+                  value={draft.position}
+                  onChange={(event) =>
+                    patch({ position: event.target.value as WidgetConfig['position'] })
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                </select>
+              </Field>
+              <Field id="font-size" label="Font size">
+                <select
+                  id="font-size"
+                  value={draft.font_size}
+                  onChange={(event) =>
+                    patch({ font_size: event.target.value as WidgetConfig['font_size'] })
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="sm">Small</option>
+                  <option value="md">Medium</option>
+                  <option value="lg">Large</option>
+                </select>
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field id="width" label="Width">
+                  <Input
+                    id="width"
+                    value={draft.width}
+                    maxLength={20}
+                    placeholder="420px"
+                    onChange={(event) => patch({ width: event.target.value })}
+                  />
+                </Field>
+                <Field id="height" label="Height">
+                  <Input
+                    id="height"
+                    value={draft.height}
+                    maxLength={20}
+                    placeholder="650px"
+                    onChange={(event) => patch({ height: event.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Field id="border-radius" label="Corner radius">
+                  <Input
+                    id="border-radius"
+                    value={draft.border_radius}
+                    maxLength={20}
+                    placeholder="20px"
+                    onChange={(event) => patch({ border_radius: event.target.value })}
+                  />
+                </Field>
+                <Field id="launcher-size" label="Launcher size">
+                  <Input
+                    id="launcher-size"
+                    value={draft.launcher_size}
+                    maxLength={20}
+                    placeholder="58px"
+                    onChange={(event) => patch({ launcher_size: event.target.value })}
+                  />
+                </Field>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+
+        <Card>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="text-base">Allowed domains</CardTitle>
+            <CardDescription className="text-sm">
+              Restrict which websites may embed this widget.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-4 pt-2">
+            <AllowedDomainsEditor
+              domains={draft.allowed_domains}
+              onChange={(allowed_domains) => patch({ allowed_domains })}
             />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="placeholder">Input placeholder</Label>
-            <Input
-              id="placeholder"
-              value={draft.placeholder}
-              maxLength={120}
-              onChange={(event) => patch({ placeholder: event.target.value })}
-            />
-          </div>
-          <QuestionEditor
-            questions={draft.suggested_questions}
-            onChange={(suggested_questions) => patch({ suggested_questions })}
-          />
-        </Section>
-
-        <Section title="Behavior" description="How and when the widget engages visitors.">
-          <Toggle
-            label="Auto open"
-            description="Open the chat window automatically for new visitors."
-            checked={draft.auto_open}
-            onChange={(auto_open) => patch({ auto_open })}
-          />
-          <Toggle
-            label="Enabled"
-            description="Disable to hide the widget from your site entirely."
-            checked={draft.enabled}
-            onChange={(enabled) => patch({ enabled })}
-          />
-        </Section>
-
-        <Section
-          title="Allowed domains"
-          description="Restrict which websites may embed this widget."
-        >
-          <AllowedDomainsEditor
-            domains={draft.allowed_domains}
-            onChange={(allowed_domains) => patch({ allowed_domains })}
-          />
-        </Section>
+          </CardContent>
+        </Card>
 
         <EmbedCode widgetId={config.widget_id} embedScript={embedScript} />
       </div>
 
-      <div className="flex items-start justify-center lg:sticky lg:top-6">
-        <WidgetPreview config={draft} />
+      <div className="flex flex-col gap-3 lg:sticky lg:top-6 lg:self-start">
+        <div>
+          <h2 className="font-sans text-lg font-semibold">Live preview</h2>
+          <p className="text-sm text-muted-foreground">
+            See your changes exactly as visitors will.
+          </p>
+        </div>
+        <div className="overflow-x-auto pb-2">
+          <WidgetPreview config={draft} />
+        </div>
       </div>
     </div>
   );

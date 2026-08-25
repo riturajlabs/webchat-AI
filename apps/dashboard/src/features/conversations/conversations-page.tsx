@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search } from 'lucide-react';
-import { MessagesSquare } from 'lucide-react';
+import Link from 'next/link';
+import { FlaskConical, MessagesSquare, Puzzle, Search } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { useWebsites } from '@/features/websites/hooks';
@@ -51,12 +53,10 @@ export function ConversationsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="font-sans text-2xl font-bold tracking-tight">Conversations</h1>
-        <p className="text-sm text-muted-foreground">
-          Chat history and per-assistant conversation threads.
-        </p>
-      </div>
+      <PageHeader
+        title="Conversations"
+        description="Review customer conversations with your AI assistant."
+      />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
@@ -104,26 +104,26 @@ export function ConversationsPage() {
       {isPending ? (
         <div role="status" aria-label="Loading conversations" className="flex flex-col gap-3">
           {[0, 1, 2, 3].map((index) => (
-            <div key={index} className="h-16 rounded-lg border bg-card p-4 shadow-sm">
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="mt-2 h-3 w-64" />
+            <div
+              key={index}
+              className="flex flex-col gap-2 rounded-lg border bg-card p-4 shadow-sm"
+            >
+              <div className="flex items-center justify-between">
+                <Skeleton className="h-4 w-32" />
+                <Skeleton className="h-5 w-20 rounded-full" />
+              </div>
+              <Skeleton className="h-3 w-64" />
+              <Skeleton className="h-3 w-48" />
             </div>
           ))}
         </div>
       ) : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">
-            {error?.message ?? 'Failed to load conversations.'}
-          </p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load conversations.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError && conversations.length === 0 ? (
@@ -141,16 +141,36 @@ export function ConversationsPage() {
             }}
           />
         ) : (
-          <EmptyState
-            icon={MessagesSquare}
-            title="No conversations yet"
-            description="Chats from your widget and dashboard will appear here."
-          />
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-10 text-center">
+            <MessagesSquare className="size-8 text-muted-foreground/50" aria-hidden="true" />
+            <p className="font-medium">No conversations yet</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Install your widget and start receiving customer questions.
+            </p>
+            <div className="mt-1 flex flex-wrap justify-center gap-2">
+              <Button asChild>
+                <Link href="/widget">
+                  <Puzzle aria-hidden="true" />
+                  Install your widget
+                </Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href="/widget-test">
+                  <FlaskConical aria-hidden="true" />
+                  Widget Test
+                </Link>
+              </Button>
+            </div>
+          </div>
         )
       ) : null}
 
       {!isPending && !isError && conversations.length > 0 ? (
         <>
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {data?.total ?? 0} {data?.total === 1 ? 'conversation' : 'conversations'}
+            {search ? ` matching “${search}”` : ''}
+          </p>
           <ul className="flex flex-col gap-3">
             {conversations.map((item) => (
               <ConversationListItem

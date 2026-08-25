@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { CheckCircle2, FlaskConical, Globe, Link2, XCircle } from 'lucide-react';
 
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { API_BASE_URL } from '@/lib/api';
 import { useWebsites } from '@/features/websites/hooks';
@@ -195,12 +196,10 @@ export function WidgetTestPage() {
 
 function Header() {
   return (
-    <div className="flex flex-col gap-1">
-      <h1 className="font-sans text-2xl font-bold tracking-tight">Widget Test</h1>
-      <p className="text-sm text-muted-foreground">
-        Preview the real widget and check the origin guard from your browser.
-      </p>
-    </div>
+    <PageHeader
+      title="Widget Test"
+      description="Preview the real widget and check the origin guard from your browser."
+    />
   );
 }
 

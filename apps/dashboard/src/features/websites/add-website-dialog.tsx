@@ -128,10 +128,12 @@ export function AddWebsiteDialog({
           <div className="flex flex-col gap-4">
             <div
               role="status"
-              className="rounded-md border border-green-200 bg-green-50 p-3 text-sm"
+              className="rounded-md border border-green-200 bg-green-50 p-3 text-sm dark:border-green-500/30 dark:bg-green-500/10"
             >
-              <p className="font-medium text-green-900">Website added</p>
-              <p className="text-green-800">Your widget is ready. Paste the embed script below.</p>
+              <p className="font-medium text-green-900 dark:text-green-400">Website added</p>
+              <p className="text-green-800 dark:text-green-300">
+                Your widget is ready. Paste the embed script below.
+              </p>
             </div>
 
             <div>

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { AdminGuard } from '@/features/admin/admin-guard';
+import { PageHeader } from '@/components/ui/page-header';
 import { AdminNav } from '@/features/admin/admin-nav';
 import { SystemPanel } from '@/features/admin/system-panel';
 
@@ -12,10 +13,7 @@ export default function AdminSystemRoute() {
   return (
     <AdminGuard>
       <div className="flex flex-col gap-6">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">System</h1>
-          <p className="text-sm text-muted-foreground">Dependency probes and collection counts.</p>
-        </div>
+        <PageHeader title="System" description="Dependency probes and collection counts." />
         <AdminNav />
         <SystemPanel />
       </div>

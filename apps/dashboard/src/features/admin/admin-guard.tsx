@@ -33,7 +33,7 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
           description="You need a super admin role to view platform operations."
           actionLabel="Back to dashboard"
           onAction={() => {
-            window.location.assign('/');
+            window.location.assign('/dashboard');
           }}
         />
       </div>

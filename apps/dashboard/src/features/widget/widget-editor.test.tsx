@@ -9,6 +9,10 @@ vi.mock('./hooks', () => ({
   useUpdateWidgetConfig: vi.fn(),
 }));
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock('sonner', () => ({
   toast: {
     success: vi.fn(),
@@ -68,19 +72,14 @@ function setup({
   return { mutation };
 }
 
-/** Opens the collapsed "Advanced customization" panel (Appearance section). */
-function expandAdvanced() {
-  fireEvent.click(screen.getByRole('button', { name: 'Advanced customization' }));
-}
-
 afterEach(() => {
   vi.clearAllMocks();
+  document.body.querySelectorAll('a[data-test-guard]').forEach((node) => node.remove());
 });
 
 describe('WidgetEditor', () => {
   it('renders the configuration fields', () => {
     setup();
-    expandAdvanced();
 
     expect(screen.getByLabelText('Theme')).toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Theme preset' })).toBeInTheDocument();
@@ -115,7 +114,6 @@ describe('WidgetEditor', () => {
 
   it('updates the preview instantly when the primary color changes', () => {
     setup();
-    expandAdvanced();
 
     const send = screen.getByLabelText('Send');
     expect(send.getAttribute('style')).toContain('#2563eb');
@@ -159,16 +157,35 @@ describe('WidgetEditor', () => {
     expect(reset).toBeDisabled();
   });
 
-  it('hides the advanced customization panel until expanded', () => {
+  it('shows unsaved and saved indicators around a successful save', async () => {
     setup();
 
-    const advanced = screen.getByRole('button', { name: 'Advanced customization' });
-    expect(advanced).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByLabelText('Position')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
 
-    fireEvent.click(advanced);
-    expect(advanced).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByLabelText('Position')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Welcome message'), { target: { value: 'Hi there!' } });
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await vi.waitFor(() => {
+      expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+      expect(screen.getByText('Saved')).toBeInTheDocument();
+    });
+  });
+
+  it('blocks in-app navigation while dirty until the user confirms', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    setup();
+
+    fireEvent.change(screen.getByLabelText('Welcome message'), { target: { value: 'Hi there!' } });
+
+    const link = document.createElement('a');
+    link.setAttribute('href', '/websites');
+    link.dataset.testGuard = 'true';
+    document.body.appendChild(link);
+
+    expect(fireEvent.click(link)).toBe(false);
+    expect(confirmSpy).toHaveBeenCalledWith('You have unsaved widget changes. Leave anyway?');
   });
 
   it('applies a selected theme preset to the preview and saves it', async () => {

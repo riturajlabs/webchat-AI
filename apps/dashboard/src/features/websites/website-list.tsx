@@ -6,6 +6,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { AddWebsiteDialog } from './add-website-dialog';
@@ -19,8 +22,6 @@ import {
 } from './hooks';
 import { WebsiteCard } from './website-card';
 import type { CrawlJob, CrawlProgressEvent, Website } from './types';
-
-const TERMINAL_CRAWL_STATUSES = new Set(['completed', 'failed']);
 
 /* ------------------------------------------------------------------ */
 /*  CrawlJobTracker — calls hooks for a single job, passes state down  */
@@ -155,18 +156,16 @@ export function WebsiteList() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="font-sans text-2xl font-bold tracking-tight">Websites</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect a website to build its AI assistant.
-          </p>
-        </div>
-        <Button onClick={openCreate}>
-          <Plus aria-hidden="true" />
-          Add website
-        </Button>
-      </div>
+      <PageHeader
+        title="Websites"
+        description="Connect a website to build its AI assistant."
+        actions={
+          <Button onClick={openCreate}>
+            <Plus aria-hidden="true" />
+            Add website
+          </Button>
+        }
+      />
 
       {crawlError ? (
         <div
@@ -210,28 +209,20 @@ export function WebsiteList() {
       ) : null}
 
       {isError ? (
-        <div
-          role="alert"
-          className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-4"
-        >
-          <p className="text-sm text-destructive">{error?.message ?? 'Failed to load websites.'}</p>
-          <Button variant="outline" size="sm" onClick={() => void refetch()}>
-            Try again
-          </Button>
-        </div>
+        <ErrorState
+          message={error?.message ?? 'Failed to load websites.'}
+          onRetry={() => void refetch()}
+        />
       ) : null}
 
       {!isPending && !isError && websites.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed p-10 text-center">
-          <p className="font-medium">No websites yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Add your first website to start building its AI assistant.
-          </p>
-          <Button variant="outline" onClick={openCreate}>
-            <Plus aria-hidden="true" />
-            Add your first website
-          </Button>
-        </div>
+        <EmptyState
+          icon={Plus}
+          title="No websites yet"
+          description="Add your first website to start building its AI assistant."
+          actionLabel="Add your first website"
+          onAction={openCreate}
+        />
       ) : null}
 
       {!isPending && !isError && websites.length > 0 ? (
