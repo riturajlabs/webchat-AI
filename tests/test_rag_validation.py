@@ -301,7 +301,7 @@ class TestRetrievalCacheInvalidation:
         urls = _source_urls(events)
         assert len(urls) >= 1
 
-        raw = await env.cache.get("retrieval", f"{WEBSITE}:pricing")
+        raw = await env.cache.get("retrieval", f"{TENANT}:{WEBSITE}:pricing")
         assert raw is not None
         entry = json.loads(raw)
         assert entry["embedding_identity"]["provider"] == "fake"

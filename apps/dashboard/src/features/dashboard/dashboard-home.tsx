@@ -94,7 +94,7 @@ export function DashboardHome() {
   const failed = websites.filter((site) => site.status === 'failed').length;
 
   const conversationCount = conversationsData?.total;
-  const messagesSent = usageData?.usage.messages_sent;
+  const messagesSent = usageData?.usage?.messages_sent;
 
   const knowledgeEmpty = totalChunks === 0 && totalDocuments === 0 && totalPages === 0;
 
@@ -127,7 +127,7 @@ export function DashboardHome() {
       hint:
         messagesSent === undefined
           ? 'Could not load usage'
-          : `Plan: ${usageData?.plan.name ?? '—'}`,
+          : `Plan: ${usageData?.plan?.name ?? '—'}`,
       icon: Bot,
       unavailable: messagesSent === undefined,
     },

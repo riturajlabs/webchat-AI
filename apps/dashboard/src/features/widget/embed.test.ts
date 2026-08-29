@@ -12,18 +12,18 @@ import {
 } from './embed';
 
 describe('buildEmbedScript', () => {
-  it('includes the widget id and the production CDN src', () => {
+  it('includes the widget id and the configured script src', () => {
     expect(buildEmbedScript('widget_abc123')).toBe(
-      '<script src="https://cdn.webchatai.example/webchat-widget.iife.min.js" ' +
-        'data-widget-id="widget_abc123" defer></script>',
+      `<script src="${WIDGET_SCRIPT_URL}" ` + 'data-widget-id="widget_abc123" defer></script>',
     );
   });
 
-  it('escapes nothing and never references localhost', () => {
+  it('escapes nothing and never references localhost or placeholder hosts', () => {
     const script = buildEmbedScript(DOCS_WIDGET_ID);
     expect(script).toContain(`data-widget-id="${DOCS_WIDGET_ID}"`);
     expect(script.toLowerCase()).not.toContain('localhost');
     expect(script.toLowerCase()).not.toContain('127.0.0.1');
+    expect(script.toLowerCase()).not.toContain('.example');
   });
 
   it('honors a custom script src', () => {
@@ -44,6 +44,7 @@ describe('buildInitExample', () => {
     const code = buildInitExample('widget_abc123', WIDGET_API_URL);
     expect(code).toContain(`apiBaseUrl: '${WIDGET_API_URL}'`);
     expect(code).not.toContain('localhost');
+    expect(code).not.toContain('.example');
   });
 });
 
@@ -59,12 +60,13 @@ describe('buildMountExample', () => {
   });
 });
 
-describe('production URL constants', () => {
-  it('uses production-style hosts only', () => {
+describe('embedded URL constants', () => {
+  it('always resolves production-style, real hosts (never placeholders)', () => {
     for (const url of [WIDGET_SCRIPT_URL, WIDGET_API_URL, DASHBOARD_URL]) {
       expect(url).toMatch(/^https:\/\//);
       expect(url.toLowerCase()).not.toContain('localhost');
       expect(url.toLowerCase()).not.toContain('127.0.0.1');
+      expect(url.toLowerCase()).not.toContain('.example');
     }
   });
 });

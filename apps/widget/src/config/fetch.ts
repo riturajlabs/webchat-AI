@@ -36,9 +36,24 @@ const memoryConfigData = new Map<string, CacheEntry>();
 
 export const memoryConfigStore: ConfigStore = {
   get(widgetId: string) {
-    return memoryConfigData.get(widgetId) ?? null;
+    const entry = memoryConfigData.get(widgetId);
+    if (!entry) return null;
+    if (Date.now() - entry.cachedAt >= CONFIG_CACHE_TTL_MS) {
+      memoryConfigData.delete(widgetId);
+      return null;
+    }
+    return entry;
   },
   set(widgetId: string, config: WidgetPublicConfig) {
+    // Prune expired entries on write to prevent unbounded growth.
+    if (memoryConfigData.size > 50) {
+      const now = Date.now();
+      for (const [key, entry] of memoryConfigData) {
+        if (now - entry.cachedAt >= CONFIG_CACHE_TTL_MS) {
+          memoryConfigData.delete(key);
+        }
+      }
+    }
     memoryConfigData.set(widgetId, { config, cachedAt: Date.now() });
   },
 };

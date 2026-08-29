@@ -7,8 +7,8 @@ describe('applyTheme', () => {
     const host = document.createElement('webchat-widget');
     const config = defaultConfig('widget_1');
     applyTheme(host, config);
-    expect(host.style.getPropertyValue('--wc-primary')).toBe('#2563eb');
-    expect(host.style.getPropertyValue('--wc-accent')).toBe('#f59e0b');
+    expect(host.style.getPropertyValue('--wc-primary')).toBe('#10A37F');
+    expect(host.style.getPropertyValue('--wc-accent')).toBe('#25D366');
     expect(host.style.getPropertyValue('--wc-font-size-px')).toBe('16px');
     expect(host.style.getPropertyValue('--wc-position')).toBe('bottom-right');
   });

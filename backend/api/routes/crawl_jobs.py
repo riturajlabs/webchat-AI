@@ -25,19 +25,21 @@ from backend.api.deps import (
     current_user,
     get_crawl_service,
     require_role,
+    require_sse_role,
+    sse_current_user,
     website_limiter,
 )
 from backend.core import crawl_events
+from backend.core.config import get_settings
 from backend.schemas.crawl import CrawlJobOut
 from backend.services.auth import Principal
 from backend.services.crawl import CrawlService
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 router = APIRouter(
     prefix="/crawl-jobs",
     tags=["crawl-jobs"],
-    dependencies=[Depends(require_role("owner", "admin"))],
 )
 
 
@@ -45,6 +47,7 @@ router = APIRouter(
 async def get_crawl_job(
     job_id: str,
     principal: Annotated[Principal, Depends(current_user)],
+    _role: Annotated[None, Depends(require_role("owner", "admin"))],
     service: Annotated[CrawlService, Depends(get_crawl_service)],
     _: Annotated[None, Depends(website_limiter)],
 ) -> CrawlJobOut:
@@ -59,7 +62,8 @@ _TERMINAL_STATUSES = {"completed", "failed"}
 async def stream_crawl_progress(
     job_id: str,
     request: Request,
-    principal: Annotated[Principal, Depends(current_user)],
+    principal: Annotated[Principal, Depends(sse_current_user)],
+    _role_guard: Annotated[None, Depends(require_sse_role("owner", "admin"))],
     service: Annotated[CrawlService, Depends(get_crawl_service)],
     _: Annotated[None, Depends(website_limiter)],
 ) -> StreamingResponse:
@@ -88,7 +92,7 @@ async def stream_crawl_progress(
         pubsub = await crawl_events.subscribe(job_id)
         try:
             idle_seconds = 0.0
-            max_idle = 600.0  # 10 minutes max stream lifetime
+            max_idle = float(get_settings().sse_idle_timeout)  # configurable (Phase 9)
 
             while idle_seconds < max_idle:
                 if await request.is_disconnected():

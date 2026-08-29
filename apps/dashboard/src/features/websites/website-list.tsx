@@ -12,7 +12,9 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { AddWebsiteDialog } from './add-website-dialog';
+import { ConfirmDialog } from '@/features/admin/confirm-dialog';
 import {
+  TERMINAL_CRAWL_STATUSES,
   useCrawlJob,
   useCrawlProgress,
   useDeleteWebsite,
@@ -24,6 +26,36 @@ import { WebsiteCard } from './website-card';
 import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 /* ------------------------------------------------------------------ */
+/*  SessionStorage persistence for active crawl jobs (Phase 7)          */
+/* ------------------------------------------------------------------ */
+
+const ACTIVE_JOBS_KEY = 'webchat_active_crawl_jobs';
+
+function loadActiveJobs(): Map<string, string> {
+  try {
+    const raw = sessionStorage.getItem(ACTIVE_JOBS_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return new Map(parsed as [string, string][]);
+    return new Map();
+  } catch {
+    return new Map();
+  }
+}
+
+function saveActiveJobs(jobs: Map<string, string>): void {
+  try {
+    if (jobs.size === 0) {
+      sessionStorage.removeItem(ACTIVE_JOBS_KEY);
+    } else {
+      sessionStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify([...jobs]));
+    }
+  } catch {
+    // sessionStorage may be unavailable; silently ignore.
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  CrawlJobTracker — calls hooks for a single job, passes state down  */
 /* ------------------------------------------------------------------ */
 
@@ -33,21 +65,23 @@ function CrawlJobTracker({
   children,
 }: {
   jobId: string;
-  onJobCompleted?: () => void;
+  onJobCompleted?: (websiteId: string) => void;
   children: (state: {
     crawlJob: CrawlJob;
     crawlProgress: CrawlProgressEvent | null;
     sseConnected: boolean;
   }) => React.ReactNode;
 }) {
-  const { data } = useCrawlJob(jobId);
   const { progress, connected } = useCrawlProgress(jobId);
+  // Phase 8: pass sseConnected so polling is disabled while SSE provides
+  // real-time updates. Falls back to 3s polling when SSE is disconnected.
+  const { data } = useCrawlJob(jobId, connected);
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (data && data.status === 'completed') {
+    if (data && TERMINAL_CRAWL_STATUSES.has(data.status)) {
       void queryClient.invalidateQueries({ queryKey: websitesKeys.all });
-      onJobCompleted?.();
+      onJobCompleted?.(data.website_id);
     }
   }, [data, queryClient, onJobCompleted]);
 
@@ -67,11 +101,17 @@ export function WebsiteList() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Website | null>(null);
-  const [activeJobs, setActiveJobs] = useState<Map<string, string>>(new Map());
+  const [activeJobs, setActiveJobs] = useState<Map<string, string>>(loadActiveJobs);
   const [pendingWebsiteId, setPendingWebsiteId] = useState<string | null>(null);
   const [crawlError, setCrawlError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Website | null>(null);
 
   const websites = data ?? [];
+
+  // Persist activeJobs to sessionStorage whenever they change.
+  useEffect(() => {
+    saveActiveJobs(activeJobs);
+  }, [activeJobs]);
 
   function openCreate() {
     setEditing(null);
@@ -89,13 +129,18 @@ export function WebsiteList() {
   }
 
   async function handleDelete(website: Website) {
-    if (window.confirm(`Delete "${website.name}"? This also removes its widget.`)) {
-      try {
-        await deleteWebsite.mutateAsync(website.id);
-        toast.success(`Deleted "${website.name}"`);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Failed to delete website.');
-      }
+    setDeleteTarget(website);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    try {
+      await deleteWebsite.mutateAsync(deleteTarget.id);
+      toast.success(`Deleted "${deleteTarget.name}"`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete website.');
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
@@ -137,7 +182,20 @@ export function WebsiteList() {
     if (!jobId) return card;
 
     return (
-      <CrawlJobTracker key={jobId} jobId={jobId} onJobCompleted={() => setCrawlError(null)}>
+      <CrawlJobTracker
+        key={jobId}
+        jobId={jobId}
+        onJobCompleted={(completedWebsiteId) => {
+          setCrawlError(null);
+          // Remove completed/failed jobs from active jobs so they don't persist
+          // forever in sessionStorage.
+          setActiveJobs((prev) => {
+            const next = new Map(prev);
+            next.delete(completedWebsiteId);
+            return next;
+          });
+        }}
+      >
         {({ crawlJob, crawlProgress, sseConnected }) => (
           <WebsiteCard
             website={website}
@@ -244,6 +302,19 @@ export function WebsiteList() {
           }
         }}
         website={editing}
+      />
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+        title="Delete website"
+        description={`Delete "${deleteTarget?.name ?? ''}"? This also removes its widget.`}
+        confirmLabel="Delete"
+        variant="destructive"
+        isPending={deleteWebsite.isPending}
       />
     </div>
   );

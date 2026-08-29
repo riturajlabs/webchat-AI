@@ -26,6 +26,10 @@ from backend.core.prompt_guard import (
     detect_injection,
     sanitize_context_chunk,
 )
+from backend.utils.prompt_security import (
+    sanitize_history_turn,
+    scan_user_input,
+)
 
 logger = logging.getLogger("webchat_ai")
 
@@ -92,15 +96,23 @@ def sanitize_question(question: str, *, max_length: int | None = None) -> str:
     if not cleaned:
         raise InvalidQuestionError("The question cannot be empty.")
     verdict = detect_injection(cleaned)
-    if verdict.detected:
+    enhanced = scan_user_input(cleaned)
+    if verdict.detected or enhanced.detected:
+        v_sev = _SEVERITY[verdict.severity]
+        e_sev = _SEVERITY[enhanced.severity]
+        best_severity = verdict.severity if v_sev >= e_sev else enhanced.severity
+        all_patterns = list(dict.fromkeys(verdict.patterns + enhanced.patterns))
         logger.warning(
             "prompt_guard injection_detected severity=%s patterns=%s query_hash=%s query_length=%d",
-            verdict.severity,
-            verdict.patterns,
+            best_severity,
+            all_patterns,
             content_hash(cleaned),
             len(cleaned),
         )
     return cleaned[:limit]
+
+
+_SEVERITY = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
 def render_context(
@@ -136,12 +148,17 @@ def render_context(
 
 
 def render_history(history: Sequence[tuple[str, str]]) -> str:
-    """Render prior conversation turns (role, content), oldest first."""
+    """Render prior conversation turns (role, content), oldest first.
+
+    Each turn is passed through ``sanitize_history_turn`` to wrap
+    suspicious content with safety markers, preventing stored prompt
+    injection attacks via conversation history.
+    """
     if not history:
         return ""
     lines = ["Conversation history (most recent last):"]
     for role, content in history:
-        lines.append(f"[{role}] {content}")
+        lines.append(sanitize_history_turn(role, content))
     return "\n".join(lines)
 
 
@@ -177,5 +194,6 @@ __all__ = [
     "get_system_prompt",
     "render_context",
     "render_history",
+    "sanitize_history_turn",
     "sanitize_question",
 ]

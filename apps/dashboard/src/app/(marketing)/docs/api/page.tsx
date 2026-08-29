@@ -1,51 +1,62 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { DocHeader, DocSection, SubHeading } from '@/components/marketing/docs-ui';
+import {
+  Bullets,
+  Callout,
+  DocHeader,
+  DocSection,
+  EndpointBadge,
+  type EndpointMethod,
+  InlineCode,
+} from '@/components/marketing/docs-ui';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
-  title: 'API',
+export const metadata = seoPage({
+  path: '/docs/api',
+  title: 'API reference',
   description:
-    'The WebChat AI REST API: websites, widget configuration, knowledge base, conversations, analytics, billing and API keys.',
-};
+    'The WebChat AI REST API: websites, widget configuration, knowledge base, conversations, analytics, billing, feedback and API keys.',
+});
 
 interface Endpoint {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: EndpointMethod;
   path: string;
   description: string;
 }
 
-const METHOD_STYLES: Record<Endpoint['method'], string> = {
-  GET: 'bg-blue-600/10 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400',
-  POST: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
-  PATCH: 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
-  DELETE: 'bg-red-500/10 text-red-700 dark:bg-red-500/15 dark:text-red-400',
-};
-
-const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] = [
+const GROUPS: { title: string; id: string; description?: string; endpoints: Endpoint[] }[] = [
   {
     title: 'Health',
+    id: 'health',
     endpoints: [
+      { method: 'GET', path: '/api/health/live', description: 'Liveness probe.' },
       {
         method: 'GET',
         path: '/api/health',
-        description: 'Service and dependency health snapshot.',
+        description: 'Liveness probe with dependency status.',
       },
+      { method: 'GET', path: '/api/health/ready', description: 'Readiness probe.' },
     ],
   },
   {
     title: 'Websites',
+    id: 'websites',
     description: 'Register sites, trigger crawls and manage the widget configuration.',
     endpoints: [
+      {
+        method: 'POST',
+        path: '/api/websites',
+        description: 'Register a website and start ingestion (201).',
+      },
       {
         method: 'GET',
         path: '/api/websites',
         description: 'List websites for the current tenant.',
       },
       {
-        method: 'POST',
-        path: '/api/websites',
-        description: 'Register a website and start ingestion.',
+        method: 'GET',
+        path: '/api/websites/{websiteId}',
+        description: 'Website detail and status.',
       },
       {
         method: 'PATCH',
@@ -60,12 +71,12 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
       {
         method: 'POST',
         path: '/api/websites/{websiteId}/crawl',
-        description: 'Start a new crawl for the site.',
+        description: 'Start a new crawl for the site (202).',
       },
       {
         method: 'GET',
         path: '/api/websites/{websiteId}/widget',
-        description: 'Read the widget configuration.',
+        description: 'Read the widget configuration plus authoritative embed script.',
       },
       {
         method: 'PATCH',
@@ -76,6 +87,7 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
   },
   {
     title: 'Knowledge base',
+    id: 'knowledge',
     endpoints: [
       {
         method: 'GET',
@@ -91,11 +103,12 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
   },
   {
     title: 'Crawl jobs',
+    id: 'crawl-jobs',
     endpoints: [
       {
         method: 'GET',
         path: '/api/crawl-jobs/{jobId}',
-        description: 'Poll a crawl job’s status and progress.',
+        description: "Poll a crawl job's status and progress.",
       },
       {
         method: 'GET',
@@ -106,6 +119,7 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
   },
   {
     title: 'Conversations',
+    id: 'conversations',
     endpoints: [
       {
         method: 'GET',
@@ -126,6 +140,7 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
   },
   {
     title: 'Analytics',
+    id: 'analytics',
     description: 'All analytics endpoints accept days plus optional website filters.',
     endpoints: [
       {
@@ -163,6 +178,13 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
         path: '/api/analytics/feedback?days={n}',
         description: 'Feedback sentiment breakdown.',
       },
+    ],
+  },
+  {
+    title: 'Feedback',
+    id: 'feedback',
+    endpoints: [
+      { method: 'GET', path: '/api/feedback?{filters}', description: 'List feedback entries.' },
       {
         method: 'GET',
         path: '/api/feedback/summary?days={n}',
@@ -172,6 +194,7 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
   },
   {
     title: 'Billing',
+    id: 'billing',
     endpoints: [
       { method: 'GET', path: '/api/billing/plans', description: 'Available plans.' },
       {
@@ -183,16 +206,21 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
       {
         method: 'POST',
         path: '/api/billing/checkout',
-        description: 'Create a checkout session for a plan.',
+        description: 'Create a checkout session for a plan (201).',
       },
     ],
   },
   {
     title: 'API keys',
+    id: 'api-keys',
     description: 'Authenticate server-to-server requests. Secrets are shown once at creation time.',
     endpoints: [
+      {
+        method: 'POST',
+        path: '/api/api-keys',
+        description: 'Create an API key (201). Secret returned once.',
+      },
       { method: 'GET', path: '/api/api-keys', description: 'List API keys.' },
-      { method: 'POST', path: '/api/api-keys', description: 'Create an API key.' },
       {
         method: 'DELETE',
         path: '/api/api-keys/{keyId}',
@@ -204,32 +232,152 @@ const GROUPS: { title: string; description?: string; endpoints: Endpoint[] }[] =
 
 export default function ApiPage() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <DocHeader
+        breadcrumb="Platform / API reference"
         title="API reference"
         lede="The REST surface behind the dashboard. All requests are JSON over HTTPS against the deployment's API origin and require authentication unless noted."
       />
 
-      <DocSection title="Conventions">
-        <SubHeading>Request format</SubHeading>
-        <ul className="list-disc pl-5 text-sm text-muted-foreground">
-          <li>
-            Base URL: your deployed API origin; the dashboard uses{' '}
-            <code className="font-mono text-xs">NEXT_PUBLIC_API_URL</code>.
-          </li>
-          <li>
-            Authentication: <code className="font-mono text-xs">Authorization: Bearer</code> token
-            for sessions, API keys for server-to-server access.
-          </li>
-          <li>
-            Errors return a structured payload:{' '}
-            <code className="font-mono text-xs">{`{ "error": { "code", "message" } }`}</code>.
-          </li>
-        </ul>
+      <DocSection id="conventions" title="Conventions">
+        <Bullets
+          items={[
+            <>
+              <strong className="font-medium text-foreground">Base URL.</strong> Your deployed API
+              origin; the dashboard uses <InlineCode>NEXT_PUBLIC_API_URL</InlineCode>.
+            </>,
+            <>
+              <strong className="font-medium text-foreground">Authentication.</strong>{' '}
+              <InlineCode>Authorization: Bearer</InlineCode> token for sessions, API keys for
+              server-to-server access.
+            </>,
+            <>
+              <strong className="font-medium text-foreground">Errors.</strong> Structured payload:{' '}
+              <InlineCode>{`{ "error": { "code", "message" } }`}</InlineCode>.
+            </>,
+          ]}
+        />
+      </DocSection>
+
+      <DocSection
+        id="errors"
+        title="Error codes"
+        description="The HTTP status and machine-readable code returned in the error payload."
+      >
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Error codes by HTTP status</caption>
+            <thead>
+              <tr className="border-b text-muted-foreground">
+                <th scope="col" className="py-1.5 pr-3 font-medium">
+                  Status
+                </th>
+                <th scope="col" className="py-1.5 font-medium">
+                  Codes
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                [
+                  [
+                    '400',
+                    [
+                      'INVALID_URL',
+                      'EMBEDDING_UNAVAILABLE',
+                      'EMBEDDING_INCOMPATIBLE',
+                      'INVALID_QUESTION',
+                      'GENERATION_UNAVAILABLE',
+                      'SPAM_REJECTED',
+                      'INVALID_PAYMENT_SIGNATURE',
+                      'PLAN_NOT_PURCHASABLE',
+                    ],
+                  ],
+                  [
+                    '401',
+                    [
+                      'INVALID_CREDENTIALS',
+                      'INVALID_TOKEN',
+                      'TOKEN_EXPIRED',
+                      'TOKEN_REUSE_DETECTED',
+                    ],
+                  ],
+                  [
+                    '403',
+                    [
+                      'ACCOUNT_SUSPENDED',
+                      'EMAIL_NOT_VERIFIED',
+                      'FORBIDDEN',
+                      'CSRF_FAILED',
+                      'WIDGET_DISABLED',
+                      'WIDGET_ORIGIN_NOT_ALLOWED',
+                      'WIDGET_DOMAIN_NOT_CONFIGURED',
+                    ],
+                  ],
+                  [
+                    '404',
+                    [
+                      'WEBSITE_NOT_FOUND',
+                      'CRAWL_JOB_NOT_FOUND',
+                      'DOCUMENT_NOT_FOUND',
+                      'SESSION_NOT_FOUND',
+                      'WIDGET_NOT_FOUND',
+                      'API_KEY_NOT_FOUND',
+                      'MESSAGE_NOT_FOUND',
+                      'TENANT_NOT_FOUND',
+                      'PLAN_NOT_FOUND',
+                      'USER_NOT_FOUND',
+                    ],
+                  ],
+                  [
+                    '409',
+                    [
+                      'EMAIL_ALREADY_EXISTS',
+                      'WEBSITE_ALREADY_EXISTS',
+                      'CRAWL_IN_PROGRESS',
+                      'WEBSITE_NOT_READY',
+                    ],
+                  ],
+                  ['422', ['INSUFFICIENT_CONTENT']],
+                  [
+                    '429',
+                    [
+                      'ACCOUNT_LOCKED',
+                      'AI_QUOTA_EXCEEDED',
+                      'RATE_LIMIT_EXCEEDED',
+                      'MESSAGE_LIMIT_REACHED',
+                      'LIMIT_REACHED',
+                    ],
+                  ],
+                  ['500', ['PROVIDER_CONFIGURATION']],
+                  ['501', ['NOT_IMPLEMENTED']],
+                  ['502', ['EMBEDDING_FAILED', 'GENERATION_FAILED', 'PAYMENT_PROVIDER_ERROR']],
+                  ['503', ['SERVICE_UNAVAILABLE']],
+                ] as Array<[string, string[]]>
+              ).map(([status, codes]) => (
+                <tr key={status} className="border-b last:border-0 align-top">
+                  <td className="py-2 pr-3 font-mono text-xs">{status}</td>
+                  <td className="py-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      {codes.map((code) => (
+                        <InlineCode key={code}>{code}</InlineCode>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </DocSection>
 
       {GROUPS.map((group) => (
-        <DocSection key={group.title} title={group.title} description={group.description}>
+        <DocSection
+          key={group.title}
+          id={group.id}
+          title={group.title}
+          description={group.description}
+        >
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <caption className="sr-only">{`${group.title} endpoints`}</caption>
@@ -250,11 +398,7 @@ export default function ApiPage() {
                 {group.endpoints.map(({ method, path, description }) => (
                   <tr key={`${method} ${path}`} className="border-b last:border-0 align-top">
                     <td className="py-2 pr-3">
-                      <span
-                        className={`inline-block rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold ${METHOD_STYLES[method]}`}
-                      >
-                        {method}
-                      </span>
+                      <EndpointBadge method={method} />
                     </td>
                     <td className="py-2 pr-3 font-mono text-xs">{path}</td>
                     <td className="py-2 text-muted-foreground">{description}</td>
@@ -266,20 +410,33 @@ export default function ApiPage() {
         </DocSection>
       ))}
 
-      <DocSection title="Widget runtime">
+      <DocSection
+        id="widget-runtime"
+        title="Widget runtime"
+        description="Visitor-facing chat traffic."
+      >
         <p className="text-sm text-muted-foreground">
           Visitor-facing chat traffic runs on{' '}
-          <code className="font-mono text-xs">/api/widget/v1/*</code> under the widget API origin —
-          see{' '}
           <Link
             href="/docs/embed"
             className="font-medium text-blue-600 hover:underline dark:text-blue-400"
           >
             Embed
           </Link>{' '}
-          for how the SDK resolves it.
+          for how the SDK resolves the public widget API origin.
         </p>
       </DocSection>
+
+      <Callout variant="tip" title="Build on the API">
+        Start in the{' '}
+        <Link
+          href="/docs/quickstart"
+          className="font-medium text-blue-600 hover:underline dark:text-blue-400"
+        >
+          Quickstart
+        </Link>{' '}
+        to register a site, then use these endpoints to drive crawls, configuration and analytics.
+      </Callout>
     </div>
   );
 }

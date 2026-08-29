@@ -60,12 +60,16 @@ class MongoWidgetRepository:
 
         The filter is always `(tenant_id, website_id)` - never the request body
         - so a caller can only ever touch its own website's widget. `updated_at`
-        is bumped on every successful write.
+        is bumped on every successful write.  ``None`` values are stripped
+        before writing so that empty-string inputs (which Pydantic validators
+        normalise to ``None``) never corrupt the MongoDB document with nulls.
         """
         now: datetime = utcnow()
+        clean = {k: v for k, v in updates.items() if v is not None}
+        clean["updated_at"] = now
         doc = await self._collection.find_one_and_update(
             {"tenant_id": tenant_id, "website_id": website_id},
-            {"$set": {**updates, "updated_at": now}},
+            {"$set": clean},
             return_document=ReturnDocument.AFTER,
         )
         return Widget.from_doc(doc) if doc else None

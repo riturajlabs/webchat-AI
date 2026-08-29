@@ -25,6 +25,18 @@ __all__ = [
     "MetricsLogCollector",
     "attach_metrics_log_collector",
     "record_http_request",
+    "record_chat_request",
+    "record_chat_failure",
+    "record_chat_latency",
+    "record_llm_request",
+    "record_llm_failure",
+    "record_llm_latency",
+    "record_llm_tokens",
+    "record_rag_latency",
+    "record_rag_empty",
+    "record_crawl_started",
+    "record_crawl_completed",
+    "record_crawl_failed",
     "render_prometheus",
     "reset_registry",
 ]
@@ -273,6 +285,72 @@ SSE_ERRORS_TOTAL = Counter(
     ("code",),
 )
 
+CHAT_REQUESTS_TOTAL = Counter(
+    "chat_requests_total",
+    "Total chat requests received.",
+)
+CHAT_FAILURES_TOTAL = Counter(
+    "chat_failures_total",
+    "Chat requests that resulted in an error or fallback.",
+    ("reason",),
+)
+CHAT_LATENCY_SECONDS = Histogram(
+    "chat_latency_seconds",
+    "End-to-end chat request latency in seconds.",
+    buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0),
+)
+
+LLM_REQUESTS_TOTAL = Counter(
+    "llm_requests_total",
+    "Total LLM generation requests.",
+    ("provider",),
+)
+LLM_FAILURES_TOTAL = Counter(
+    "llm_failures_total",
+    "LLM generation failures by error code.",
+    ("code",),
+)
+LLM_LATENCY_SECONDS = Histogram(
+    "llm_latency_seconds",
+    "LLM generation latency in seconds.",
+    ("provider",),
+    buckets=(0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0),
+)
+LLM_TOKENS_USED = Counter(
+    "llm_tokens_used",
+    "LLM tokens consumed by kind.",
+    ("kind",),
+)
+LLM_QUOTA_EXCEEDED_TOTAL = Counter(
+    "llm_quota_exceeded_total",
+    "LLM generation requests rejected by the per-tenant AI quota, by window.",
+    ("window",),
+)
+
+RAG_LATENCY_SECONDS = Histogram(
+    "rag_latency_seconds",
+    "RAG retrieval latency in seconds.",
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0),
+)
+RAG_EMPTY_RESULTS_TOTAL = Counter(
+    "rag_empty_results_total",
+    "RAG retrievals that returned zero chunks.",
+)
+
+CRAWL_STARTED_TOTAL = Counter(
+    "crawl_started_total",
+    "Crawl jobs started.",
+)
+CRAWL_COMPLETED_TOTAL = Counter(
+    "crawl_completed_total",
+    "Crawl jobs completed successfully.",
+)
+CRAWL_FAILED_TOTAL = Counter(
+    "crawl_failed_total",
+    "Crawl jobs that failed.",
+    ("reason",),
+)
+
 
 def record_http_request(*, method: str, path: str, status: str, duration_seconds: float) -> None:
     """Observe one finished HTTP request (called by MetricsMiddleware)."""
@@ -319,6 +397,71 @@ def observe_sse_error(code: str) -> None:
     SSE_ERRORS_TOTAL.inc(code=code)
     if code.startswith(_GENERATION_FAILURE_PREFIXES):
         AI_PROVIDER_FAILURES_TOTAL.inc(code=code)
+
+
+def record_chat_request() -> None:
+    """Record that a chat request was received."""
+    CHAT_REQUESTS_TOTAL.inc()
+
+
+def record_chat_failure(reason: str) -> None:
+    """Record a chat request failure."""
+    CHAT_FAILURES_TOTAL.inc(reason=reason)
+
+
+def record_chat_latency(duration_seconds: float) -> None:
+    """Record end-to-end chat latency."""
+    CHAT_LATENCY_SECONDS.observe(duration_seconds)
+
+
+def record_llm_request(provider: str) -> None:
+    """Record an LLM generation request."""
+    LLM_REQUESTS_TOTAL.inc(provider=provider)
+
+
+def record_llm_failure(code: str) -> None:
+    """Record an LLM generation failure."""
+    LLM_FAILURES_TOTAL.inc(code=code)
+
+
+def record_llm_latency(provider: str, duration_seconds: float) -> None:
+    """Record LLM generation latency."""
+    LLM_LATENCY_SECONDS.observe(duration_seconds, provider=provider)
+
+
+def record_llm_tokens(kind: str, count: float) -> None:
+    """Record LLM token usage."""
+    LLM_TOKENS_USED.inc(count, kind=kind)
+
+
+def record_llm_quota_exceeded(window: str) -> None:
+    """Record a per-tenant AI quota rejection (window: daily/monthly/request)."""
+    LLM_QUOTA_EXCEEDED_TOTAL.inc(window=window)
+
+
+def record_rag_latency(duration_seconds: float) -> None:
+    """Record RAG retrieval latency."""
+    RAG_LATENCY_SECONDS.observe(duration_seconds)
+
+
+def record_rag_empty() -> None:
+    """Record an empty RAG retrieval result."""
+    RAG_EMPTY_RESULTS_TOTAL.inc()
+
+
+def record_crawl_started() -> None:
+    """Record a crawl job start."""
+    CRAWL_STARTED_TOTAL.inc()
+
+
+def record_crawl_completed() -> None:
+    """Record a crawl job completion."""
+    CRAWL_COMPLETED_TOTAL.inc()
+
+
+def record_crawl_failed(reason: str) -> None:
+    """Record a crawl job failure."""
+    CRAWL_FAILED_TOTAL.inc(reason=reason)
 
 
 def render_prometheus() -> str:

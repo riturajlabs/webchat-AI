@@ -6,6 +6,7 @@ query is intentionally not tenant-scoped: tenants have no parent tenant, and
 the admin router guards these methods behind `role=admin`.
 """
 
+import re
 from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -90,7 +91,7 @@ class MongoTenantRepository:
     def _query(*, search: str | None, plan: str | None, status: str | None) -> dict[str, Any]:
         query: dict[str, Any] = {}
         if search:
-            query["company_name"] = {"$regex": search, "$options": "i"}
+            query["company_name"] = {"$regex": re.escape(search), "$options": "i"}
         if plan:
             query["plan"] = plan
         if status:

@@ -22,18 +22,21 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.deps import (
     chat_limiter,
     current_principal,
     enforce_api_key_rate_limit,
+    get_llm_quota_service,
     get_rag_service,
     get_usage_service,
     require_principal_role,
 )
 from backend.api.sse import ensure_terminal_done, stream_answer_with_usage
 from backend.core.config import get_settings
+from backend.core.errors import AIQuotaExceededError
+from backend.core.quota import LLMQuotaService
 from backend.schemas.chat import ChatRequest
 from backend.services.api_keys import ApiKeyPrincipal
 from backend.services.auth import Principal
@@ -56,6 +59,7 @@ async def stream_chat(
     principal: Annotated[Principal | ApiKeyPrincipal, Depends(current_principal)],
     service: Annotated[RagService, Depends(get_rag_service)],
     usage: Annotated[UsageService, Depends(get_usage_service)],
+    quota: Annotated[LLMQuotaService, Depends(get_llm_quota_service)],
     _: Annotated[None, Depends(chat_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
 ) -> StreamingResponse:
@@ -63,7 +67,19 @@ async def stream_chat(
 
     The `messages_sent` plan limit is enforced before the pipeline runs; when
     exhausted the stream opens with an `error` frame (code `LIMIT_REACHED`).
+    The per-tenant AI quota (Phase 14.9.4) is checked first and, when exhausted,
+    the request is rejected with HTTP 429 before any LLM token is generated.
     """
+
+    # Per-tenant AI spending protection (Phase 14.9.4): reject before any LLM
+    # token is generated so an exhausted quota costs nothing.
+    try:
+        await quota.check(principal.tenant_id)
+    except AIQuotaExceededError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.message, "code": exc.code},
+        )
 
     async def event_stream() -> AsyncIterator[str]:
         buffer_ms = get_settings().sse_buffer_ms

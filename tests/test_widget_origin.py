@@ -59,6 +59,7 @@ def _prod_settings() -> Settings:
         environment="production",
         jwt_secret="x" * 40,
         gemini_api_key="test-key",
+        enable_docs=False,
         embedding_provider_order=["gemini"],
         embedding_dimensions=768,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
@@ -68,6 +69,9 @@ def _prod_settings() -> Settings:
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
     )
 
 

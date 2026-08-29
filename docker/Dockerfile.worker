@@ -34,10 +34,29 @@ RUN set -e; for attempt in 1 2 3; do \
     done; \
     exit 1
 
+# Drop the uv wheel/download cache so it does not leak into the runtime layer.
+RUN uv cache clean
+
 # Phase 4: headless Chromium for the Playwright crawler (docs/06, ADR-002).
 # `--with-deps` pulls the browser's runtime libraries onto bookworm-slim.
-RUN /app/.venv/bin/python -m playwright install --with-deps chromium
+# The apt package index is removed afterward so it does not bloat the image.
+RUN /app/.venv/bin/python -m playwright install --with-deps chromium && \
+    rm -rf /var/lib/apt/lists/* /root/.cache/ms-playwright-download
+
+# Non-root user for production (SEC-14.2).
+# Playwright/Chromium requires specific capabilities:
+#   - /ms-playwright and /app must be readable by appuser
+#   - Chromium sandbox is controlled via CRAWL_NO_SANDBOX env var
+#   - When running as non-root with sandbox enabled, Chromium uses a
+#     user namespace sandbox (no SUID needed). When sandbox is disabled
+#     (--no-sandbox), no special permissions are required.
+RUN addgroup --system --gid 1001 appgroup && \
+    adduser  --system --uid 1001 --ingroup appgroup --no-create-home appuser && \
+    chown -R appuser:appgroup /app && \
+    chown -R appuser:appgroup /ms-playwright
 
 ENV PATH="/app/.venv/bin:$PATH"
+
+USER appuser
 
 CMD ["python", "-m", "backend.workers"]

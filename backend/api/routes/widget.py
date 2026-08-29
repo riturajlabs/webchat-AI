@@ -19,10 +19,11 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.deps import (
     get_feedback_service,
+    get_llm_quota_service,
     get_rag_service,
     get_usage_service,
     get_widget_service,
@@ -40,8 +41,9 @@ from backend.api.deps import (
 )
 from backend.api.sse import ensure_terminal_done, sse, stream_answer_with_usage
 from backend.core.config import get_settings
-from backend.core.errors import AppError, SpamRejectedError
+from backend.core.errors import AIQuotaExceededError, AppError, SpamRejectedError
 from backend.core.logging import get_request_id
+from backend.core.quota import LLMQuotaService
 from backend.schemas.feedback import WidgetFeedbackRequest
 from backend.schemas.widget import (
     CreateWidgetSessionRequest,
@@ -110,6 +112,7 @@ async def widget_chat(
     service: Annotated[WidgetService, Depends(get_widget_service)],
     rag: Annotated[RagService, Depends(get_rag_service)],
     usage: Annotated[UsageService, Depends(get_usage_service)],
+    quota: Annotated[LLMQuotaService, Depends(get_llm_quota_service)],
     _: Annotated[None, Depends(widget_chat_limiter)],
     __: Annotated[None, Depends(widget_visitor_limiter)],
     ___: Annotated[None, Depends(widget_claims_origin_guard)],
@@ -124,9 +127,21 @@ async def widget_chat(
     as SSE `error` events so the stream stays uniform; only auth/rate-limit
     rejections happen before the stream begins. The tenant's `messages_sent`
     plan limit is enforced before the pipeline runs (code `LIMIT_REACHED`).
+    The per-tenant AI quota (Phase 14.9.4) is checked first and, when exhausted,
+    the request is rejected with HTTP 429 before any LLM token is generated.
     The stream stops the moment the client disconnects (no wasted generation
     tokens, no partial answer saved).
     """
+
+    # Per-tenant AI spending protection (Phase 14.9.4): reject before any LLM
+    # token is generated so an exhausted quota costs nothing.
+    try:
+        await quota.check(claims["tenant_id"])
+    except AIQuotaExceededError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.message, "code": exc.code},
+        )
 
     async def event_stream() -> AsyncIterator[str]:
         # Re-check the token claims against live state (never trust claims).

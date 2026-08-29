@@ -11,12 +11,15 @@ settings (env) and is never logged or exposed (00-AI-Development-Rules §12,
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
 from backend.core.errors import GenerationError, GenerationUnavailableError
+
+logger = logging.getLogger("webchat_ai")
 
 # Gemini roles mapped onto prompt roles (user/model). A "model" turn in the
 # prompt becomes a "model" content block (conversation memory).
@@ -109,7 +112,59 @@ class GoogleGeminiClient:
         system: str,
         messages: list[tuple[str, str]],
     ) -> AsyncIterator[str]:
-        """Stream answer deltas. Raises `GenerationError` on SDK failure."""
+        """Stream answer deltas. Raises `GenerationError` on SDK failure.
+
+        Retries transient failures (timeout, rate limit, provider errors)
+        up to ``llm_max_retries`` times with exponential backoff before
+        giving up.  First-token timeouts are treated as unavailable and
+        immediately propagated (no retry) so the Phase 9 router can fall
+        through to another provider.
+        """
+        settings = get_settings()
+        max_retries = settings.llm_max_retries
+        base_delay = settings.llm_retry_base_delay
+        last_exc: Exception | None = None
+
+        for attempt in range(max_retries + 1):
+            emitted_any = False
+            try:
+                async for delta in self._stream_generate_once(
+                    system=system, messages=messages
+                ):
+                    emitted_any = True
+                    yield delta
+                return  # success — exit retry loop
+            except GenerationUnavailableError:
+                # First-token timeout → do NOT retry; let the router fall through.
+                raise
+            except GenerationError as exc:
+                last_exc = exc
+                # Once any delta has been streamed to the caller a retry would
+                # append a second, complete answer to the already-delivered
+                # partial prefix, corrupting the response. Fail instead so the
+                # caller emits an error and discards the partial text.
+                if emitted_any or attempt >= max_retries:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "gemini_retry attempt=%d/%d delay=%.1fs error=%s",
+                    attempt + 1,
+                    max_retries,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                continue
+        if last_exc is not None:
+            raise last_exc
+
+    async def _stream_generate_once(
+        self,
+        *,
+        system: str,
+        messages: list[tuple[str, str]],
+    ) -> AsyncIterator[str]:
+        """Single attempt at streaming generation (no retry)."""
         contents = [
             {"role": _ROLE_MAP.get(role, role), "parts": [{"text": text}]}
             for role, text in messages
@@ -125,17 +180,10 @@ class GoogleGeminiClient:
             },
         }
         try:
-            # SDK 2.17: `aio.models.generate_content_stream` is an async def
-            # that *returns* the stream, so it must be awaited before
-            # iteration.
             stream = await self._client().aio.models.generate_content_stream(**request)
             first_chunk = True
             while True:
                 try:
-                    # The FIRST token has a tighter bound: a provider that
-                    # stalls before the first delta should not burn the whole
-                    # per-chunk timeout - it is treated as unavailable so the
-                    # Phase 9 router falls through to the next provider.
                     chunk = await asyncio.wait_for(
                         stream.__anext__(),
                         timeout=(

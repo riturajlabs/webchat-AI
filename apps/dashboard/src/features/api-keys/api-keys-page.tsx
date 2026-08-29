@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { ConfirmDialog } from '@/features/admin/confirm-dialog';
 
 import { CreateApiKeyDialog } from './create-api-key-dialog';
 import { useApiKeys, useRevokeApiKey } from './hooks';
@@ -24,21 +25,21 @@ export function ApiKeysPage() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pendingKeyId, setPendingKeyId] = useState<string | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<ApiKey | null>(null);
 
   const apiKeys = data ?? [];
 
-  async function handleRevoke(key: ApiKey) {
-    if (!window.confirm(`Revoke "${key.name}"? This immediately disables the key.`)) {
-      return;
-    }
-    setPendingKeyId(key.id);
+  async function confirmRevoke() {
+    if (!revokeTarget) return;
+    setPendingKeyId(revokeTarget.id);
     try {
-      await revokeApiKey.mutateAsync(key.id);
-      toast.success(`Revoked "${key.name}"`);
+      await revokeApiKey.mutateAsync(revokeTarget.id);
+      toast.success(`Revoked "${revokeTarget.name}"`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to revoke API key.');
     } finally {
       setPendingKeyId(null);
+      setRevokeTarget(null);
     }
   }
 
@@ -110,7 +111,7 @@ export function ApiKeysPage() {
                 variant="ghost"
                 size="sm"
                 disabled={pendingKeyId === key.id}
-                onClick={() => void handleRevoke(key)}
+                onClick={() => setRevokeTarget(key)}
               >
                 <Trash2 aria-hidden="true" />
                 {pendingKeyId === key.id ? 'Revoking…' : 'Revoke'}
@@ -121,6 +122,19 @@ export function ApiKeysPage() {
       ) : null}
 
       <CreateApiKeyDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevokeTarget(null);
+        }}
+        onConfirm={() => void confirmRevoke()}
+        title="Revoke API key"
+        description={`Revoke "${revokeTarget?.name ?? ''}"? This immediately disables the key.`}
+        confirmLabel="Revoke"
+        variant="destructive"
+        isPending={revokeApiKey.isPending}
+      />
     </div>
   );
 }

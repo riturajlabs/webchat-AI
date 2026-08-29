@@ -6,7 +6,7 @@ const INTEGRATIONS = [
   { icon: Globe, name: 'Any Website', description: 'Paste the script tag into any HTML page' },
   { icon: Code2, name: 'React / Next.js', description: 'SDK with init() and mount() helpers' },
   { icon: Terminal, name: 'REST API', description: 'Build custom integrations with API keys' },
-  { icon: Layers, name: 'WordPress', description: 'Drop-in widget for WordPress sites' },
+  { icon: Layers, name: 'WordPress', description: 'Drop-in embed for WordPress sites' },
   { icon: Puzzle, name: 'Custom CMS', description: 'Embed via script tag in any platform' },
   {
     icon: Palette,
@@ -17,7 +17,7 @@ const INTEGRATIONS = [
 
 export function Integrations() {
   return (
-    <section id="integrations" className="scroll-mt-20 border-t border-border/60 bg-muted/30">
+    <section id="integrations" className="scroll-mt-20 border-t border-border/60">
       <div className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 lg:py-24">
         <SectionHeading
           eyebrow="Integrations"
@@ -28,9 +28,9 @@ export function Integrations() {
           {INTEGRATIONS.map(({ icon: Icon, name, description }) => (
             <div
               key={name}
-              className="flex items-start gap-4 rounded-xl border border-border/60 bg-card p-5 transition-all duration-200 hover:shadow-md hover:border-border"
+              className="group flex items-start gap-4 rounded-xl border border-border/60 bg-card p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-600/20 hover:shadow-md"
             >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-600/10 text-blue-700 dark:bg-blue-500/15 dark:text-blue-400">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-600/10 text-blue-700 transition-colors group-hover:bg-blue-600/15 dark:bg-blue-500/15 dark:text-blue-400">
                 <Icon className="size-5" aria-hidden="true" />
               </span>
               <div>

@@ -10,8 +10,9 @@ price. `/api/billing/checkout` starts a hosted payment and
 
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 MetricName = Literal[
     "messages_sent", "ai_responses", "tokens_used", "documents_created", "crawl_pages"
@@ -56,7 +57,7 @@ class UsageCountsOut(BaseModel):
 class UsageMetricOut(BaseModel):
     """One limit row: used vs cap plus utilization percentage."""
 
-    metric: str
+    metric: str = Field(max_length=50)
     used: int = 0
     limit: int | None = None
     percent: float | None = Field(default=None, description="0-100, None when unlimited")
@@ -70,12 +71,31 @@ class UsageOut(BaseModel):
     limits: list[UsageMetricOut]
 
 
+_MAX_CHECKOUT_URL_LENGTH = 2048
+_ALLOWED_REDIRECT_SCHEMES = {"http", "https"}
+
+
 class CheckoutRequest(BaseModel):
     """`POST /api/billing/checkout` request (Phase 14)."""
 
     plan_id: str = Field(min_length=1)
     success_url: str = "http://localhost:3000/billing?status=success"
     cancel_url: str = "http://localhost:3000/billing?status=cancelled"
+
+    @field_validator("success_url", "cancel_url")
+    @classmethod
+    def _validate_checkout_url(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("URL is required.")
+        if len(cleaned) > _MAX_CHECKOUT_URL_LENGTH:
+            raise ValueError("URL is too long.")
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in _ALLOWED_REDIRECT_SCHEMES:
+            raise ValueError("Only http:// and https:// URLs are allowed.")
+        if not parsed.netloc:
+            raise ValueError("URL must include a hostname.")
+        return cleaned
 
 
 class CheckoutOut(BaseModel):

@@ -378,13 +378,17 @@ describe('ConversationDetailPage', () => {
       error: null,
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useConversation>);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderDetailPage();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    expect(window.confirm).toHaveBeenCalledWith('Delete this conversation and its entire history?');
-    expect(await mutateAsync).toHaveBeenCalledWith('conv-1');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await vi.waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith('conv-1');
+    });
     expect(toast.success).toHaveBeenCalledWith('Conversation deleted');
     expect(replace).toHaveBeenCalledWith('/conversations');
   });
@@ -401,10 +405,13 @@ describe('ConversationDetailPage', () => {
       error: null,
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useConversation>);
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderDetailPage();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(mutateAsync).not.toHaveBeenCalled();
   });

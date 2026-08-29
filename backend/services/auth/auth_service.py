@@ -62,7 +62,7 @@ from backend.services.mail import build_email
 from backend.services.mail.base import EmailDispatcher
 from backend.workers.timing import chat_stage
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 
 @dataclass(frozen=True)

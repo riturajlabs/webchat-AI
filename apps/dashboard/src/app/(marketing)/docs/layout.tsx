@@ -1,25 +1,18 @@
-import Link from 'next/link';
-
 import { DocsMobileNav, DocsSidebar } from '@/components/marketing/docs-nav';
+import { DocsOnThisPage } from '@/features/docs/docs-client';
+import { DocsFooter } from '@/features/docs/docs-footer';
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen">
       <DocsMobileNav />
-      <div className="mx-auto flex w-full max-w-6xl gap-10 px-4 py-10 sm:px-6 lg:py-14">
+      <div className="mx-auto flex w-full max-w-7xl gap-10 px-4 py-10 sm:px-6 lg:py-14">
         <DocsSidebar />
-        <div className="min-w-0 flex-1">{children}</div>
-      </div>
-      <div className="border-t border-border/60 bg-muted/30">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 text-sm text-muted-foreground sm:px-6">
-          <p>WebChat AI Developer Documentation</p>
-          <Link
-            href="/signup"
-            className="font-medium text-blue-600 hover:underline dark:text-blue-400"
-          >
-            Get Started
-          </Link>
-        </div>
+        <main id="docs-content" className="min-w-0 max-w-3xl flex-1">
+          {children}
+          <DocsFooter />
+        </main>
+        <DocsOnThisPage />
       </div>
     </div>
   );

@@ -42,7 +42,7 @@ def get_mail_service() -> MailService:
     """Return the provider for the current environment (ADR-001)."""
     import logging
 
-    _log = logging.getLogger(__name__)
+    _log = logging.getLogger("webchat_ai")
     settings = get_settings()
     if settings.environment == "development":
         _log.info("Mail service: Mailpit (development mode)")

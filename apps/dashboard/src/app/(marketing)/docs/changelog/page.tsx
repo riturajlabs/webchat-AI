@@ -1,12 +1,12 @@
-import type { Metadata } from 'next';
-
 import { Bullets, DocHeader, DocSection } from '@/components/marketing/docs-ui';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = seoPage({
+  path: '/docs/changelog',
   title: 'Changelog',
   description:
     'Notable changes to WebChat AI documentation and developer-facing integration surfaces.',
-};
+});
 
 const ENTRIES = [
   {
@@ -22,8 +22,9 @@ const ENTRIES = [
 
 export default function ChangelogPage() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <DocHeader
+        breadcrumb="Platform / Changelog"
         title="Changelog"
         lede="Notable changes to the documentation and developer-facing surfaces. New entries are appended at the top."
       />
@@ -34,11 +35,17 @@ export default function ChangelogPage() {
         </DocSection>
       ))}
 
-      <DocSection title="Format" description="How entries in this changelog are structured.">
-        <ul className="list-disc pl-5 text-sm text-muted-foreground">
-          <li>Each release lists documentation structure and integration-affecting changes.</li>
-          <li>Product feature announcements live outside this document.</li>
-        </ul>
+      <DocSection
+        id="format"
+        title="Format"
+        description="How entries in this changelog are structured."
+      >
+        <Bullets
+          items={[
+            'Each release lists documentation structure and integration-affecting changes.',
+            'Product feature announcements live outside this document.',
+          ]}
+        />
       </DocSection>
     </div>
   );

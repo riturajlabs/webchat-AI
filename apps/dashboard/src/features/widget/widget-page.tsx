@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useWebsites } from '@/features/websites/hooks';
+import { ConfirmDialog } from '@/features/admin/confirm-dialog';
 
 import { WidgetEditor } from './components/widget-editor';
 import { useWidgetConfig } from './hooks';
@@ -29,19 +30,24 @@ export function WidgetPage() {
   const { data: websites, isPending, isError, error, refetch } = useWebsites();
   const [selectedId, setSelectedId] = useState<string>('');
   const dirtyRef = useRef(false);
+  const [pendingSwitchId, setPendingSwitchId] = useState<string | null>(null);
   const handleDirtyChange = useCallback((isDirty: boolean) => {
     dirtyRef.current = isDirty;
   }, []);
 
   function handleWebsiteChange(nextId: string) {
-    if (
-      nextId !== selected &&
-      dirtyRef.current &&
-      !window.confirm('You have unsaved widget changes. Switch website anyway?')
-    ) {
+    if (nextId !== selected && dirtyRef.current) {
+      setPendingSwitchId(nextId);
       return;
     }
     setSelectedId(nextId);
+  }
+
+  function confirmSwitch() {
+    if (pendingSwitchId) {
+      setSelectedId(pendingSwitchId);
+    }
+    setPendingSwitchId(null);
   }
 
   const selected = selectedId || websites?.[0]?.id || null;
@@ -134,6 +140,18 @@ export function WidgetPage() {
           onDirtyChange={handleDirtyChange}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingSwitchId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingSwitchId(null);
+        }}
+        onConfirm={confirmSwitch}
+        title="Unsaved changes"
+        description="You have unsaved widget changes. Switch website anyway?"
+        confirmLabel="Switch"
+        variant="destructive"
+      />
     </div>
   );
 }

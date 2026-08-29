@@ -1,21 +1,38 @@
 /**
  * Embed-code generation for the widget builder and developer docs.
  *
- * Production-style hosts (never localhost): the dashboard and API use the
- * deployed origins, and the widget SDK bundle is served from the CDN. In local
- * development the dashboard embed script comes from the backend API response
- * (`WidgetResponse.embed_script`); these helpers are used for the static
- * "advanced usage" examples and the developer documentation page.
+ * The widget script, public widget API and dashboard origins are read from
+ * `NEXT_PUBLIC_*` variables (inlined at build time) so deployed environments
+ * never leak placeholder or loopback hosts into generated snippets. When a
+ * variable is unset the value is derived from `SITE_URL` — the canonical
+ * public origin already used for sitemap/robots/SEO metadata — so the docs
+ * and advanced examples always reference a real production host.
+ *
+ * In local development the dashboard embed script comes from the backend API
+ * response (`WidgetResponse.embed_script`); these helpers are used for the
+ * static "advanced usage" examples and the developer documentation page.
  */
 
+import { SITE_URL } from '@/lib/site';
+
+function resolvePublicUrl(name: string, fallback: string): string {
+  return (process.env[name] ?? fallback).replace(/\/+$/, '');
+}
+
 /** Where the built widget SDK bundle is served from. */
-export const WIDGET_SCRIPT_URL = 'https://cdn.webchatai.example/webchat-widget.iife.min.js';
+export const WIDGET_SCRIPT_URL = resolvePublicUrl(
+  'NEXT_PUBLIC_WIDGET_SCRIPT_URL',
+  `${SITE_URL}/webchat-widget.iife.min.js`,
+);
 
 /** Public widget API origin (the SDK appends `/api/widget/v1`). */
-export const WIDGET_API_URL = 'https://api.webchatai.example/api/widget/v1';
+export const WIDGET_API_URL = resolvePublicUrl(
+  'NEXT_PUBLIC_WIDGET_API_URL',
+  `${SITE_URL}/api/widget/v1`,
+);
 
 /** Dashboard origin shown in documentation links. */
-export const DASHBOARD_URL = 'https://app.webchatai.example';
+export const DASHBOARD_URL = resolvePublicUrl('NEXT_PUBLIC_DASHBOARD_URL', SITE_URL);
 
 /** Placeholder widget id used in static documentation examples. */
 export const DOCS_WIDGET_ID = 'YOUR_WIDGET_ID';

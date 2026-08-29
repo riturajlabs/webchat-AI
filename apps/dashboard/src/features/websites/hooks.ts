@@ -25,7 +25,7 @@ export const crawlJobKeys = {
   detail: (jobId: string) => ['crawl-job', jobId] as const,
 };
 
-const TERMINAL_CRAWL_STATUSES = new Set(['completed', 'failed']);
+export const TERMINAL_CRAWL_STATUSES = new Set(['completed', 'failed']);
 
 export function useWebsites() {
   return useQuery({
@@ -78,13 +78,18 @@ export function useStartCrawl() {
   });
 }
 
-export function useCrawlJob(jobId: string | null) {
+export function useCrawlJob(jobId: string | null, sseConnected = false) {
   return useQuery({
     queryKey: crawlJobKeys.detail(jobId ?? ''),
     queryFn: () => api.get<CrawlJob>(`/api/crawl-jobs/${jobId}`),
     enabled: jobId !== null,
-    refetchInterval: (query) =>
-      TERMINAL_CRAWL_STATUSES.has(query.state.data?.status ?? '') ? false : 3000,
+    refetchInterval: (query) => {
+      if (TERMINAL_CRAWL_STATUSES.has(query.state.data?.status ?? '')) return false;
+      // Disable polling when SSE is connected (Phase 8): the SSE stream
+      // provides real-time updates so periodic polling is redundant.
+      if (sseConnected) return false;
+      return 3000;
+    },
   });
 }
 
@@ -195,7 +200,15 @@ export function useCrawlProgress(jobId: string | null) {
         retryTimerRef.current = setTimeout(() => {
           retryTimerRef.current = null;
           if (!mountedRef.current) return;
-          connect(url);
+          // Refresh the session before reconnecting so the SSE cookie is
+          // current and doesn't expire mid-stream.
+          void api
+            .post('/api/auth/refresh')
+            .catch(() => {})
+            .then(() => {
+              if (!mountedRef.current) return;
+              connect(url);
+            });
         }, delay);
       };
     },

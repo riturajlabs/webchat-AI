@@ -12,8 +12,9 @@
  * (`header_color`, `background_color`, `text_color`) always win.
  */
 
-export const DEFAULT_PRIMARY_COLOR = '#2563eb';
-export const DEFAULT_ACCENT_COLOR = '#f59e0b';
+export const DEFAULT_PRIMARY_COLOR = '#10A37F';
+
+export const DEFAULT_ACCENT_COLOR = '#25D366';
 
 export interface ThemeTokens {
   primary: string;
@@ -73,6 +74,125 @@ function preset(
 }
 
 export const THEME_PRESETS: readonly ThemePreset[] = [
+  // --- NEW ADDITIONS ---
+  preset(
+    'whatsapp-classic',
+    'WhatsApp Classic',
+    'Familiar messaging aesthetic with teal headers and green bubbles',
+    {
+      primary: '#199347',
+      accent: '#128C7E',
+      header: '#075E54',
+      headerText: '#ffffff',
+      surface: '#efeae2',
+      surfaceElevated: '#ffffff',
+      text: '#111b21',
+      muted: '#667781',
+      border: '#d1d7db',
+      assistantBubble: '#ffffff',
+      userBubble: '#d9fdd3',
+      userText: '#111b21',
+      inputBg: '#ffffff',
+      scrollbarThumb: 'rgba(11, 20, 26, 0.2)',
+      scrollbarTrack: '#efeae2',
+    },
+    {
+      primary: '#00a884',
+      accent: '#00a884',
+      header: '#1f2c34',
+      headerText: '#e9edef',
+      surface: '#0b141a',
+      surfaceElevated: '#111b21',
+      text: '#e9edef',
+      muted: '#8696a0',
+      border: '#222e35',
+      assistantBubble: '#202c33',
+      userBubble: '#005c4b',
+      userText: '#e9edef',
+      inputBg: '#202c33',
+      scrollbarThumb: 'rgba(233, 237, 239, 0.2)',
+      scrollbarTrack: '#0b141a',
+    },
+  ),
+  preset(
+    'ios-native',
+    'iOS Native',
+    'Clean, native iOS messaging feel with crisp blue bubbles',
+    {
+      primary: '#007AFF',
+      accent: '#0051FF',
+      header: '#f9f9f9',
+      headerText: '#000000',
+      surface: '#ffffff',
+      surfaceElevated: '#f9f9f9',
+      text: '#000000',
+      muted: '#8e8e93',
+      border: '#e5e5ea',
+      assistantBubble: '#e5e5ea',
+      userBubble: '#006de5',
+      userText: '#ffffff',
+      inputBg: '#ffffff',
+      scrollbarThumb: 'rgba(0, 0, 0, 0.2)',
+      scrollbarTrack: '#ffffff',
+    },
+    {
+      primary: '#0A84FF',
+      accent: '#0A84FF',
+      header: '#1c1c1e',
+      headerText: '#ffffff',
+      surface: '#000000',
+      surfaceElevated: '#1c1c1e',
+      text: '#ffffff',
+      muted: '#98989d',
+      border: '#38383a',
+      assistantBubble: '#262628',
+      userBubble: '#0870d8',
+      userText: '#ffffff',
+      inputBg: '#1c1c1e',
+      scrollbarThumb: 'rgba(255, 255, 255, 0.2)',
+      scrollbarTrack: '#000000',
+    },
+  ),
+  preset(
+    'enterprise-slate',
+    'Enterprise Slate',
+    'Professional, high-contrast theme optimized for long reading sessions',
+    {
+      primary: '#5865F2',
+      accent: '#4752C4',
+      header: '#2B2D31',
+      headerText: '#ffffff',
+      surface: '#F2F3F5',
+      surfaceElevated: '#ffffff',
+      text: '#313338',
+      muted: '#5C5E66',
+      border: '#E3E5E8',
+      assistantBubble: '#ffffff',
+      userBubble: '#5865F2',
+      userText: '#ffffff',
+      inputBg: '#ffffff',
+      scrollbarThumb: 'rgba(49, 51, 56, 0.2)',
+      scrollbarTrack: '#F2F3F5',
+    },
+    {
+      primary: '#6874f3',
+      accent: '#4752C4',
+      header: '#1E1F22',
+      headerText: '#F2F3F5',
+      surface: '#313338',
+      surfaceElevated: '#2B2D31',
+      text: '#DBDEE1',
+      muted: '#949BA4',
+      border: '#1E1F22',
+      assistantBubble: '#2B2D31',
+      userBubble: '#5865F2',
+      userText: '#ffffff',
+      inputBg: '#383A40',
+      scrollbarThumb: 'rgba(30, 31, 34, 0.6)',
+      scrollbarTrack: '#2B2D31',
+    },
+  ),
+  // --- ORIGINAL THEMES ---
   preset(
     'ocean-blue',
     'Ocean Blue',

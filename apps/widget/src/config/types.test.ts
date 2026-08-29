@@ -70,6 +70,15 @@ describe('normalizeConfig', () => {
     expect(config.enabled).toBe(true);
   });
 
+  it('uses the same accent color default as the backend widget model', () => {
+    // Phase 10: SDK and backend must share the same default accent color.
+    expect(DEFAULT_CONFIG.accent_color).toBe('#25D366');
+  });
+
+  it('uses the same primary color default as the backend widget model', () => {
+    expect(DEFAULT_CONFIG.primary_color).toBe('#10A37F');
+  });
+
   it('keeps explicit overrides and a provided widget id', () => {
     const config = normalizeConfig({
       widget_id: 'w1',

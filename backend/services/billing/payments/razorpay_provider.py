@@ -42,7 +42,7 @@ _RAZORPAY_API = "https://api.razorpay.com/v1"
 _RAZORPAY_PAY_PAGE = "https://pay.razorpay.com/order"
 _TIMEOUT = httpx.Timeout(30.0)
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 _WEBHOOK_URL_MARKERS = ("https://", "http://", "dashboard.razorpay.com")
 

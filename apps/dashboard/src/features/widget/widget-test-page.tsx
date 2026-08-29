@@ -10,7 +10,7 @@ import { API_BASE_URL } from '@/lib/api';
 import { useWebsites } from '@/features/websites/hooks';
 
 import { useWidgetConfig, useWidgetPublicStatus } from './hooks';
-import { buildWidgetTestHtml, parseScriptSrc } from './widget-test';
+import { buildWidgetTestHtml, parseApiBaseUrl, parseScriptSrc } from './widget-test';
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
@@ -91,7 +91,13 @@ export function WidgetTestPage() {
   }
 
   const scriptSrc = widgetResponse ? parseScriptSrc(widgetResponse.embed_script) : null;
-  const previewHtml = scriptSrc && widgetId ? buildWidgetTestHtml({ scriptSrc, widgetId }) : null;
+  const apiBaseUrl = widgetResponse
+    ? (parseApiBaseUrl(widgetResponse.embed_script) ?? API_BASE_URL)
+    : null;
+  const previewHtml =
+    scriptSrc && widgetId
+      ? buildWidgetTestHtml({ scriptSrc, widgetId, apiBaseUrl: apiBaseUrl ?? undefined })
+      : null;
   const browserOrigin = typeof window !== 'undefined' ? window.location.origin : '';
 
   return (

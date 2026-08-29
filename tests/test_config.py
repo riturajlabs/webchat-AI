@@ -23,14 +23,43 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
         environment="production",
         jwt_secret="a" * 32,
         gemini_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
     )
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "dev-only-jwt-secret-change-me-please",
+        "CHANGE_ME-change_me-change_me",
+        "a" * 20 + "-your-secret-" + "b" * 4,
+    ],
+)
+def test_production_rejects_placeholder_jwt_secret(secret: str) -> None:
+    with pytest.raises(ValueError, match="JWT_SECRET"):
+        Settings(**_prod(jwt_secret=secret))
+
+
+def test_local_production_test_rejects_placeholder_jwt_secret() -> None:
+    # Even under the local-production-test flag a placeholder signing key is
+    # unsafe, and the flag must never mask it (Phase 14.9.5).
+    with pytest.raises(ValueError, match="JWT_SECRET"):
+        Settings(**_local_prod(jwt_secret="dev-only-jwt-secret-change-me-please"))
+
+
+def test_production_accepts_real_hex_jwt_secret() -> None:
+    settings = Settings(**_prod(jwt_secret="5f" * 32))
+    assert len(settings.jwt_secret.encode("utf-8")) == 64
 
 
 def test_development_allows_example_jwt_secret() -> None:
@@ -108,12 +137,16 @@ def test_production_accepts_groq_as_generation_provider() -> None:
         environment="production",
         jwt_secret="a" * 32,
         groq_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
     )
     assert settings.groq_api_key == "test-key"
 
@@ -145,12 +178,16 @@ def test_production_accepts_cdn_widget_script_url() -> None:
         environment="production",
         jwt_secret="a" * 32,
         groq_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://assets.example.com/widget.js",
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
     )
     assert "localhost" not in settings.widget_script_url
 
@@ -185,6 +222,7 @@ def test_production_accepts_public_widget_api_base_url() -> None:
         environment="production",
         jwt_secret="a" * 32,
         groq_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://assets.example.com/widget.js",
         widget_api_base_url="https://api.example.com",
         payment_provider="stripe",
@@ -192,6 +230,9 @@ def test_production_accepts_public_widget_api_base_url() -> None:
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
     )
     assert settings.widget_api_base_url == "https://api.example.com"
 
@@ -232,6 +273,21 @@ def test_latency_settings_are_fail_fast_by_default() -> None:
     assert settings.chat_retrieval_cache_size == 512
     assert settings.chat_context_max_chars == 20000
     assert settings.chat_context_min_score == 0.25
+
+
+# --- Phase 9: configurable SSE idle timeout ---
+
+
+def test_sse_idle_timeout_default() -> None:
+    """Default SSE idle timeout is 1800 seconds (30 minutes)."""
+    settings = Settings(_env_file=None)
+    assert settings.sse_idle_timeout == 1800
+
+
+def test_sse_idle_timeout_configurable() -> None:
+    """SSE idle timeout can be overridden via environment variable."""
+    settings = Settings(_env_file=None, sse_idle_timeout=600)
+    assert settings.sse_idle_timeout == 600
 
 
 # --- embedding fallback configuration (ADR-009, cloud providers) ---
@@ -294,12 +350,16 @@ def test_production_allows_keyless_embedding_provider() -> None:
         environment="production",
         jwt_secret="a" * 32,
         groq_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
         embedding_provider_order=["jina"],
         jina_api_key=None,
     )
@@ -314,12 +374,16 @@ def test_production_allows_partial_missing_fallback_key() -> None:
         environment="production",
         jwt_secret="a" * 32,
         gemini_api_key="test-key",
+        enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
         stripe_secret_key="sk_test",
         stripe_webhook_secret="whsec_test",
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
+        mongo_username="test-user",
+        mongo_password="test-pass",
+        redis_password="test-pass",
         embedding_provider_order=["gemini", "jina"],
         jina_api_key=None,
     )
@@ -333,12 +397,16 @@ _PRODUCTION_BASE = dict(
     environment="production",
     jwt_secret="a" * 32,
     gemini_api_key="test-key",
+    enable_docs=False,
     widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
     payment_provider="stripe",
     stripe_secret_key="sk_test",
     stripe_webhook_secret="whsec_test",
     cors_origins=["https://app.example.com"],
     allowed_hosts=["app.example.com"],
+    mongo_username="test-user",
+    mongo_password="test-pass",
+    redis_password="test-pass",
 )
 
 
@@ -420,6 +488,7 @@ _LOCAL_PROD_BASE = dict(
     jwt_secret="a" * 32,
     gemini_api_key="test-key",
     local_production_test=True,
+    enable_docs=False,
     widget_script_url="http://localhost:8080/webchat-widget.iife.min.js",
     widget_api_base_url="http://localhost:8000",
     payment_provider="stripe",
@@ -554,3 +623,80 @@ def test_local_production_test_allows_razorpay_webhook_url() -> None:
         )
     )
     assert "localhost" in settings.razorpay_webhook_secret
+
+
+# --- Phase 14.3: production DEBUG / ENABLE_DOCS / body-limit validation ---
+
+
+def test_production_rejects_debug_enabled() -> None:
+    with pytest.raises(ValueError, match="DEBUG"):
+        Settings(**_prod(debug=True))
+
+
+def test_production_rejects_enable_docs_enabled() -> None:
+    with pytest.raises(ValueError, match="ENABLE_DOCS"):
+        Settings(**_prod(enable_docs=True))
+
+
+def test_production_accepts_debug_false_enable_docs_false() -> None:
+    settings = Settings(**_prod(debug=False, enable_docs=False))
+    assert settings.debug is False
+    assert settings.enable_docs is False
+
+
+def test_development_allows_debug_and_docs() -> None:
+    settings = Settings(_env_file=None, debug=True, enable_docs=True)
+    assert settings.debug is True
+    assert settings.enable_docs is True
+
+
+def test_local_production_test_still_rejects_debug() -> None:
+    with pytest.raises(ValueError, match="DEBUG"):
+        Settings(**_local_prod(debug=True))
+
+
+def test_local_production_test_still_rejects_enable_docs() -> None:
+    with pytest.raises(ValueError, match="ENABLE_DOCS"):
+        Settings(**_local_prod(enable_docs=True))
+
+
+def test_request_body_max_bytes_default() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.request_body_max_bytes == 10 * 1024 * 1024
+
+
+def test_request_body_max_bytes_too_small() -> None:
+    with pytest.raises(ValueError, match="REQUEST_BODY_MAX_BYTES"):
+        Settings(_env_file=None, request_body_max_bytes=100)
+
+
+def test_request_body_max_bytes_configurable() -> None:
+    settings = Settings(_env_file=None, request_body_max_bytes=1024)
+    assert settings.request_body_max_bytes == 1024
+
+
+# --- Phase 14.4: production cookie_secure + auth security ---
+
+
+def test_production_rejects_insecure_cookies() -> None:
+    with pytest.raises(ValueError, match="COOKIE_SECURE"):
+        Settings(**_prod(cookie_secure=False))
+
+
+def test_production_accepts_secure_cookies() -> None:
+    settings = Settings(**_prod(cookie_secure=True))
+    assert settings.cookie_secure is True
+
+
+def test_development_allows_insecure_cookies() -> None:
+    settings = Settings(_env_file=None, cookie_secure=False)
+    assert settings.cookie_secure is False
+
+
+def test_local_production_test_allows_insecure_cookies() -> None:
+    # The local harness runs the full stack over plain HTTP on loopback, so
+    # the Secure cookie flag must be relaxable under the explicit flag
+    # (mirrors .env.production's COOKIE_SECURE=false + LOCAL_PRODUCTION_TEST=true
+    # and the loopback URL relaxations). Real production still rejects it.
+    settings = Settings(**_local_prod(cookie_secure=False))
+    assert settings.cookie_secure is False

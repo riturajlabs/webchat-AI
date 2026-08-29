@@ -44,7 +44,10 @@ export function ResetPasswordForm() {
   if (message) {
     return (
       <div className="flex flex-col gap-4">
-        <p role="status" className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-900">
+        <p
+          role="status"
+          className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-900 dark:bg-green-500/10 dark:text-green-300"
+        >
           {message}
         </p>
         <Button asChild>

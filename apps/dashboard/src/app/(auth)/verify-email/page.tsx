@@ -1,11 +1,13 @@
-import type { Metadata } from 'next';
 import { Suspense } from 'react';
 
 import { VerifyEmailView } from '@/features/auth/verify-email-view';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = seoPage({
+  path: '/verify-email',
   title: 'Verify email',
-};
+  description: 'Verify your email address to activate your WebChat AI account.',
+});
 
 export default function VerifyEmailPage() {
   return (

@@ -5,7 +5,48 @@ Keeping services free of FastAPI imports preserves the layering rules in
 00-AI-Development-Rules.md (routes -> services -> repositories).
 """
 
+import logging
 from typing import Any
+
+logger = logging.getLogger("webchat_ai")
+
+
+def capture_exception(
+    exc: BaseException,
+    *,
+    context: dict[str, Any] | None = None,
+    level: int = logging.ERROR,
+) -> None:
+    """Log an exception with full context for future Sentry integration.
+
+    Currently emits a structured log record.  When a Sentry SDK is added later,
+    this single call-site can be updated to also call ``sentry_sdk.capture_exception``
+    without touching every consumer.
+
+    Parameters
+    ----------
+    exc:
+        The exception to record.
+    context:
+        Optional extra fields merged into the log record (e.g.
+        ``tenant_id``, ``job_id``).
+    level:
+        Logging level (default ``ERROR``).
+    """
+    extra: dict[str, Any] = {
+        "error_type": type(exc).__name__,
+        "error_code": getattr(exc, "code", None),
+        "error_status": getattr(exc, "status_code", None),
+    }
+    if context:
+        extra.update(context)
+    logger.log(
+        level,
+        "exception_captured: %s",
+        exc,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra=extra,
+    )
 
 
 class AppError(Exception):
@@ -94,6 +135,14 @@ class CrawlJobNotFoundError(AppError):
 class CrawlConflictError(AppError):
     status_code = 409
     code = "CRAWL_IN_PROGRESS"
+
+
+class AIQuotaExceededError(AppError):
+    """Tenant AI usage limit reached (Phase 14.9.4)."""
+
+    status_code = 429
+    code = "AI_QUOTA_EXCEEDED"
+    message = "AI usage limit exceeded. Please upgrade your plan."
 
 
 class InvalidTokenError(AppError):

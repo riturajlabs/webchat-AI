@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useApiKeys, useRevokeApiKey } from './hooks';
@@ -114,17 +114,17 @@ describe('ApiKeysPage', () => {
     mockedUseRevokeApiKey.mockReturnValue({ mutateAsync } as unknown as ReturnType<
       typeof useRevokeApiKey
     >);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPage();
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
-    });
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      'Revoke "Production"? This immediately disables the key.',
-    );
-    expect(mutateAsync).toHaveBeenCalledWith('key-1');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await vi.waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith('key-1');
+    });
   });
 
   it('does not revoke when confirmation is declined', () => {
@@ -132,10 +132,13 @@ describe('ApiKeysPage', () => {
     mockedUseRevokeApiKey.mockReturnValue({ mutateAsync } as unknown as ReturnType<
       typeof useRevokeApiKey
     >);
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(mutateAsync).not.toHaveBeenCalled();
   });

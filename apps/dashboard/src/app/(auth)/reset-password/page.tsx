@@ -1,11 +1,13 @@
-import type { Metadata } from 'next';
 import { Suspense } from 'react';
 
 import { ResetPasswordForm } from '@/features/auth/reset-password-form';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = seoPage({
+  path: '/reset-password',
   title: 'Reset password',
-};
+  description: 'Choose a new password for your WebChat AI account.',
+});
 
 export default function ResetPasswordPage() {
   return (

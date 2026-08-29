@@ -26,6 +26,9 @@ x-backend-env: &backend-env
   # Mode / debug are .env-driven (default: development / true).
   ENVIRONMENT: ${ENVIRONMENT-development}
   DEBUG: ${DEBUG-true}
+  # Forwarded so deployments can satisfy the production requirement to disable
+  # API docs (/docs, openapi.json). Secure default: off in containers.
+  ENABLE_DOCS: ${ENABLE_DOCS-false}
   PERF_TIMING_LOG_ENABLED: ${PERF_TIMING_LOG_ENABLED-false}
   APP_NAME: ${APP_NAME-webchat-ai}
   # Explicit local production testing; false by default, NEVER auto-enabled.
@@ -39,11 +42,20 @@ x-backend-env: &backend-env
   MONGODB_MIN_POOL_SIZE: ${MONGODB_MIN_POOL_SIZE-10}
   MONGODB_MAX_POOL_SIZE: ${MONGODB_MAX_POOL_SIZE-100}
   MONGODB_SERVER_SELECTION_TIMEOUT_MS: ${MONGODB_SERVER_SELECTION_TIMEOUT_MS-30000}
+  MONGODB_SOCKET_TIMEOUT_MS: ${MONGODB_SOCKET_TIMEOUT_MS-30000}
   MONGODB_SLOW_QUERY_THRESHOLD_MS: ${MONGODB_SLOW_QUERY_THRESHOLD_MS-0}
 
   # Redis is .env-driven; falls back to the local `redis` service.
   REDIS_URL: ${REDIS_URL-redis://redis:6379}
   REDIS_PREFIX: ${REDIS_PREFIX-webchat_ai}
+  # Production secrets for service-to-service authentication (Phase 14.9.2 /
+  # 14.9.3). Empty in development => MongoDB/Redis run without auth (local
+  # docker). In production the selected env file sets these (and the matching
+  # authenticated MONGODB_URI/REDIS_URL), satisfying config.py's production
+  # security validator.
+  MONGO_USERNAME: ${MONGO_USERNAME-}
+  MONGO_PASSWORD: ${MONGO_PASSWORD-}
+  REDIS_PASSWORD: ${REDIS_PASSWORD-}
 
   # Auth (from .env when present; safe dev fallback otherwise).
   JWT_SECRET: ${JWT_SECRET-dev-only-jwt-secret-change-me-please}
@@ -218,8 +230,15 @@ services:
     container_name: webchat-mongo
     networks: [webchat]
     restart: unless-stopped
-    ports:
-      - "27017:27017"
+    # No host port mapping — only internal Docker network access (SEC-14.2).
+    # To connect from the host for debugging, use:
+    #   docker compose exec mongo mongosh "mongodb://$MONGO_USERNAME:$MONGO_PASSWORD@mongo:27017/webchat_ai?authSource=admin"
+    # When MONGO_USERNAME/MONGO_PASSWORD are provided the official image
+    # auto-enables --auth and seeds the admin root user (Phase 14.9.2). Empty
+    # in development => no auth (local docker only).
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME-}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD-}
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -228,19 +247,83 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # MongoDB's entrypoint chowns /data/db and mongod (WiredTiger) manipulates
+      # resource limits and file ownership, so these caps must remain even under
+      # the drop-ALL hardening. Without CAP_DAC_OVERRIDE/CHOWN/FOWNER the official
+      # entrypoint's `find ... -exec chown mongodb {}` aborts (exit 1) and mongod
+      # crash-loops (CAP_SYS_RESOURCE for RLIMIT).
+      - DAC_OVERRIDE
+      - CHOWN
+      - FOWNER
+      - SYS_RESOURCE
+      - SETGID
+      - SETUID
 
   redis:
     image: redis:7-alpine
     container_name: webchat-redis
     networks: [webchat]
     restart: unless-stopped
+    # Bound the in-memory dataset so the cgroup limit (256M) is never hit:
+    # when the cap is reached Redis evicts LRU keys instead of being OOM-killed,
+    # which bounds cache growth under load (Phase 14.8.3).
+    # When REDIS_PASSWORD is set, requirepass is enabled (Phase 14.9.3); empty
+    # in development => no auth (local docker only). `$$REDIS_PASSWORD` is the
+    # container's own env var (the `$$` disables compose interpolation).
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD-}
+    command:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 200mb --maxmemory-policy allkeys-lru;
+        else
+          exec redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru;
+        fi
+    # No host port mapping — internal Docker network only (SEC-14.2).
+    # To connect from the host for debugging, use:
+    #   docker compose exec redis redis-cli -a "$REDIS_PASSWORD"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # Authenticated ping when requirepass is active (`$$REDIS_PASSWORD` is the
+      # container's own env var). Without `-a`, redis-cli returns NOAUTH but
+      # still exits 0, so Docker would report an auth-enabled redis "healthy"
+      # without ever proving usable access (Phase 14.9.3).
+      test:
+        - CMD-SHELL
+        - >-
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG;
+          else
+            redis-cli ping | grep -q PONG;
+          fi
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
 
   mailpit:
     image: axllent/mailpit:v1.20
@@ -255,6 +338,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   api:
     build:
@@ -269,8 +361,6 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      mongo:
-        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -279,6 +369,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   worker:
     build:
@@ -291,10 +390,26 @@ services:
     environment:
       <<: *backend-env
     depends_on:
-      mongo:
-        condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # $REDIS_URL is supplied by the backend env (with password in production).
+      test: ["CMD-SHELL", "python -c \"import redis.asyncio as r, asyncio; asyncio.run(r.from_url('$REDIS_URL').ping())\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    security_opt:
+      - no-new-privileges:true
+    # Chromium with --no-sandbox (CRAWL_NO_SANDBOX=true) runs without
+    # special capabilities. cap_drop ALL is safe here.
+    cap_drop:
+      - ALL
 
   dashboard:
     build:
@@ -305,6 +420,11 @@ services:
         # Inlined into the Next.js client bundle at build time. The value comes
         # from the selected env file (defaults to the local dev API).
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL-http://localhost:8000}
+        # Opt-in escape hatch for local preview builds only. Defaults to
+        # "false" so a real production build cannot accidentally relax the
+        # guard. Set WEBCHAT_ALLOW_LOCALHOST_BUILD=true in .env.production (or
+        # via `--build-arg`) when shipping loopback URLs to a local stack.
+        WEBCHAT_ALLOW_LOCALHOST_BUILD: ${WEBCHAT_ALLOW_LOCALHOST_BUILD-false}
     container_name: webchat-dashboard
     networks: [webchat]
     restart: unless-stopped
@@ -323,6 +443,15 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   widget:
     build:
@@ -347,3 +476,12 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

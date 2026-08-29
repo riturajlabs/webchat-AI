@@ -8,12 +8,15 @@ vi.mock('@/lib/api', () => ({
   api: new Proxy(
     {},
     {
-      get: (_target: object, prop: string | symbol) =>
-        typeof prop === 'string'
-          ? () => {
-              throw new Error(`api.${prop} not mocked`);
-            }
-          : undefined,
+      get: (_target: object, prop: string | symbol) => {
+        if (typeof prop === 'string') {
+          if (prop === 'post') return vi.fn().mockResolvedValue(undefined);
+          return () => {
+            throw new Error(`api.${prop} not mocked`);
+          };
+        }
+        return undefined;
+      },
     },
   ),
 }));
@@ -169,7 +172,7 @@ describe('useCrawlProgress', () => {
   /*  Reconnection                                                      */
   /* ------------------------------------------------------------------ */
 
-  it('reconnects with 2 s delay after first error', () => {
+  it('reconnects with 2 s delay after first error', async () => {
     renderHook(() => useCrawlProgress('job-1'));
 
     act(() => {
@@ -183,18 +186,18 @@ describe('useCrawlProgress', () => {
     // Not yet reconnected
     expect(MockEventSource.instances).toHaveLength(1);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1_999);
     });
     expect(MockEventSource.instances).toHaveLength(1);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1);
     });
     expect(MockEventSource.instances).toHaveLength(2);
   });
 
-  it('doubles delay on second retry (4 s)', () => {
+  it('doubles delay on second retry (4 s)', async () => {
     renderHook(() => useCrawlProgress('job-1'));
 
     act(() => {
@@ -205,7 +208,7 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2_000);
     });
     expect(MockEventSource.instances).toHaveLength(2);
@@ -214,18 +217,18 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(3_999);
     });
     expect(MockEventSource.instances).toHaveLength(2);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1);
     });
     expect(MockEventSource.instances).toHaveLength(3);
   });
 
-  it('doubles delay on third retry (8 s)', () => {
+  it('doubles delay on third retry (8 s)', async () => {
     renderHook(() => useCrawlProgress('job-1'));
 
     act(() => {
@@ -236,7 +239,7 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2_000);
     });
 
@@ -244,7 +247,7 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(4_000);
     });
 
@@ -252,18 +255,18 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(7_999);
     });
     expect(MockEventSource.instances).toHaveLength(3);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1);
     });
     expect(MockEventSource.instances).toHaveLength(4);
   });
 
-  it('stops reconnecting after max retries (3)', () => {
+  it('stops reconnecting after max retries (3)', async () => {
     renderHook(() => useCrawlProgress('job-1'));
 
     act(() => {
@@ -276,7 +279,7 @@ describe('useCrawlProgress', () => {
         latestInstance().triggerError();
       });
       const delay = 2_000 * 2 ** i;
-      act(() => {
+      await act(async () => {
         vi.advanceTimersByTime(delay);
       });
     }
@@ -287,14 +290,14 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(16_000);
     });
 
     expect(MockEventSource.instances.length).toBe(countAfterRetries);
   });
 
-  it('resets retry count on successful open', () => {
+  it('resets retry count on successful open', async () => {
     renderHook(() => useCrawlProgress('job-1'));
 
     act(() => {
@@ -305,7 +308,7 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(2_000);
     });
 
@@ -318,12 +321,12 @@ describe('useCrawlProgress', () => {
     act(() => {
       latestInstance().triggerError();
     });
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1_999);
     });
     expect(MockEventSource.instances).toHaveLength(2);
 
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1);
     });
     expect(MockEventSource.instances).toHaveLength(3);

@@ -62,7 +62,11 @@ export function ActivityChart({
     return <ChartPlaceholder />;
   }
   return (
-    <div className="h-72 w-full">
+    <div
+      className="h-72 w-full"
+      role="img"
+      aria-label="Bar and line chart of daily messages and conversations"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
@@ -110,7 +114,11 @@ export function TokenChart({
     return <ChartPlaceholder />;
   }
   return (
-    <div className="h-72 w-full">
+    <div
+      className="h-72 w-full"
+      role="img"
+      aria-label="Stacked area chart of daily input and output tokens"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
@@ -171,7 +179,11 @@ export function TopWebsitesChart({
     .slice(0, 6)
     .reverse();
   return (
-    <div className="h-80 w-full">
+    <div
+      className="h-80 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of conversations per website"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={sorted}
@@ -225,7 +237,11 @@ export function PopularQuestionsChart({
     .slice(0, 8)
     .reverse();
   return (
-    <div className="h-80 w-full">
+    <div
+      className="h-80 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of most-asked questions"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={sorted}
@@ -280,7 +296,11 @@ export function FeedbackDistributionChart({
     return <ChartPlaceholder height={220} />;
   }
   return (
-    <div className="h-56 w-full">
+    <div
+      className="h-56 w-full"
+      role="img"
+      aria-label="Horizontal bar chart of 1 to 5 star ratings"
+    >
       <ResponsiveContainer width="100%" height="100%">
         <BarChart
           data={data}

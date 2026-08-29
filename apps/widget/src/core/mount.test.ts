@@ -57,4 +57,27 @@ describe('mount', () => {
     again.destroy();
     expect(document.querySelector('webchat-widget')).toBeNull();
   });
+
+  it('removes event listeners on destroy (Phase 12)', () => {
+    const controller = mount({ widgetId: 'widget_123' });
+
+    const removeSpy = vi.spyOn(EventTarget.prototype, 'removeEventListener');
+
+    controller.destroy();
+
+    expect(removeSpy).toHaveBeenCalled();
+
+    removeSpy.mockRestore();
+  });
+
+  it('supports multiple mount/destroy cycles without leaked listeners', () => {
+    // Mount, destroy, then mount again: no errors and no leaked state.
+    const c1 = mount({ widgetId: 'cycle_1' });
+    c1.destroy();
+
+    const c2 = mount({ widgetId: 'cycle_2' });
+    expect(c2.widgetId).toBe('cycle_2');
+    expect(c2.isOpen()).toBe(false);
+    c2.destroy();
+  });
 });

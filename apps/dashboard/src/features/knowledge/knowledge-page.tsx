@@ -12,31 +12,11 @@ import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useWebsites } from '@/features/websites/hooks';
+import { KnowledgeBadge } from '@/features/websites/knowledge-badge';
 import type { KnowledgeStatus } from '@/features/websites/types';
-import { cn } from '@/lib/utils';
 
 import { useKnowledgeDocuments, useRetryDocument } from './hooks';
 import type { KnowledgeDocumentSummary } from './types';
-
-const KNOWLEDGE_STYLES: Record<KnowledgeStatus, string> = {
-  none: 'bg-muted text-muted-foreground',
-  processing: 'bg-amber-100 text-amber-800',
-  ready: 'bg-green-100 text-green-800',
-  failed: 'bg-red-100 text-red-800',
-};
-
-function KnowledgeBadge({ status }: { status: KnowledgeStatus }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium capitalize',
-        KNOWLEDGE_STYLES[status],
-      )}
-    >
-      {status}
-    </span>
-  );
-}
 
 function KnowledgeStat({ label, value }: { label: string; value: number }) {
   return (

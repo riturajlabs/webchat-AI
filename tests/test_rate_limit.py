@@ -1,5 +1,6 @@
 """Sliding-window rate limiter tests (ADR-004)."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +32,21 @@ class FakeRateLimitStore:
 
     async def expire(self, name: str, time: int) -> bool:
         return True
+
+
+class YieldingFakeRateLimitStore(FakeRateLimitStore):
+    """FakeRateLimitStore that yields BEFORE reading the count.
+
+    By sleeping before ``zcard`` executes, concurrent ``consume()`` calls
+    interleave at exactly the point where the old code was racy: each
+    coroutine yields at the zcard entry, so when it resumes it sees the
+    zadd from the previous coroutine.  This proves the fixed fallback path
+    (count-before-add) is correct under interleaving.
+    """
+
+    async def zcard(self, name: str) -> int:  # type: ignore[override]
+        await asyncio.sleep(0)
+        return await super().zcard(name)
 
 
 async def test_limiter_allows_up_to_limit_then_rejects() -> None:
@@ -314,3 +330,76 @@ async def test_refresh_limiter_disabled_by_switch(monkeypatch) -> None:
     for _ in range(100):
         await deps.refresh_limiter(req)  # never raises
     get_settings.cache_clear()
+
+
+# -----------------------------------------------------------------------
+# Atomicity regression tests: concurrent access + orphan prevention
+# -----------------------------------------------------------------------
+
+
+async def test_concurrent_consume_never_exceeds_limit() -> None:
+    """Fire N concurrent consume() calls with a tight budget.
+
+    The yielding fake store sleeps after ``zcard`` but before ``zadd``,
+    so multiple coroutines read the same count before any of them writes.
+    The fixed fallback path (count checked before add) correctly rejects
+    excess requests; the old path (add before check) would have admitted
+    all of them.
+    """
+    store = YieldingFakeRateLimitStore()
+    limiter = SlidingWindowRateLimiter(store, limit=3, window_seconds=60)
+
+    results = await asyncio.gather(*[limiter.consume("k") for _ in range(20)])
+    allowed = sum(1 for r in results if r is True)
+    assert allowed == 3, f"expected exactly 3 allowed, got {allowed}"
+
+
+async def test_concurrent_consume_with_different_keys() -> None:
+    """Concurrent requests on different keys must not interfere."""
+    store = YieldingFakeRateLimitStore()
+    limiter = SlidingWindowRateLimiter(store, limit=2, window_seconds=60)
+
+    results_a = await asyncio.gather(*[limiter.consume("a") for _ in range(5)])
+    results_b = await asyncio.gather(*[limiter.consume("b") for _ in range(5)])
+
+    assert sum(1 for r in results_a if r is True) == 2
+    assert sum(1 for r in results_b if r is True) == 2
+
+
+async def test_rejected_request_does_not_pollute_counter() -> None:
+    """A rejected consume() must not add an orphaned member to the ZSET.
+
+    Under the old code path ZADD ran before the count check, so rejected
+    requests left stale members that inflated the count for later callers.
+    The fixed path checks count first and skips ZADD on rejection.
+    """
+    store = FakeRateLimitStore()
+    limiter = SlidingWindowRateLimiter(store, limit=2, window_seconds=60)
+
+    # Fill the budget.
+    assert await limiter.consume("k") is True
+    assert await limiter.consume("k") is True
+
+    # Exceed the budget 5 times.
+    for _ in range(5):
+        assert await limiter.consume("k") is False
+
+    # The ZSET should contain exactly 2 members, not 7.
+    assert store._members["k"].__len__() == 2
+
+
+async def test_window_expiry_resets_budget() -> None:
+    """Once the window elapses the budget resets fully."""
+    store = FakeRateLimitStore()
+    limiter = SlidingWindowRateLimiter(store, limit=2, window_seconds=60)
+
+    assert await limiter.consume("k") is True
+    assert await limiter.consume("k") is True
+    assert await limiter.consume("k") is False
+
+    # Simulate window expiry by manually purging old members.
+    store._members["k"] = {}
+
+    assert await limiter.consume("k") is True
+    assert await limiter.consume("k") is True
+    assert await limiter.consume("k") is False

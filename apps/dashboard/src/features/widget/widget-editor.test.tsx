@@ -174,7 +174,6 @@ describe('WidgetEditor', () => {
   });
 
   it('blocks in-app navigation while dirty until the user confirms', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     setup();
 
     fireEvent.change(screen.getByLabelText('Welcome message'), { target: { value: 'Hi there!' } });
@@ -185,7 +184,12 @@ describe('WidgetEditor', () => {
     document.body.appendChild(link);
 
     expect(fireEvent.click(link)).toBe(false);
-    expect(confirmSpy).toHaveBeenCalledWith('You have unsaved widget changes. Leave anyway?');
+
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
   });
 
   it('applies a selected theme preset to the preview and saves it', async () => {

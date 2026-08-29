@@ -1335,3 +1335,85 @@ async def test_fallback_answer_is_never_citation_sanitized() -> None:
     assert _done_event(events)["data"]["fallback"] is True
     _user, assistant = env.messages.messages
     assert assistant.content == UNKNOWN_ANSWER_FALLBACK
+
+
+async def test_completed_turn_records_llm_token_cost_metrics(monkeypatch) -> None:
+    """A successful turn feeds token usage into the `llm_tokens_used` metric."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="We offer Pro and Team plans.")
+
+    recorded = {"request": [], "input": [], "output": [], "failure": []}
+
+    def record_tokens(kind: str, count: float) -> None:
+        recorded[kind].append(count)
+
+    def record_request(provider: str) -> None:
+        recorded["request"].append(provider)
+
+    def record_failure(code: str) -> None:
+        recorded["failure"].append(code)
+
+    monkeypatch.setattr(
+        "backend.services.chat.rag_service.record_llm_tokens", record_tokens
+    )
+    monkeypatch.setattr(
+        "backend.services.chat.rag_service.record_llm_request", record_request
+    )
+    monkeypatch.setattr(
+        "backend.services.chat.rag_service.record_llm_failure", record_failure
+    )
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What plans do you offer?",
+    )
+
+    assert any(e["event"] == "done" for e in events)
+    # Cost observability: request + per-kind token counts must be emitted.
+    assert recorded["request"], "record_llm_request was not called"
+    assert recorded["input"], "record_llm_tokens(input) was not called"
+    assert recorded["output"], "record_llm_tokens(output) was not called"
+    assert recorded["input"][0] == 10
+    assert recorded["output"][0] == 20
+    # A successful turn must not record a failure.
+    assert recorded["failure"] == []
+
+
+async def test_failed_generation_records_llm_failure_metric(monkeypatch) -> None:
+    """A generation error must surface in `llm_failures_total`, not token usage."""
+    from backend.core.errors import GenerationError
+
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="We offer Pro and Team plans.")
+    env.generation.failures = [GenerationError("provider down")]
+
+    recorded = {"failure": [], "input": []}
+
+    def record_failure(code: str) -> None:
+        recorded["failure"].append(code)
+
+    def record_tokens(kind: str, count: float) -> None:
+        recorded["input"].append((kind, count))
+
+    monkeypatch.setattr(
+        "backend.services.chat.rag_service.record_llm_failure", record_failure
+    )
+    monkeypatch.setattr(
+        "backend.services.chat.rag_service.record_llm_tokens", record_tokens
+    )
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What plans do you offer?",
+    )
+
+    assert any(e["event"] == "error" for e in events)
+    assert recorded["failure"], "record_llm_failure was not called"
+    # Failures must not bill tokens.
+    assert recorded["input"] == []

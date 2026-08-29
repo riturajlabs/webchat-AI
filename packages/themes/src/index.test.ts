@@ -10,11 +10,14 @@ import {
 } from './index';
 
 describe('theme presets', () => {
-  it('exposes the seven curated presets with unique ids', () => {
-    expect(THEME_PRESETS).toHaveLength(7);
+  it('exposes the curated presets with unique ids', () => {
+    expect(THEME_PRESETS).toHaveLength(10);
     const ids = THEME_PRESETS.map((t) => t.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(THEME_PRESETS.map((t) => t.id)).toEqual([
+      'whatsapp-classic',
+      'ios-native',
+      'enterprise-slate',
       'ocean-blue',
       'midnight-dark',
       'emerald-support',

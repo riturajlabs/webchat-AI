@@ -8,7 +8,7 @@ ADR-003 (double-submit CSRF) are enforced as dependencies.
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, Header, Path, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -85,6 +85,9 @@ from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
 from backend.workers.jobs.knowledge import enqueue_process_document
 
+if TYPE_CHECKING:
+    from backend.core.quota import LLMQuotaService
+
 logger = logging.getLogger("webchat_ai")
 
 
@@ -145,6 +148,12 @@ def get_payment_provider() -> PaymentProvider:
     """Resolve the configured payment gateway implementation (Phase 14)."""
     return build_payment_provider(get_settings())
 
+
+def get_llm_quota_service() -> "LLMQuotaService":
+    """Build the per-tenant AI quota limiter (Phase 14.9.4)."""
+    from backend.core.quota import LLMQuotaService
+
+    return LLMQuotaService()
 
 def get_subscription_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
@@ -408,12 +417,67 @@ def get_access_token(
     return token
 
 
+def get_sse_access_token(
+    request: Request,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> str:
+    """Extract access token for SSE endpoints (header or cookie fallback).
+
+    ``EventSource`` cannot send custom headers, so SSE endpoints that require
+    authentication need a cookie fallback.  The dashboard mirrors the access
+    token into a non-httpOnly cookie (``sse_access_token``) on login / refresh;
+    this dependency checks the ``Authorization`` header first (normal API
+    requests) and falls back to the cookie (SSE connections).
+    """
+
+    def _from_header() -> str | None:
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization.split(" ", 1)[1].strip()
+            if token:
+                return token
+        return None
+
+    def _from_cookie() -> str | None:
+        cookie = request.cookies.get("sse_access_token")
+        return cookie if cookie else None
+
+    token = _from_header() or _from_cookie()
+    if not token:
+        raise InvalidCredentialsError("Missing or malformed Authorization header.")
+    return token
+
+
 async def current_user(
     access_token: Annotated[str, Depends(get_access_token)],
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ) -> Principal:
     """Resolve the authenticated principal for a bearer-token request."""
     return await auth.authenticate(access_token)
+
+
+async def sse_current_user(
+    access_token: Annotated[str, Depends(get_sse_access_token)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+) -> Principal:
+    """Resolve the authenticated principal for SSE endpoints (header or cookie)."""
+    return await auth.authenticate(access_token)
+
+
+def require_sse_role(*roles: str) -> Callable[[Principal], None]:
+    """Return an SSE-compatible role guard (header **or** cookie auth).
+
+    Identical contract to ``require_role`` but resolves the principal through
+    ``sse_current_user``, so the role check works for ``EventSource`` clients
+    that authenticate via the ``sse_access_token`` cookie (which cannot send
+    custom headers). Used only for routes that accept cookie-authenticated
+    SSE connections.
+    """
+
+    def _require(principal: Annotated[Principal, Depends(sse_current_user)]) -> None:
+        if not meets_any(principal.role, roles):
+            raise ForbiddenError("Insufficient permissions for this action.")
+
+    return _require
 
 
 def require_role(*roles: str) -> Callable[[Principal], None]:
@@ -500,15 +564,55 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+_SLIDING_WINDOW_LUA = """
+-- Atomic sliding-window rate limiter (Redis Lua script).
+-- KEYS[1] = rate-limit key (ZSET)
+-- ARGV[1] = window_start_ms   (now_ms - window_seconds * 1000)
+-- ARGV[2] = now_ms            (current wall-clock ms)
+-- ARGV[3] = limit             (max events allowed)
+-- ARGV[4] = window_seconds    (TTL for the key)
+-- ARGV[5] = unique member     (now_ms:uuid)
+--
+-- Returns 1 if the request is allowed, 0 if rejected.
+-- The entire prune -> count -> add -> expire runs in one atomic evaluation;
+-- no concurrent caller can interleave between steps.
+
+-- 1. Prune members that fell outside the sliding window.
+redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
+
+-- 2. Count the surviving members.
+local count = redis.call('ZCARD', KEYS[1])
+
+-- 3. Reject if already at or above the limit (no member added on reject).
+if count >= tonumber(ARGV[3]) then
+    return 0
+end
+
+-- 4. Add the new request's timestamped member.
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[5])
+
+-- 5. Keep the key alive so stale keys are eventually reclaimed.
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
+
+return 1
+"""
+
+
 class _RedisRateLimitStore:
     """Adapter exposing Redis's minimal ZSET surface to the rate limiter.
 
     The adapter pins the loosely-typed `redis.asyncio` overloads to the exact
     `RateLimitStore` protocol surface (ADR-004).
+
+    When ``eval_sliding_window`` is available the ``SlidingWindowRateLimiter``
+    executes the entire prune -> count -> add -> expire sequence as one atomic
+    Lua script, eliminating the race window that existed in the four-command
+    fallback path.
     """
 
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
+        self._sliding_window_script: Any = None
 
     async def zadd(self, name: str, mapping: Mapping[str, float]) -> int:
         return int(await self._redis.zadd(name, mapping))
@@ -521,6 +625,27 @@ class _RedisRateLimitStore:
 
     async def expire(self, name: str, time: int) -> bool:
         return bool(await self._redis.expire(name, time))
+
+    async def eval_sliding_window(
+        self, key: str, window_start_ms: float, now_ms: float, limit: int, window_seconds: int
+    ) -> bool:
+        """Execute the atomic sliding-window Lua script.
+
+        Prunes expired members, checks the count, adds the new member, and
+        refreshes the TTL -- all in one Redis EVAL call.  The script is
+        registered lazily on first use so the adapter can be constructed in
+        test environments where the underlying Redis client is a fake.
+        """
+        import uuid as _uuid
+
+        if self._sliding_window_script is None:
+            self._sliding_window_script = self._redis.register_script(_SLIDING_WINDOW_LUA)
+        member = f"{now_ms}:{_uuid.uuid4()}"
+        result = await self._sliding_window_script(
+            keys=[key],
+            args=[window_start_ms, now_ms, limit, window_seconds, member],
+        )
+        return bool(result)
 
 
 class RateLimitDependency:

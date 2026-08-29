@@ -12,7 +12,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from backend import __version__
 from backend.api.middleware import (
+    AuthCacheHeadersMiddleware,
     MetricsMiddleware,
+    RequestBodyLimitMiddleware,
     RequestIDMiddleware,
     RequestTimingMiddleware,
     SecurityHeadersMiddleware,
@@ -36,7 +38,7 @@ from backend.api.routes.widget import router as widget_router
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import AppError
-from backend.core.logging import configure_logging
+from backend.core.logging import attach_sensitive_data_filter, configure_logging
 from backend.core.metrics import attach_metrics_log_collector
 from backend.core.redis import close_redis
 
@@ -132,8 +134,16 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.warning("Vector dimension validation skipped (MongoDB unavailable).")
     yield
-    await MongoDB.close()
-    await close_redis()
+    # Close each resource independently so a failure in one never prevents the
+    # others from being released (mirrors the worker's resilient shutdown).
+    for resource, closer in (
+        ("MongoDB client", MongoDB.close),
+        ("Redis client", close_redis),
+    ):
+        try:
+            await closer()
+        except Exception:  # noqa: BLE001 - shutdown must be best-effort
+            logger.exception("Shutdown failed to close %s.", resource)
 
 
 def create_app() -> FastAPI:
@@ -143,14 +153,16 @@ def create_app() -> FastAPI:
     # Phase 3: derive fallback-reason and TTFT metrics from log events the
     # services already emit (no service call sites change).
     attach_metrics_log_collector()
+    # Phase 14.7: scrub secrets/tokens/passwords from all log records.
+    attach_sensitive_data_filter()
 
     app = FastAPI(
         title="WebChat AI API",
         description="Multi-tenant RAG SaaS backend.",
         version=__version__,
-        docs_url="/api/docs" if settings.debug else None,
+        docs_url="/api/docs" if (settings.debug and settings.enable_docs) else None,
         redoc_url=None,
-        openapi_url="/api/openapi.json" if settings.debug else None,
+        openapi_url="/api/openapi.json" if (settings.debug and settings.enable_docs) else None,
         lifespan=lifespan,
     )
 
@@ -165,6 +177,8 @@ def create_app() -> FastAPI:
     # CORSMiddleware: `/api/widget/*` gets public `ACAO: *`, and its preflights
     # are answered before the dashboard CORS config is consulted.
     app.add_middleware(WidgetCORSHeadersMiddleware)
+    app.add_middleware(AuthCacheHeadersMiddleware)
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=settings.request_body_max_bytes)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestIDMiddleware)
     # Outermost: measures the full request (incl. the middlewares above). No-op

@@ -27,6 +27,10 @@ WORKDIR /app
 # compose does this automatically; defaults to the local dev fallback).
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}"
+# Bypass check-production-env.mjs's loopback rejection for local preview builds.
+# Must default to "false" so a real production build can't accidentally opt in.
+ARG WEBCHAT_ALLOW_LOCALHOST_BUILD=false
+ENV WEBCHAT_ALLOW_LOCALHOST_BUILD="${WEBCHAT_ALLOW_LOCALHOST_BUILD}"
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN pnpm --filter @webchat/dashboard build
@@ -38,5 +42,15 @@ ENV NODE_ENV=production \
     PORT=3000
 COPY --from=builder /app/apps/dashboard/.next/standalone ./
 COPY --from=builder /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+
+# Non-root user for production (SEC-14.2).
+# Next.js standalone server needs write access to /app/.next for temp files.
+RUN addgroup -g 1001 -S appgroup && \
+    adduser  -u 1001 -S appuser -G appgroup && \
+    chown -R appuser:appgroup /app
+
 EXPOSE 3000
+
+USER appuser
+
 CMD ["node", "apps/dashboard/server.js"]

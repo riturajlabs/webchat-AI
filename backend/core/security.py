@@ -66,12 +66,17 @@ def _encode(payload: dict[str, Any], expires_in_seconds: int) -> str:
 
 def _decode(token: str, expected_purpose: TokenPurpose) -> dict[str, Any]:
     settings = get_settings()
+    # `leeway` tolerates small clock skew between the node that minted the
+    # token and the node verifying it (normal in distributed deployments), and
+    # avoids spurious `ImmatureSignatureError`/`ExpiredSignatureError` at the
+    # iat/exp second boundaries.
     try:
         payload = jwt.decode(
             token,
             settings.jwt_secret,
             algorithms=[settings.jwt_algorithm],
             options={"require": ["exp", "iat"]},
+            leeway=timedelta(seconds=30),
         )
     except jwt.ExpiredSignatureError as exc:
         raise TokenExpiredError("Token has expired.") from exc

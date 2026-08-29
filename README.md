@@ -68,6 +68,45 @@ tests/             Test suites (backend pytest, frontend vitest/e2e)
 >   Railway, only URL/domain and provider-credential values change (see
 >   `.env.example` "RAILWAY DEPLOYMENT").
 
+## Production Environment Setup
+
+**Never commit secrets to the repository.** All production credentials must be
+managed through your deployment platform.
+
+### Development (local)
+
+```bash
+cp .env.example .env          # or use .env.development directly
+# Fill in local values, then:
+docker compose --env-file .env.development -f docker/compose.yml up --build
+```
+
+### Production (deployed)
+
+Secrets are set as **environment variables** on your deployment platform — no
+`.env` file is shipped. Examples:
+
+| Platform       | How to set secrets                                                                 |
+| -------------- | ---------------------------------------------------------------------------------- |
+| **Railway**    | Project → Variables tab (supports multi-line JSON, secret masking)                 |
+| **AWS**        | Secrets Manager / SSM Parameter Store → inject via task definition or ECS          |
+| **Docker**     | `docker run -e MONGODB_URI=...` or Docker Compose `secrets` / `.env` (not tracked) |
+| **Kubernetes** | `kubectl create secret generic webchat-secrets --from-literal=MONGODB_URI=...`     |
+
+### Required secrets for production
+
+At minimum you must provide:
+
+- `MONGODB_URI` — MongoDB Atlas connection string (`mongodb+srv://...`)
+- `REDIS_URL` — Managed Redis URL (`rediss://...`)
+- `JWT_SECRET` — Generate with `openssl rand -hex 32` (>= 32 bytes)
+- `GEMINI_API_KEY` — Required for embeddings + generation
+- `RESEND_API_KEY` — Required for email delivery
+- `STRIPE_SECRET_KEY` / `RAZORPAY_KEY_ID` — Required if payments enabled
+
+Run `./scripts/check-secrets.sh` before every commit to verify no secrets are
+accidentally tracked.
+
 ## Development scripts
 
 | Script                     | Purpose                                                                         |

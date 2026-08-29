@@ -87,7 +87,7 @@ let sourceListIdCounter = 0;
  * claim refers to the 12th "Learn more" card. Matched as plain text inside
  * rendered content and upgraded into a button that navigates to the card.
  */
-const CITATION_MARKER = /\[(\d{1,2})\]/g;
+const CITATION_MARKER = /\[(\d{1,2})\]/;
 
 /** Hostname of an http(s) URL, or null when the URL is unparsable/unsafe. */
 function hostOf(url: string): string | null {
@@ -460,18 +460,29 @@ function syncCitations(bubble: HTMLElement, message: ChatMessage): void {
 
   for (const node of matches) {
     const text = node.nodeValue ?? '';
-    CITATION_MARKER.lastIndex = 0;
     let cursor = 0;
     let replaced = false;
     const fragment = document.createDocumentFragment();
-    for (let match = CITATION_MARKER.exec(text); match; match = CITATION_MARKER.exec(text)) {
-      const index = Number.parseInt(match[1], 10);
-      if (!Number.isInteger(index) || index < 1 || index > total) {
-        continue; // out-of-range marker stays literal text (defensive)
+    let pos = 0;
+    while (pos < text.length) {
+      const bracketOpen = text.indexOf('[', pos);
+      if (bracketOpen === -1) break;
+      const bracketClose = text.indexOf(']', bracketOpen + 1);
+      if (bracketClose === -1) break;
+      const inner = text.slice(bracketOpen + 1, bracketClose);
+      if (!/^\d{1,2}$/.test(inner)) {
+        pos = bracketOpen + 1;
+        continue;
       }
-      fragment.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      const index = Number.parseInt(inner, 10);
+      if (index < 1 || index > total) {
+        pos = bracketOpen + 1;
+        continue;
+      }
+      fragment.appendChild(document.createTextNode(text.slice(cursor, bracketOpen)));
       fragment.appendChild(createCitationLink(index));
-      cursor = match.index + match[0].length;
+      cursor = bracketClose + 1;
+      pos = cursor;
       replaced = true;
     }
     if (!replaced) {

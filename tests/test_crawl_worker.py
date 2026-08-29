@@ -637,7 +637,7 @@ async def test_worker_publishes_completed_event(patch_dns, monkeypatch) -> None:
     )
     publish_completed.assert_awaited_once()
     call_kwargs = publish_completed.call_args[1]
-    assert call_kwargs["pages"] == 2
+    assert call_kwargs["pages_completed"] == 2
 
 
 async def test_worker_publishes_failed_event_on_final_retry(patch_dns, monkeypatch) -> None:

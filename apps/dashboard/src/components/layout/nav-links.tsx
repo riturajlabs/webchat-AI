@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
-import { visibleNavGroups, isNavActive } from '@/components/layout/nav-items';
+import { visibleNavGroups, isNavActive, type NavItem } from '@/components/layout/nav-items';
 import { cn } from '@/lib/utils';
 
 /**
@@ -20,17 +20,19 @@ export function NavLinks({
   className?: string;
 }) {
   const pathname = usePathname();
+  const groups = visibleNavGroups(role);
+  const allItems: NavItem[] = groups.flatMap((g) => g.items);
 
   return (
     <div className={cn('flex flex-col', className)}>
-      {visibleNavGroups(role).map((group) => (
+      {groups.map((group) => (
         <div key={group.label} className="flex flex-col">
           <p className="px-3 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground first:pt-1">
             {group.label}
           </p>
           <div className="flex flex-col gap-0.5">
             {group.items.map(({ href, label, icon: Icon }) => {
-              const active = isNavActive(pathname, href);
+              const active = isNavActive(pathname, href, allItems);
               return (
                 <Link
                   key={href}

@@ -8,21 +8,20 @@ dashboard falls back to polling the ``crawl_jobs`` document).
 
 Channel naming: ``crawl:progress:{crawl_job_id}``
 
-The worker uses a lightweight ``aioredis`` (``redis.asyncio``) publisher that
-shares the same connection URL as the ARQ queue but operates on a dedicated
-connection pool so enqueue/progress never contend.
+Both publisher and subscriber reuse the application's shared Redis connection
+pool (``backend.core.redis.get_redis``) instead of creating isolated clients,
+preventing connection leaks in long-running SaaS deployments.
 """
 
 import json
 import logging
 from typing import Any
 
-from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
-from backend.core.config import get_settings
+from backend.core.redis import get_redis
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 _CHANNEL_PREFIX = "crawl:progress"
 
@@ -35,25 +34,16 @@ def _channel(job_id: str) -> str:
 # Publisher (called by the ARQ worker)
 # ---------------------------------------------------------------------------
 
-_pubsub_redis: Redis | None = None
-
-
-def _publisher() -> Redis:
-    """Lazy singleton Redis connection for the worker publisher."""
-    global _pubsub_redis
-    if _pubsub_redis is None:
-        _pubsub_redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
-    return _pubsub_redis
-
 
 async def publish_event(job_id: str, event: str, data: dict[str, Any]) -> None:
     """Publish a single crawl event to the per-job Redis channel.
 
     Best-effort: publishing failures are logged but never crash the worker.
+    Uses the shared application Redis pool instead of a dedicated client.
     """
     payload = json.dumps({"event": event, "data": data}, default=str)
     try:
-        await _publisher().publish(_channel(job_id), payload)
+        await get_redis().publish(_channel(job_id), payload)
     except Exception:  # noqa: BLE001
         logger.warning("Failed to publish crawl event %s for job %s", event, job_id)
 
@@ -76,8 +66,8 @@ async def publish_fetching(
     job_id: str,
     *,
     current_url: str,
-    pages_processed: int,
-    total_pages: int,
+    pages_completed: int,
+    pages_total: int,
 ) -> None:
     await publish_event(
         job_id,
@@ -85,8 +75,8 @@ async def publish_fetching(
         {
             "status": "fetching",
             "current_url": current_url,
-            "pages_processed": pages_processed,
-            "total_pages": total_pages,
+            "pages_completed": pages_completed,
+            "pages_total": pages_total,
         },
     )
 
@@ -123,7 +113,8 @@ async def publish_embedding(
 async def publish_completed(
     job_id: str,
     *,
-    pages: int,
+    pages_completed: int,
+    pages_total: int,
     chunks: int,
 ) -> None:
     await publish_event(
@@ -131,7 +122,8 @@ async def publish_completed(
         "crawl.completed",
         {
             "status": "completed",
-            "pages": pages,
+            "pages_completed": pages_completed,
+            "pages_total": pages_total,
             "chunks": chunks,
         },
     )
@@ -172,16 +164,20 @@ async def publish_progress(
 
 
 async def subscribe(job_id: str) -> PubSub:
-    """Return a Redis PubSub handle subscribed to the job's channel."""
-    client = Redis.from_url(get_settings().redis_url, decode_responses=True)
-    pubsub: PubSub = client.pubsub()
+    """Return a Redis PubSub handle subscribed to the job's channel.
+
+    Uses the shared application Redis pool. The caller MUST close the PubSub
+    handle in a ``finally`` block to release the subscription.
+    """
+    pubsub: PubSub = get_redis().pubsub()
     await pubsub.subscribe(_channel(job_id))
     return pubsub
 
 
 async def close_publisher() -> None:
-    """Shut down the worker-side publisher (called on worker exit)."""
-    global _pubsub_redis
-    if _pubsub_redis is not None:
-        await _pubsub_redis.aclose()
-        _pubsub_redis = None
+    """Shut down the worker-side publisher (called on worker exit).
+
+    No-op when using the shared Redis pool: the pool is closed by the
+    application lifespan.
+    """
+    pass

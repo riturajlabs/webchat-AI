@@ -9,6 +9,67 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
+const DEFAULT_REDIRECT = '/dashboard';
+
+function appOrigin(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  return window.location.origin;
+}
+
+/**
+ * Resolve a post-login redirect into an app-internal path.
+ *
+ * Only same-app absolute paths that start with a single "/" are allowed. Every candidate is
+ * run through the WHATWG URL parser against `window.location.origin` and accepted only when the
+ * resolved URL's origin exactly matches the app origin. That single authority check (combined
+ * with explicit rejection of encoded separators, backslashes, control characters and traversal
+ * segments) is what closes open-redirect attacks: protocol-relative URLs, scheme-carrying
+ * strings, backslash-host tricks and any crafted input that would make the browser resolve to a
+ * foreign origin all fall back to {@link DEFAULT_REDIRECT}.
+ */
+export function getSafeRedirectTarget(raw: string | null): string {
+  if (!raw || !raw.startsWith('/')) {
+    return DEFAULT_REDIRECT;
+  }
+  if (raw.startsWith('//') || raw.startsWith('/\\')) {
+    return DEFAULT_REDIRECT;
+  }
+
+  // Decode once so encoded separators/control characters are treated like their raw form.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return DEFAULT_REDIRECT;
+  }
+  if (decoded.includes('\\') || decoded.includes('\r') || decoded.includes('\n')) {
+    return DEFAULT_REDIRECT;
+  }
+  if (!decoded.startsWith('/') || decoded.startsWith('//')) {
+    return DEFAULT_REDIRECT;
+  }
+  // "https:evil.example", "javascript:alert(1)", "data:text/html,..." etc.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(decoded)) {
+    return DEFAULT_REDIRECT;
+  }
+
+  // Origin check: the URL parser is the authority on how the browser would interpret the
+  // string, so require the resolved origin to equal the app origin exactly.
+  const origin = appOrigin();
+  if (origin && new URL(decoded, origin).origin !== origin) {
+    return DEFAULT_REDIRECT;
+  }
+
+  // Reject traversal segments so redirects stay inside the app root.
+  if (decoded.split('/').some((segment) => segment === '..' || segment === '.')) {
+    return DEFAULT_REDIRECT;
+  }
+
+  return raw;
+}
+
 export function LoginForm() {
   const { login } = useAuth();
   const router = useRouter();
@@ -29,7 +90,7 @@ export function LoginForm() {
     setError(null);
     try {
       await login(email.trim(), password);
-      router.replace(redirectTo.startsWith('/') ? redirectTo : '/dashboard');
+      router.replace(getSafeRedirectTarget(redirectTo));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to sign in.');
     } finally {

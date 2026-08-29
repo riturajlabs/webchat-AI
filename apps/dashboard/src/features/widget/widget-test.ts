@@ -10,7 +10,8 @@
 
 /**
  * Extract the `src="…"` value from a backend-generated embed script, or `null`
- * when the snippet has no script source.
+ * when the snippet has no script source. The regex targets exactly the script
+ * `src` attribute (the `data-api-base-url` attribute never contains `src=`).
  */
 export function parseScriptSrc(embedScript: string): string | null {
   const match = embedScript.match(/src="([^"]+)"/);
@@ -18,17 +19,34 @@ export function parseScriptSrc(embedScript: string): string | null {
 }
 
 /**
+ * Extract the `data-api-base-url="…"` value from a backend-generated embed
+ * script, or `null` when absent. This pins the API origin the SDK resolves to
+ * (the backend includes it so the embed does not fall back to same-origin).
+ */
+export function parseApiBaseUrl(embedScript: string): string | null {
+  const match = embedScript.match(/data-api-base-url="([^"]+)"/);
+  return match ? match[1] : null;
+}
+
+/**
  * A standalone HTML document that boots the real widget SDK for a widget id.
  * Sized to fill its iframe; the SDK injects the launcher automatically from
  * `data-widget-id` (no init() call required).
+ *
+ * `apiBaseUrl` is forwarded as `data-api-base-url` on the script tag so the SDK
+ * resolves the API origin to the backend instead of falling back to the srcdoc
+ * iframe's own origin (the dashboard), which made config/session calls 404.
  */
 export function buildWidgetTestHtml({
   scriptSrc,
   widgetId,
+  apiBaseUrl,
 }: {
   scriptSrc: string;
   widgetId: string;
+  apiBaseUrl?: string;
 }): string {
+  const apiAttr = apiBaseUrl ? ` data-api-base-url="${apiBaseUrl}"` : '';
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -40,7 +58,7 @@ export function buildWidgetTestHtml({
     </style>
   </head>
   <body>
-    <script src="${scriptSrc}" data-widget-id="${widgetId}" defer></script>
+    <script src="${scriptSrc}" data-widget-id="${widgetId}"${apiAttr} defer></script>
   </body>
 </html>`;
 }

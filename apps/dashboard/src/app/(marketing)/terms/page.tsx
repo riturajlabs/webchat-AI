@@ -1,9 +1,10 @@
-import type { Metadata } from 'next';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = seoPage({
+  path: '/terms',
   title: 'Terms of Service',
   description: 'The terms that govern your use of the WebChat AI platform.',
-};
+});
 
 export default function TermsPage() {
   return (

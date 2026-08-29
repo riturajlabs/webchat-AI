@@ -19,6 +19,8 @@ export interface Plan {
   price_cents?: number | null;
   /** ISO 4217 currency of `price_cents`. */
   currency?: string;
+  /** Billing period in days for the auto-expiry of self-serve plans. */
+  billing_period_days?: number | null;
 }
 
 export interface UsageCounts {

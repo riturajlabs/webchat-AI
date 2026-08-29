@@ -52,8 +52,8 @@ function Header() {
 
 function StatusBadge({ status }: { status: string }) {
   const palette: Record<string, string> = {
-    active: 'bg-emerald-500/15 text-emerald-600',
-    trialing: 'bg-sky-500/15 text-sky-600',
+    active: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+    trialing: 'bg-sky-500/15 text-sky-600 dark:text-sky-400',
     cancelled: 'bg-muted text-muted-foreground',
     expired: 'bg-muted text-muted-foreground',
   };
@@ -279,15 +279,17 @@ function UsageSummaryCard() {
     <Card>
       <CardHeader>
         <CardTitle>Usage this month</CardTitle>
-        <CardDescription>Consumption against the {usage?.plan.name} plan.</CardDescription>
+        <CardDescription>
+          Consumption against the {usage?.plan?.name ?? 'your'} plan.
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-6">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <p className="text-sm text-muted-foreground">Messages</p>
             <p className="font-sans text-xl font-bold">
-              {formatNumber(usage?.usage.messages_sent ?? 0)}
-              {usage?.plan.limits.max_monthly_messages === null ? (
+              {formatNumber(usage?.usage?.messages_sent ?? 0)}
+              {usage?.plan?.limits?.max_monthly_messages === null ? (
                 <span className="text-xs font-normal text-muted-foreground"> unlimited</span>
               ) : null}
             </p>
@@ -295,8 +297,8 @@ function UsageSummaryCard() {
           <div>
             <p className="text-sm text-muted-foreground">Tokens</p>
             <p className="font-sans text-xl font-bold">
-              {formatCompact(usage?.usage.tokens_used ?? 0)}
-              {usage?.plan.limits.max_monthly_tokens === null ? (
+              {formatCompact(usage?.usage?.tokens_used ?? 0)}
+              {usage?.plan?.limits?.max_monthly_tokens === null ? (
                 <span className="text-xs font-normal text-muted-foreground"> unlimited</span>
               ) : null}
             </p>
@@ -304,13 +306,13 @@ function UsageSummaryCard() {
           <div>
             <p className="text-sm text-muted-foreground">Websites</p>
             <p className="font-sans text-xl font-bold">
-              {formatNumber(usage?.usage.websites ?? 0)}
+              {formatNumber(usage?.usage?.websites ?? 0)}
             </p>
           </div>
           <div>
             <p className="text-sm text-muted-foreground">Documents</p>
             <p className="font-sans text-xl font-bold">
-              {formatNumber(usage?.usage.documents ?? 0)}
+              {formatNumber(usage?.usage?.documents ?? 0)}
             </p>
           </div>
         </div>
@@ -437,8 +439,8 @@ export function BillingPage() {
   }, [searchParams, router]);
 
   const subscription = report?.subscription ?? null;
-  const planName = subscription?.plan_name ?? usage?.plan.name ?? '—';
-  const planDescription = usage?.plan.description ?? 'Your current subscription tier.';
+  const planName = subscription?.plan_name ?? usage?.plan?.name ?? '—';
+  const planDescription = usage?.plan?.description ?? 'Your current subscription tier.';
   const currentPlanId = subscription?.plan_id ?? null;
 
   const handleUpgrade = (planId: string) => {
@@ -483,7 +485,7 @@ export function BillingPage() {
               startDate={subscription?.start_date ?? null}
               endDate={subscription?.end_date ?? null}
               provider={subscription?.payment_provider ?? null}
-              limits={usage?.plan.limits}
+              limits={usage?.plan?.limits}
             />
           </section>
 

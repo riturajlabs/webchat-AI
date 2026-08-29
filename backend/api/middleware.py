@@ -108,7 +108,7 @@ _WIDGET_PREFIX = "/api/widget/"
 _WIDGET_CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Request-ID, X-Requested-With",
 }
 
 
@@ -242,6 +242,103 @@ class MetricsMiddleware:
                 status=status_label,
                 duration_seconds=duration_seconds,
             )
+
+
+class RequestBodyLimitMiddleware:
+    """Reject requests whose Content-Length exceeds the configured limit.
+
+    The check runs before the body is read, so oversized payloads never reach
+    application code.  GET/HEAD/DELETE requests without a body are unaffected.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int = 10 * 1024 * 1024) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Only check methods that carry a request body.
+        method = scope.get("method", "")
+        if method in ("GET", "HEAD", "DELETE", "OPTIONS"):
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers", []))
+        content_length = headers.get(b"content-length")
+        if content_length is not None:
+            try:
+                length = int(content_length)
+            except ValueError:
+                await _send_rejection(send, 400, "Invalid Content-Length header.")
+                return
+            if length > self.max_bytes:
+                await _send_rejection(
+                    send,
+                    413,
+                    f"Request body too large (max {self.max_bytes} bytes).",
+                )
+                return
+
+        await self.app(scope, receive, send)
+
+
+async def _send_rejection(send: Send, status: int, detail: str) -> None:
+    """Send a minimal JSON error response without starting the app."""
+    body = f'{{"detail":"{detail}"}}'.encode()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                [b"content-type", b"application/json"],
+                [b"content-length", str(len(body)).encode()],
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+_AUTH_PATH_PREFIX = "/api/auth"
+
+_AUTH_CACHE_HEADERS = [
+    [b"cache-control", b"no-store"],
+    [b"pragma", b"no-cache"],
+]
+
+
+class AuthCacheHeadersMiddleware:
+    """Prevent browsers from caching auth responses (tokens, user data).
+
+    Adds ``Cache-Control: no-store`` and ``Pragma: no-cache`` to every
+    response whose path starts with ``/api/auth``.  This prevents sensitive
+    data (access tokens, refresh tokens, user profiles) from being written
+    to the browser cache or intermediate proxies.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if not path.startswith(_AUTH_PATH_PREFIX):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_cache_headers(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.extend(_AUTH_CACHE_HEADERS)
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_cache_headers)
 
 
 def _extract_request_id(headers: list[tuple[bytes, bytes]]) -> str:

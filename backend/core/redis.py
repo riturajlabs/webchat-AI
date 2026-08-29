@@ -30,5 +30,8 @@ async def ping_redis() -> bool:
 async def close_redis() -> None:
     global _redis
     if _redis is not None:
-        await _redis.aclose()
+        try:
+            await _redis.aclose()
+        except Exception:
+            pass
         _redis = None

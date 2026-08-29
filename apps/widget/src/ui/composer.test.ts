@@ -120,7 +120,7 @@ describe('createComposer', () => {
     expect(onSend).toHaveBeenCalledWith('next question');
   });
 
-  it('lets the latest draft win when several questions are queued mid-stream', () => {
+  it('queues each draft and sends them in order when the turn completes', () => {
     const { composer, onSend } = setup();
     composer.setStreaming(true);
 
@@ -129,9 +129,17 @@ describe('createComposer', () => {
     composer.input.value = 'second draft';
     composer.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
 
+    // First completion drains the oldest queued draft.
     composer.setStreaming(false);
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith('second draft');
+    expect(onSend).toHaveBeenNthCalledWith(1, 'first draft');
+
+    // Simulate the stream cycle: onSend starts a new stream, which ends and
+    // drains the next queued draft.
+    composer.setStreaming(true);
+    composer.setStreaming(false);
+    expect(onSend).toHaveBeenCalledTimes(2);
+    expect(onSend).toHaveBeenNthCalledWith(2, 'second draft');
   });
 
   it('returns focus to the input when streaming ends while Stop is focused', () => {

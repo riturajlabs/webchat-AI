@@ -13,7 +13,7 @@ from redis.asyncio import ConnectionPool
 from backend.core.config import get_settings
 from backend.services.mail import EmailMessage, get_mail_service
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 _pool: ConnectionPool | None = None
 

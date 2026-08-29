@@ -10,14 +10,16 @@ import { Pricing } from '@/components/marketing/pricing';
 import { ProductShowcase } from '@/components/marketing/product-showcase';
 import { SocialProof } from '@/components/marketing/social-proof';
 import { TrustSecurity } from '@/components/marketing/trust-security';
+import { ValueProps } from '@/components/marketing/value-props';
+import { SITE_DESCRIPTION } from '@/lib/site';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
-  title: {
-    absolute: 'WebChat AI - AI Chatbot for Your Website',
-  },
-  description:
-    'Build an AI chatbot trained on your website content. Answer visitor questions automatically, 24/7 — live in minutes, zero code.',
-};
+export const metadata: Metadata = seoPage({
+  path: '/',
+  title: 'WebChat AI - AI Chatbot for Your Website',
+  absoluteTitle: true,
+  description: SITE_DESCRIPTION,
+});
 
 export default function LandingPage() {
   return (
@@ -25,6 +27,7 @@ export default function LandingPage() {
       <Hero />
       <SocialProof />
       <ProductShowcase />
+      <ValueProps />
       <FeaturesSection />
       <HowItWorks />
       <Integrations />

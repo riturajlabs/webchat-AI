@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   ArrowRight,
@@ -24,6 +25,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { API_BASE_URL } from '@/lib/api';
 import { useWebsites } from '@/features/websites/hooks';
 import type { Website } from '@/features/websites/types';
 
@@ -31,7 +33,7 @@ import { AllowedDomainsEditor } from './components/allowed-domains-editor';
 import { WidgetPreview } from './components/widget-preview';
 import { useUpdateWidgetConfig, useWidgetConfig, useWidgetPublicStatus } from './hooks';
 import type { WidgetConfig } from './types';
-import { buildWidgetTestHtml, parseScriptSrc } from './widget-test';
+import { buildWidgetTestHtml, parseApiBaseUrl, parseScriptSrc } from './widget-test';
 
 const STEPS = [
   { label: 'Customize', icon: Puzzle },
@@ -106,10 +108,12 @@ function CustomizeStep({
   config,
   onSave,
   onBack,
+  onNext,
 }: {
   config: WidgetConfig;
   onSave: (changes: Partial<WidgetConfig>) => Promise<void>;
   onBack?: () => void;
+  onNext: () => void;
 }) {
   const [draft, setDraft] = useState({
     bot_name: config.bot_name,
@@ -133,6 +137,7 @@ function CustomizeStep({
     try {
       await onSave(draft);
       toast.success('Widget appearance saved');
+      onNext();
     } catch {
       toast.error('Failed to save widget settings');
     } finally {
@@ -278,10 +283,12 @@ function DomainsStep({
   domains,
   onSave,
   onBack,
+  onNext,
 }: {
   domains: string[];
   onSave: (domains: string[]) => Promise<void>;
   onBack: () => void;
+  onNext: () => void;
 }) {
   const [draft, setDraft] = useState(domains);
   const [saving, setSaving] = useState(false);
@@ -291,6 +298,7 @@ function DomainsStep({
     try {
       await onSave(draft);
       toast.success('Domain allowlist saved');
+      onNext();
     } catch {
       toast.error('Failed to save domains');
     } finally {
@@ -390,7 +398,8 @@ function TestStep({
 }) {
   const { data: status, isPending: statusPending } = useWidgetPublicStatus(widgetId);
   const scriptSrc = parseScriptSrc(embedScript);
-  const previewHtml = scriptSrc ? buildWidgetTestHtml({ scriptSrc, widgetId }) : null;
+  const apiBaseUrl = parseApiBaseUrl(embedScript) ?? API_BASE_URL;
+  const previewHtml = scriptSrc ? buildWidgetTestHtml({ scriptSrc, widgetId, apiBaseUrl }) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -520,6 +529,7 @@ function CompletionStep() {
 }
 
 export function WidgetSetupWizard() {
+  const router = useRouter();
   const { data: websites, isPending, isError, error, refetch } = useWebsites();
   const [selectedId, setSelectedId] = useState('');
   const [step, setStep] = useState(0);
@@ -594,7 +604,7 @@ export function WidgetSetupWizard() {
           title="No websites yet"
           description="Add a website first, then come back to set up its chat widget."
           actionLabel="Add a website"
-          onAction={() => {}}
+          onAction={() => router.push('/websites')}
         />
       </div>
     );
@@ -687,13 +697,19 @@ export function WidgetSetupWizard() {
       ) : (
         <>
           {step === 0 && (
-            <CustomizeStep config={config} onSave={handleSaveConfig} onBack={undefined} />
+            <CustomizeStep
+              config={config}
+              onSave={handleSaveConfig}
+              onBack={undefined}
+              onNext={() => setStep(1)}
+            />
           )}
           {step === 1 && (
             <DomainsStep
               domains={config.allowed_domains ?? []}
               onSave={handleSaveDomains}
               onBack={() => setStep(0)}
+              onNext={() => setStep(2)}
             />
           )}
           {step === 2 && (

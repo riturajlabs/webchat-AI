@@ -1,9 +1,10 @@
-import type { Metadata } from 'next';
+import { seoPage } from '@/lib/seo';
 
-export const metadata: Metadata = {
+export const metadata = seoPage({
+  path: '/privacy',
   title: 'Privacy Policy',
   description: 'How WebChat AI handles your data and the data of your website visitors.',
-};
+});
 
 export default function PrivacyPage() {
   return (

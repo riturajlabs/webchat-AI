@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
+import { ConfirmDialog } from '@/features/admin/confirm-dialog';
 
 import { AllowedDomainsEditor } from './allowed-domains-editor';
 import { ColorPicker } from './color-picker';
@@ -183,6 +184,8 @@ export function WidgetEditor({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isDirty]);
 
+  const [pendingNavigate, setPendingNavigate] = useState<string | null>(null);
+
   useEffect(() => {
     if (!isDirty) {
       return;
@@ -206,14 +209,9 @@ export function WidgetEditor({
       if (!href || href.startsWith('#')) {
         return;
       }
-      if (!window.confirm(UNSAVED_MESSAGE)) {
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
       event.preventDefault();
       event.stopPropagation();
-      router.push(href);
+      setPendingNavigate(href);
     }
     document.addEventListener('click', handleClick, true);
     return () => document.removeEventListener('click', handleClick, true);
@@ -585,6 +583,21 @@ export function WidgetEditor({
           <WidgetPreview config={draft} />
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingNavigate !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingNavigate(null);
+        }}
+        onConfirm={() => {
+          if (pendingNavigate) router.push(pendingNavigate);
+          setPendingNavigate(null);
+        }}
+        title="Unsaved changes"
+        description={UNSAVED_MESSAGE}
+        confirmLabel="Leave"
+        variant="destructive"
+      />
     </div>
   );
 }

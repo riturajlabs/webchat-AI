@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const ACTIVE_JOBS_KEY = 'webchat_active_crawl_jobs';
+
 import {
   useCrawlJob,
   useCrawlProgress,
@@ -19,6 +21,7 @@ vi.mock('./hooks', () => ({
   useCrawlJob: vi.fn(),
   useCrawlProgress: vi.fn(),
   websitesKeys: { all: ['websites'] as const },
+  TERMINAL_CRAWL_STATUSES: new Set(['completed', 'failed']),
 }));
 
 vi.mock('./add-website-dialog', () => ({
@@ -112,6 +115,7 @@ function renderList() {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   mockWebsites({ data: [SITE] });
   mockedUseDeleteWebsite.mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue(undefined),
@@ -179,18 +183,22 @@ describe('WebsiteList', () => {
     expect(screen.getByTestId('add-website-dialog')).toHaveAttribute('data-open', 'true');
   });
 
-  it('deletes a website after confirmation', () => {
+  it('deletes a website after confirmation', async () => {
     const mutateAsync = vi.fn().mockResolvedValue(undefined);
     mockedUseDeleteWebsite.mockReturnValue({ mutateAsync } as unknown as ReturnType<
       typeof useDeleteWebsite
     >);
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderList();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
-    expect(window.confirm).toHaveBeenCalledWith('Delete "Acme Inc"? This also removes its widget.');
-    expect(mutateAsync).toHaveBeenCalledWith('site-1');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    await vi.waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith('site-1');
+    });
   });
 
   it('does not delete when confirmation is declined', () => {
@@ -198,10 +206,13 @@ describe('WebsiteList', () => {
     mockedUseDeleteWebsite.mockReturnValue({ mutateAsync } as unknown as ReturnType<
       typeof useDeleteWebsite
     >);
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     renderList();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     expect(mutateAsync).not.toHaveBeenCalled();
   });
@@ -347,10 +358,12 @@ describe('WebsiteList', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
     });
 
+    // Phase 7: onJobCompleted removes the failed job from activeJobs, so the
+    // alert is only visible transiently. Verify the crawl started and the site
+    // returns to its default state after cleanup.
     await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Browser crashed');
+      expect(screen.getByRole('button', { name: 'Crawl now' })).toBeEnabled();
     });
-    expect(screen.getByRole('button', { name: 'Retry crawl' })).toBeInTheDocument();
   });
 });
 
@@ -535,17 +548,19 @@ describe('WebsiteList — multi-job tracking', () => {
       const statuses = screen.getAllByRole('status');
       expect(statuses.some((el) => el.textContent?.includes('3 / 10'))).toBe(true);
     });
-    // Job 2 shows failure
-    expect(screen.getByText('Timeout')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry crawl' })).toBeInTheDocument();
+    // Phase 7: the failed job is cleaned up from activeJobs by onJobCompleted,
+    // so the site returns to its default state (no tracker, no error visible).
+    await waitFor(() => {
+      expect(screen.getByText('Other Site')).toBeInTheDocument();
+    });
   });
 
   it('does not create unnecessary SSE connections for websites without active jobs', () => {
     mockWebsites({ data: [SITE, SITE2] });
+    mockedUseCrawlProgress.mockClear();
+    mockedUseCrawlJob.mockClear();
     renderList();
 
-    // useCrawlProgress should not be called with any job ID
-    // (no crawls started → no trackers rendered → no SSE connections)
     expect(mockedUseCrawlProgress).not.toHaveBeenCalled();
   });
 
@@ -562,9 +577,9 @@ describe('WebsiteList — multi-job tracking', () => {
       isPending: false,
     } as unknown as ReturnType<typeof useCrawlJob>);
 
-    renderList();
-
     mockedUseCrawlProgress.mockClear();
+    mockedUseCrawlJob.mockClear();
+    renderList();
 
     await act(async () => {
       fireEvent.click(screen.getAllByRole('button', { name: 'Crawl now' })[0]);
@@ -574,7 +589,113 @@ describe('WebsiteList — multi-job tracking', () => {
       expect(mockedUseCrawlProgress).toHaveBeenCalledWith('job-1');
     });
 
-    // Only one SSE connection for one active job
     expect(mockedUseCrawlProgress).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  SessionStorage persistence (Phase 7)                               */
+/* ------------------------------------------------------------------ */
+
+describe('WebsiteList — sessionStorage persistence', () => {
+  beforeEach(() => {
+    sessionStorage.clear();
+  });
+
+  it('persists active crawl jobs to sessionStorage after starting a crawl', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({ crawl_job_id: 'job-1', status: 'pending' });
+    mockedUseStartCrawl.mockReturnValue({ mutateAsync } as unknown as ReturnType<
+      typeof useStartCrawl
+    >);
+
+    renderList();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Crawl now' }));
+    });
+
+    const stored = sessionStorage.getItem(ACTIVE_JOBS_KEY);
+    expect(stored).not.toBeNull();
+    const parsed = JSON.parse(stored!) as [string, string][];
+    expect(parsed).toEqual([['site-1', 'job-1']]);
+  });
+
+  it('restores active crawl jobs from sessionStorage on mount', async () => {
+    // Simulate a previously persisted active job
+    sessionStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify([['site-1', 'job-restored']]));
+
+    const runningJob: CrawlJob = {
+      ...COMPLETED_JOB,
+      id: 'job-restored',
+      status: 'running',
+      pages_total: 10,
+      pages_completed: 3,
+    };
+    mockedUseCrawlJob.mockReturnValue({
+      data: runningJob,
+      isPending: false,
+    } as unknown as ReturnType<typeof useCrawlJob>);
+
+    renderList();
+
+    await waitFor(() => {
+      expect(mockedUseCrawlJob).toHaveBeenCalledWith('job-restored', false);
+    });
+  });
+
+  it('removes completed jobs from sessionStorage', async () => {
+    // Pre-populate with an active job
+    sessionStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify([['site-1', 'job-1']]));
+
+    const completedJob: CrawlJob = { ...COMPLETED_JOB, id: 'job-1' };
+    mockedUseCrawlJob.mockReturnValue({
+      data: completedJob,
+      isPending: false,
+    } as unknown as ReturnType<typeof useCrawlJob>);
+
+    renderList();
+
+    await waitFor(() => {
+      // The job completed, so it should be removed from sessionStorage
+      const stored = sessionStorage.getItem(ACTIVE_JOBS_KEY);
+      expect(stored).toBeNull();
+    });
+  });
+
+  it('removes failed jobs from sessionStorage', async () => {
+    sessionStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify([['site-1', 'job-1']]));
+
+    const failedJob: CrawlJob = {
+      ...COMPLETED_JOB,
+      id: 'job-1',
+      status: 'failed',
+      error_message: 'Timeout',
+    };
+    mockedUseCrawlJob.mockReturnValue({
+      data: failedJob,
+      isPending: false,
+    } as unknown as ReturnType<typeof useCrawlJob>);
+
+    renderList();
+
+    await waitFor(() => {
+      const stored = sessionStorage.getItem(ACTIVE_JOBS_KEY);
+      expect(stored).toBeNull();
+    });
+  });
+
+  it('handles corrupted sessionStorage data gracefully', () => {
+    sessionStorage.setItem(ACTIVE_JOBS_KEY, 'not-valid-json{{{');
+
+    // Should not throw
+    renderList();
+    expect(screen.getByText('Acme Inc')).toBeInTheDocument();
+  });
+
+  it('handles non-array sessionStorage data gracefully', () => {
+    sessionStorage.setItem(ACTIVE_JOBS_KEY, '{"unexpected": "format"}');
+
+    renderList();
+    expect(screen.getByText('Acme Inc')).toBeInTheDocument();
   });
 });

@@ -9,7 +9,7 @@ from backend.models.crawl_job import CRAWL_STATUS_COMPLETED, CRAWL_STATUS_PENDIN
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import build_auth_env
-from tests.http_helpers import register_verified
+from tests.http_helpers import register_verified, register_verified_account
 
 _ACCOUNT_SEQ = 0
 
@@ -128,4 +128,40 @@ def test_get_crawl_job_unknown_returns_404(client) -> None:
 def test_get_crawl_job_requires_auth(client) -> None:
     test_client, _ = client
     resp = test_client.get("/api/crawl-jobs/some-id")
+    assert resp.status_code == 401
+
+
+def test_get_crawl_job_stream_authenticates_via_sse_cookie(client) -> None:
+    """SSE (`EventSource`) cannot send an Authorization header, so the crawl
+    stream must authenticate via the ``sse_access_token`` cookie. A cookie-only
+    request that previously hit the header-gated router dependency must now
+    succeed (regression: router-level ``require_role`` rejected every event
+    source connection with 401).
+    """
+    test_client, stub = client
+    access_token = register_verified_account(
+        test_client, name="Alice", email="alice_sse@example.com"
+    )["access_token"]
+
+    # Start a crawl so the stub holds a job.
+    headers = {"Authorization": f"Bearer {access_token}"}
+    test_client.post("/api/websites/website-1/crawl", headers=headers)
+    job = stub.job
+    # A terminal job returns the snapshot without subscribing to Redis,
+    # isolating this test to the authentication layer.
+    job.status = CRAWL_STATUS_COMPLETED
+
+    resp = test_client.get(
+        f"/api/crawl-jobs/{job.id}/stream",
+        cookies={"sse_access_token": access_token},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "crawl.snapshot" in resp.text
+
+
+def test_get_crawl_job_stream_requires_auth(client) -> None:
+    """A stream request with neither an Authorization header nor the SSE cookie
+    is rejected with 401 (auth still enforced for unauthenticated callers)."""
+    test_client, _ = client
+    resp = test_client.get("/api/crawl-jobs/some-id/stream")
     assert resp.status_code == 401

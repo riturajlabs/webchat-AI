@@ -80,7 +80,21 @@ export function visibleNavGroups(role: string | undefined): NavGroup[] {
  * Active-state matching for section navs: exact route or a nested child
  * (`/conversations/abc` keeps "Conversations" highlighted) without
  * prefix collisions (`/widget-test` never activates `/widget`).
+ *
+ * When a pathname matches multiple items (e.g. `/widget/setup` matches both
+ * `/widget/setup` and `/widget`), only the most specific match wins. This is
+ * resolved by passing all visible nav items so the function can detect and
+ * skip prefix matches that would collide with a more specific item.
  */
-export function isNavActive(pathname: string, href: string): boolean {
-  return pathname === href || pathname.startsWith(`${href}/`);
+const EXACT_MATCH_ONLY = new Set(['/widget']);
+
+export function isNavActive(pathname: string, href: string, allItems?: NavItem[]): boolean {
+  if (pathname === href) return true;
+  if (EXACT_MATCH_ONLY.has(href)) return false;
+  if (!pathname.startsWith(`${href}/`)) return false;
+  // A more specific item exists for this pathname — this prefix match loses.
+  if (allItems?.some((item) => item.href !== href && isNavActive(pathname, item.href))) {
+    return false;
+  }
+  return true;
 }

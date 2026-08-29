@@ -291,12 +291,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
   const windowElement = createChatWindow({
     config: currentConfig,
     messagesElement: messageList,
-    onSend: (question) => void send(question),
+    onSend: (question) => void send(question).catch(() => {}),
     onClose: () => controller.close(),
-    onSuggested: (question) => void send(question),
+    onSuggested: (question) => void send(question).catch(() => {}),
     onRetry: () => {
       if (lastFailedQuestion) {
-        void send(lastFailedQuestion);
+        void send(lastFailedQuestion).catch(() => {});
       }
     },
     onDismiss: () => {
@@ -333,8 +333,9 @@ export function mount(options: WidgetHostOptions): WidgetController {
   const detachSystemTheme = wireSystemThemeChange(host, () => currentConfig);
 
   // --- Bubble actions (delegated: copy / retry / show-more) ----------------
+  // Phase 12: store the disposer so destroy() removes the event listener.
 
-  wireMessageActions(messageList, {
+  const disposeMessageActions = wireMessageActions(messageList, {
     onCopyCode(code: string): void {
       void copyText(code).then((ok) => announce(ok ? 'Code copied' : 'Copy failed'));
     },
@@ -496,7 +497,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
         activeAbort = null;
       }
     }
-    syncRenderer();
+    try {
+      syncRenderer();
+    } catch {
+      // Render errors must not crash the widget or go unhandled.
+    }
   }
 
   function retryMessage(messageId: string): void {
@@ -507,7 +512,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
     for (let i = index - 1; i >= 0; i -= 1) {
       if (messages[i].role === 'user') {
-        void send(messages[i].content);
+        void send(messages[i].content).catch(() => {});
         return;
       }
     }
@@ -729,7 +734,14 @@ export function mount(options: WidgetHostOptions): WidgetController {
       }, 180);
     },
     sendMessage(question: string) {
-      void send(question);
+      const trimmed = question.trim();
+      if (!trimmed) return;
+      // Respect the composer's character limit for programmatic sends too.
+      const limited = trimmed.length > 2000 ? trimmed.slice(0, 2000) : trimmed;
+      void send(limited).catch(() => {
+        // Synchronous throw before send's internal try/catch; already surfaced
+        // via banner in the error handler. Prevents unhandled promise rejection.
+      });
     },
     destroy() {
       if (destroyed) {
@@ -741,6 +753,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
       activeAbort = null;
       detachKeyboardInset();
       detachSystemTheme();
+      disposeMessageActions();
       if (statusTimer) {
         clearTimeout(statusTimer);
         statusTimer = null;

@@ -10,6 +10,7 @@ Requirement: 00-AI-Development-Rules.md §17 (logging rules).
 
 import json
 import logging
+import re
 import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -81,7 +82,12 @@ def configure_logging(level: int | None = None) -> None:
     Safe to call multiple times; handlers are replaced on each call.
     """
     settings = get_settings()
-    effective_level = level or (logging.DEBUG if settings.debug else logging.INFO)
+    if level is not None:
+        effective_level = level
+    elif settings.debug:
+        effective_level = logging.DEBUG
+    else:
+        effective_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     root = logging.getLogger()
     root.setLevel(effective_level)
@@ -94,3 +100,45 @@ def configure_logging(level: int | None = None) -> None:
     else:
         handler.setFormatter(JsonFormatter())
     root.addHandler(handler)
+
+
+# Patterns that look like secrets, tokens, or API keys.
+_SENSITIVE_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|authorization)\s*[=:]\s*\S+"),
+    re.compile(r"(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(r"ghp_[A-Za-z0-9]{20,}"),
+    re.compile(r"xox[bpsa]-[A-Za-z0-9\-]+"),
+]
+
+_MASKED = "[REDACTED]"
+
+
+class SensitiveDataFilter(logging.Filter):
+    """Scrub patterns that resemble secrets from log messages.
+
+    Attached to the ``webchat_ai`` logger so all outgoing records are
+    sanitised before they reach any handler.  The filter operates on the
+    *rendered* message string — it catches both ``extra`` payloads merged by
+    ``JsonFormatter`` and free-text log messages.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        try:
+            msg = record.getMessage()
+            for pattern in _SENSITIVE_PATTERNS:
+                msg = pattern.sub(_MASKED, msg)
+            record.msg = msg
+            record.args = None
+        except Exception:  # pragma: no cover — filter must never break logging
+            pass
+        return True
+
+
+def attach_sensitive_data_filter(logger_name: str = "webchat_ai") -> None:
+    """Idempotently attach the sensitive-data filter to the app logger."""
+    target = logging.getLogger(logger_name)
+    for existing in target.filters:
+        if isinstance(existing, SensitiveDataFilter):
+            return
+    target.addFilter(SensitiveDataFilter())

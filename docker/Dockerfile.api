@@ -33,8 +33,15 @@ RUN set -e; for attempt in 1 2 3; do \
     done; \
     exit 1
 
+# Non-root user for production (SEC-14.2)
+RUN addgroup --system --gid 1001 appgroup && \
+    adduser  --system --uid 1001 --ingroup appgroup --no-create-home appuser && \
+    chown -R appuser:appgroup /app
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
+
+USER appuser
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1425,7 +1425,7 @@ async def test_stale_retrieval_prevented_after_cache_invalidation() -> None:
         url="https://example.com/pricing-v2", title="Pricing V2",
         chunk_index=1,
     )
-    deleted = await env.cache.delete_by_prefix("retrieval", f"{WEBSITE}:")
+    deleted = await env.cache.delete_by_prefix("retrieval", f"{TENANT}:{WEBSITE}:")
     assert deleted >= 1
 
     # Second query — must NOT return the stale v1-only cached result.

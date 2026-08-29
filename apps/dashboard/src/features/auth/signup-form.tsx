@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
+import { toast } from 'sonner';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { Button } from '@/components/ui/button';
@@ -39,7 +40,8 @@ export function SignupForm() {
     setError(null);
     try {
       await register(name.trim(), trimmedEmail, password);
-      router.replace('/dashboard');
+      toast.success('Account created! Please check your email to verify your account.');
+      router.replace('/verify-email');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create your account.');
     } finally {

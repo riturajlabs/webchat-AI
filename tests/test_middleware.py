@@ -90,3 +90,97 @@ def test_create_app_rejects_unknown_host() -> None:
     assert response.status_code == 400
     response = client.get("/api/health/live", headers={"Host": "testserver"})
     assert response.status_code == 200
+
+
+# --- Phase 14.3: RequestBodyLimitMiddleware ---
+
+
+def _build_limit_client(max_bytes: int = 1024) -> tuple[FastAPI, TestClient]:
+    app = FastAPI()
+
+    @app.post("/echo")
+    async def echo() -> dict[str, str]:
+        return {"ok": "true"}
+
+    @app.get("/echo")
+    async def echo_get() -> dict[str, str]:
+        return {"ok": "true"}
+
+    from backend.api.middleware import RequestBodyLimitMiddleware
+
+    app.add_middleware(RequestBodyLimitMiddleware, max_bytes=max_bytes)
+    return app, TestClient(app)
+
+
+def test_request_within_limit_accepted() -> None:
+    _, client = _build_limit_client(max_bytes=1024)
+    response = client.post("/echo", content=b"x" * 512)
+    assert response.status_code == 200
+
+
+def test_request_exceeding_limit_rejected() -> None:
+    _, client = _build_limit_client(max_bytes=1024)
+    response = client.post("/echo", content=b"x" * 2048)
+    assert response.status_code == 413
+
+
+def test_request_exact_limit_accepted() -> None:
+    _, client = _build_limit_client(max_bytes=1024)
+    response = client.post("/echo", content=b"x" * 1024)
+    assert response.status_code == 200
+
+
+def test_get_request_skips_body_limit() -> None:
+    _, client = _build_limit_client(max_bytes=10)
+    response = client.get("/echo")
+    assert response.status_code == 200
+
+
+def test_request_without_content_length_accepted() -> None:
+    _, client = _build_limit_client(max_bytes=10)
+    response = client.post("/echo", content=b"")
+    assert response.status_code == 200
+
+
+# --- Phase 14.4: AuthCacheHeadersMiddleware ---
+
+
+def _build_auth_client() -> tuple[FastAPI, TestClient]:
+    app = FastAPI()
+
+    @app.post("/api/auth/login")
+    async def login() -> dict[str, str]:
+        return {"ok": "true"}
+
+    @app.get("/api/auth/me")
+    async def me() -> dict[str, str]:
+        return {"ok": "true"}
+
+    @app.get("/other")
+    async def other() -> dict[str, str]:
+        return {"ok": "true"}
+
+    from backend.api.middleware import AuthCacheHeadersMiddleware
+
+    app.add_middleware(AuthCacheHeadersMiddleware)
+    return app, TestClient(app)
+
+
+def test_auth_login_response_has_no_store_cache() -> None:
+    _, client = _build_auth_client()
+    response = client.post("/api/auth/login")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
+def test_auth_me_response_has_no_store_cache() -> None:
+    _, client = _build_auth_client()
+    response = client.get("/api/auth/me")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
+def test_non_auth_route_no_extra_cache_headers() -> None:
+    _, client = _build_auth_client()
+    response = client.get("/other")
+    assert "cache-control" not in response.headers

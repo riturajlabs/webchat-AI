@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { ArrowLeft, Bot, Clock, Trash2, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -10,6 +11,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { ConfirmDialog } from '@/features/admin/confirm-dialog';
 
 import { useWebsites } from '@/features/websites/hooks';
 
@@ -108,19 +110,19 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
   const deleteConversation = useDeleteConversation();
   const { data: websitesData } = useWebsites();
   const websiteName = (websitesData ?? []).find((website) => website.id === data?.website_id)?.name;
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const notFound = error instanceof ApiError && error.status === 404;
 
-  async function handleDelete() {
-    if (!window.confirm('Delete this conversation and its entire history?')) {
-      return;
-    }
+  async function confirmDelete() {
     try {
       await deleteConversation.mutateAsync(sessionId);
       toast.success('Conversation deleted');
       router.replace('/conversations');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete conversation.');
+    } finally {
+      setConfirmOpen(false);
     }
   }
 
@@ -207,7 +209,7 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
               </div>
             </dl>
           </div>
-          <Button variant="destructive" size="sm" onClick={() => void handleDelete()}>
+          <Button variant="destructive" size="sm" onClick={() => setConfirmOpen(true)}>
             <Trash2 aria-hidden="true" />
             Delete
           </Button>
@@ -226,6 +228,17 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
           ))}
         </ol>
       </section>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        onConfirm={() => void confirmDelete()}
+        title="Delete conversation"
+        description="Delete this conversation and its entire history?"
+        confirmLabel="Delete"
+        variant="destructive"
+        isPending={deleteConversation.isPending}
+      />
     </div>
   );
 }

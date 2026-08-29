@@ -5,6 +5,7 @@ Phase 12.5 adds the admin-facing `list_users`/`count_users`/`count_by_tenant`/
 are consumed only through the admin service/router (`role=admin`).
 """
 
+import re
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -149,9 +150,10 @@ class MongoUserRepository:
     def _query(*, search: str | None, status: str | None) -> dict[str, Any]:
         query: dict[str, Any] = {}
         if search:
+            escaped = re.escape(search)
             query["$or"] = [
-                {"name": {"$regex": search, "$options": "i"}},
-                {"email": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": escaped, "$options": "i"}},
+                {"email": {"$regex": escaped, "$options": "i"}},
             ]
         if status is not None:
             query["status"] = status

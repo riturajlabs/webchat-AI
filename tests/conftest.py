@@ -84,11 +84,6 @@ def _hermetic_infrastructure(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
     _redis_mod._redis = None  # noqa: SLF001
 
-    # Reset the crawl-events Redis singleton.
-    import backend.core.crawl_events as _crawl_events_mod
-
-    _crawl_events_mod._pubsub_redis = None  # noqa: SLF001
-
     # Reset the shared httpx client for OpenAI-compatible providers.
     import backend.ai.providers.openai_compat as _oai_mod
 

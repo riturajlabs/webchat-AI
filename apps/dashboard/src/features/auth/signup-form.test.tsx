@@ -54,7 +54,7 @@ describe('SignupForm', () => {
     },
   );
 
-  it('submits a valid email (trimmed, lowercased) and redirects to the dashboard', async () => {
+  it('submits a valid email (trimmed, lowercased) and redirects to verify-email', async () => {
     register.mockResolvedValue({ email_verified: false });
 
     render(<SignupForm />);
@@ -63,7 +63,7 @@ describe('SignupForm', () => {
     await waitFor(() => {
       expect(register).toHaveBeenCalledWith('Jane Doe', 'user@gmail.com', 'Str0ngPass!123');
     });
-    expect(replace).toHaveBeenCalledWith('/dashboard');
+    expect(replace).toHaveBeenCalledWith('/verify-email');
   });
 
   it('shows the backend error message when signup fails', async () => {

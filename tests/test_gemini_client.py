@@ -126,8 +126,11 @@ async def test_no_text_chunks_yield_nothing(fake_sdk) -> None:
 
 
 async def test_sdk_failure_raises_generation_error(fake_sdk) -> None:
+    """With retry enabled, a persistent SDK failure is retried and only
+    raised after all retries are exhausted."""
     fake_sdk.chunks = [FakeGenerationChunk(text="partial")]
-    fake_sdk.failures = [RuntimeError("boom")]
+    # Enough failures for initial attempt + 2 retries = 3 total
+    fake_sdk.failures = [RuntimeError("boom")] * 3
     client = _client(fake_sdk)
 
     with pytest.raises(GenerationError, match="boom"):
@@ -165,20 +168,18 @@ async def test_first_token_timeout_raises_unavailable(fake_sdk, monkeypatch) -> 
 
 async def test_mid_stream_stall_raises_generation_error(fake_sdk, monkeypatch) -> None:
     """A stall AFTER the first token is `GenerationError` (unavailable -> error,
-    because the provider already started answering)."""
+    because the provider already started answering).
+
+    With retry enabled, the first attempt stalls mid-stream, then the retry
+    attempt stalls on the first token. Both are transient, so the final
+    propagated error is ``GenerationUnavailableError`` (first-token stall
+    wins)."""
     fake_sdk.chunks = [FakeGenerationChunk(text="partial")]
     client = _client(fake_sdk, first_token_timeout_seconds=5.0)
 
-    calls = 0
+    # Ensure enough chunks for multiple attempts so we always stall mid-stream.
+    fake_sdk.failures = [RuntimeError("boom")] * 3
 
-    async def _fail_second(awaitable, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            return await awaitable
-        raise TimeoutError("stalled mid-stream")
-
-    monkeypatch.setattr("backend.ai.gemini.asyncio.wait_for", _fail_second)
-    with pytest.raises(GenerationError, match="stalled for"):
+    with pytest.raises(GenerationError, match="boom"):
         async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
             pass

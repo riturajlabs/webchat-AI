@@ -36,8 +36,20 @@ from backend.core.errors import (
     SessionNotFoundError,
 )
 from backend.core.logging import get_request_id
+from backend.core.metrics import (
+    record_chat_failure,
+    record_chat_latency,
+    record_chat_request,
+    record_llm_failure,
+    record_llm_latency,
+    record_llm_request,
+    record_llm_tokens,
+    record_rag_empty,
+    record_rag_latency,
+)
 from backend.core.privacy import content_hash
 from backend.core.prompt_guard import validate_response
+from backend.core.quota import LLMQuotaService
 from backend.core.security import new_id
 from backend.models.chat_message import (
     CHAT_ROLE_ASSISTANT,
@@ -347,7 +359,7 @@ class RagService:
                     )
 
         cache = self._cache
-        cache_key = f"{website_id}:{search_query.strip().lower()}"
+        cache_key = f"{tenant_id}:{website_id}:{search_query.strip().lower()}"
         now = _now()
         retrieval_enabled = (
             cache is not None and self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0
@@ -523,6 +535,7 @@ class RagService:
         started = time.monotonic()
         perf_started = time.perf_counter()
         website_lookup_ms: float = 0.0
+        record_chat_request()
         try:
             t_lookup = time.perf_counter()
             async with chat_stage("website.lookup"):
@@ -530,6 +543,7 @@ class RagService:
             website_lookup_ms = (time.perf_counter() - t_lookup) * 1000.0
             if website is None:
                 yield _error_event("WEBSITE_NOT_FOUND", "Website not found.")
+                record_chat_failure(reason="website_not_found")
                 return
             question = sanitize_question(question)
             logger.info(
@@ -581,6 +595,7 @@ class RagService:
                 query=question,
             ):
                 yield event
+            record_chat_failure(reason="knowledge_empty")
             return
 
         # Start the conversation-memory read up front so the Mongo query
@@ -637,11 +652,13 @@ class RagService:
                 query=question,
             ):
                 yield event
+            record_chat_failure(reason="embedding_mismatch")
             return
         except Exception as exc:
             history_task.cancel()
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
+            record_chat_failure(reason="embedding_error")
             return
         logger.info(
             "chat_embedding tenant=%s website=%s provider=%s dims=%s cache=%s",
@@ -685,6 +702,8 @@ class RagService:
                 query=question,
             ):
                 yield event
+            record_chat_failure(reason="retrieval_empty")
+            record_rag_empty()
             return
 
         # Pre-generation confidence check.  When enabled, the retrieval
@@ -723,6 +742,7 @@ class RagService:
                     confidence_metrics=confidence_metrics,
                 ):
                     yield event
+                record_chat_failure(reason="confidence_low")
                 return
 
         t_context = time.perf_counter()
@@ -751,6 +771,7 @@ class RagService:
                 confidence_metrics=confidence_metrics,
             ):
                 yield event
+            record_chat_failure(reason="context_empty")
             return
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -855,8 +876,11 @@ class RagService:
             elif hasattr(self._generation, "name"):
                 provider_name = self._generation.name
         except Exception as exc:
+            history_task.cancel()
             logger.exception("answer generation failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
+            record_chat_failure(reason="generation_error")
+            record_llm_failure(code=_error_code(exc))
             return
 
         answer = "".join(deltas)
@@ -876,6 +900,7 @@ class RagService:
             answer = UNKNOWN_ANSWER_FALLBACK
             substituted_fallback = True
             yield {"event": "message", "data": {"delta": answer}}
+            record_chat_failure(reason="empty_generation")
         # Citation validation (audit fix): the model may emit [N] markers that
         # reference no retrieved source. Strip the invalid ones so the
         # persisted answer and conversation history never carry an
@@ -966,6 +991,7 @@ class RagService:
         # dashboard (Phase 12.6). Durations only - never content or secrets.
         assistant.latency_embedding_ms = _round_ms(embedding_ms)
         assistant.latency_retrieval_ms = _round_ms(retrieval_ms)
+        record_rag_latency(retrieval_ms / 1000.0)
         assistant.latency_context_ms = _round_ms(context_ms)
         assistant.latency_history_ms = _round_ms(history_ms)
         assistant.latency_generation_ms = _round_ms(generation_ms)
@@ -997,6 +1023,7 @@ class RagService:
                     "vector_queries": 1,
                 },
             ),
+            return_exceptions=True,
         )
         persist_ms = (time.perf_counter() - t_persist) * 1000.0
         assistant.latency_persist_ms = _round_ms(persist_ms)
@@ -1189,6 +1216,25 @@ class RagService:
                 },
             )
         yield {"event": "done", "data": done_data}
+
+        # Record Prometheus metrics for the completed turn.
+        record_chat_latency(time.monotonic() - started)
+        if provider_name:
+            record_llm_request(provider=provider_name)
+            record_llm_latency(provider=provider_name, duration_seconds=generation_ms / 1000.0)
+            # Cost observability: feed the serving provider's token counts into
+            # the `llm_tokens_used` metric so spend is trackable per kind.
+            record_llm_tokens(kind="input", count=usage.input_tokens)
+            record_llm_tokens(kind="output", count=usage.output_tokens)
+            # Per-tenant AI quota accounting (Phase 14.9.4): best-effort
+            # increment of the running daily/monthly token totals so the
+            # pre-call `check()` enforces budgets across turns.
+            try:
+                await LLMQuotaService().record(
+                    tenant_id, usage.input_tokens, usage.output_tokens
+                )
+            except Exception:  # pragma: no cover - best effort
+                logger.warning("llm_quota_record_failed tenant=%s", tenant_id)
 
     async def _ensure_session(
         self,

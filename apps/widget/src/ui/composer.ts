@@ -110,8 +110,8 @@ export function createComposer(options: ComposerOptions): ChatComposer {
 
   let locked = false;
   let streaming = false;
-  /** Next question typed while a turn streams; auto-sent when it completes. */
-  let pendingQuestion: string | null = null;
+  /** Questions typed while a turn streams; auto-sent when it completes. */
+  let pendingQuestions: string[] = [];
 
   /** Grow the textarea with its content, up to the CSS max-height. */
   const autogrow = (): void => {
@@ -142,7 +142,7 @@ export function createComposer(options: ComposerOptions): ChatComposer {
       // Audit (composer lockout): the visitor can keep typing during a turn.
       // Buffer the draft and send it the moment the stream completes instead
       // of dropping it (the outer send path is gated while streaming).
-      pendingQuestion = question;
+      pendingQuestions.push(question);
       input.value = '';
       input.style.height = '';
       updateSend();
@@ -203,11 +203,10 @@ export function createComposer(options: ComposerOptions): ChatComposer {
         // focus to <body>); keep it inside the composer instead.
         input.focus();
       }
-      // Audit (composer lockout): deliver a question queued mid-stream now
+      // Audit (composer lockout): deliver questions queued mid-stream now
       // that the turn has finished and the send path is unblocked again.
-      if (pendingQuestion) {
-        const queued = pendingQuestion;
-        pendingQuestion = null;
+      if (pendingQuestions.length > 0) {
+        const queued = pendingQuestions.shift()!;
         options.onSend(queued);
       }
     }

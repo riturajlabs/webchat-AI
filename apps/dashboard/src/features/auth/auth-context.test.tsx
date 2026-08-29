@@ -43,29 +43,40 @@ function wrapper({ children }: { children: ReactNode }) {
   return <AuthProvider>{children}</AuthProvider>;
 }
 
+function setSessionCookie(): void {
+  document.cookie = 'csrf_token=session-csrf; path=/';
+}
+
+function clearSessionCookie(): void {
+  document.cookie = 'csrf_token=; max-age=0; path=/';
+}
+
 describe('AuthProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // By default the initial silent refresh has no session cookie -> fails.
+    clearSessionCookie();
+    // By default the initial silent refresh has no session cookie -> skipped.
     mockedPost.mockRejectedValue(new Error('no session cookie'));
     mockedGet.mockRejectedValue(new Error('no token'));
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    clearSessionCookie();
     // session tokens are module state; reset by importing clearSession in each test
   });
 
-  it('starts unauthenticated when there is no session to restore', async () => {
+  it('starts unauthenticated without refreshing when there is no session cookie', async () => {
     const { result } = renderHook(() => useAuth(), { wrapper });
 
     await waitFor(() => expect(result.current.status).toBe('ready'));
     expect(result.current.isAuthenticated).toBe(false);
     expect(result.current.user).toBeNull();
-    expect(mockedPost).toHaveBeenCalledWith('/api/auth/refresh');
+    expect(mockedPost).not.toHaveBeenCalled();
   });
 
-  it('restores the session via the refresh endpoint (httpOnly cookie)', async () => {
+  it('restores the session via the refresh endpoint when a session cookie exists', async () => {
+    setSessionCookie();
     const refreshResponse: RefreshResponse = {
       access_token: 'access-after-refresh',
       token_type: 'bearer',

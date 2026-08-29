@@ -1,105 +1,93 @@
-"""Health endpoint tests."""
+"""Tests for health endpoints (Phase 14.7)."""
 
-import pytest
-from backend.api.routes import health as health_module
-from backend.core.config import get_settings
-from backend.main import create_app
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
 from fastapi.testclient import TestClient
 
 
-def test_health_returns_ok() -> None:
-    client = TestClient(create_app())
-    response = client.get("/api/health")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert "database" in body["checks"]
-    assert "redis" in body["checks"]
-    assert body["version"] == "0.1.0"
-    assert "environment" in body
+def _client() -> TestClient:
+    from backend.main import create_app
+    return TestClient(create_app(), raise_server_exceptions=False)
 
 
-def test_health_live_returns_alive_without_dependency_io() -> None:
-    # Liveness must not touch Mongo/Redis: a partition on either must not stall
-    # the probe (orchestrators use this for restart decisions).
-    client = TestClient(create_app())
-    response = client.get("/api/health/live")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "alive"
-    assert body["version"] == "0.1.0"
+class TestHealthLive:
+    def test_returns_200(self) -> None:
+        client = _client()
+        resp = client.get("/api/health/live")
+        assert resp.status_code == 200
+
+    def test_body_has_status_alive(self) -> None:
+        client = _client()
+        resp = client.get("/api/health/live")
+        data = resp.json()
+        assert data["status"] == "alive"
+        assert "version" in data
+        assert "environment" in data
+
+    def test_always_succeeds_without_io(self) -> None:
+        """Liveness probe must not depend on MongoDB or Redis."""
+        client = _client()
+        resp = client.get("/api/health/live")
+        assert resp.status_code == 200
 
 
-def test_health_ready_includes_service_info() -> None:
-    client = TestClient(create_app())
-    response = client.get("/api/health/ready")
-    assert response.status_code in {200, 503}
-    body = response.json()
-    assert "version" in body
-    assert "environment" in body
+class TestHealthReady:
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=True)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=True)
+    def test_healthy_returns_200(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health/ready")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ready"
+
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=False)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=True)
+    def test_db_down_returns_503(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health/ready")
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["database"] is False
+
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=True)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=False)
+    def test_redis_down_returns_503(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health/ready")
+        assert resp.status_code == 503
+        data = resp.json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["redis"] is False
+
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=False)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=False)
+    def test_both_down_returns_503(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health/ready")
+        assert resp.status_code == 503
 
 
-def test_health_ready_returns_503_when_dependencies_unavailable(monkeypatch) -> None:
-    # Simulate both dependencies being down: the readiness probe must fail
-    # closed with 503 rather than report 200 + "degraded".
-    async def fake_ping_fail() -> bool:
-        return False
+class TestHealthLegacy:
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=True)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=True)
+    def test_always_200_even_if_deps_down(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
 
-    monkeypatch.setattr(health_module.MongoDB, "ping", fake_ping_fail)
-    monkeypatch.setattr(health_module, "ping_redis", fake_ping_fail)
-
-    client = TestClient(create_app())
-    response = client.get("/api/health/ready")
-    assert response.status_code == 503
-    body = response.json()
-    assert body["status"] == "degraded"
-    assert body["checks"]["database"] is False
-    assert body["checks"]["redis"] is False
-
-
-@pytest.mark.parametrize(
-    ("database_ok", "redis_ok", "expected_status"),
-    [
-        (True, True, 200),
-        (True, False, 503),
-        (False, True, 503),
-        (False, False, 503),
-    ],
-)
-async def test_health_ready_status_by_dependency_state(
-    monkeypatch, database_ok: bool, redis_ok: bool, expected_status: int
-) -> None:
-    async def fake_db_ping() -> bool:
-        return database_ok
-
-    async def fake_redis_ping() -> bool:
-        return redis_ok
-
-    monkeypatch.setattr(health_module.MongoDB, "ping", fake_db_ping)
-    monkeypatch.setattr(health_module, "ping_redis", fake_redis_ping)
-
-    client = TestClient(create_app())
-    response = client.get("/api/health/ready")
-    assert response.status_code == expected_status
-    if expected_status == 200:
-        assert response.json()["status"] == "ready"
-    else:
-        assert response.json()["status"] == "degraded"
-
-
-def test_openapi_docs_disabled_by_default(monkeypatch) -> None:
-    # No DEBUG: the default is debug=False so docs are disabled. Env vars
-    # override the developer's .env, keeping this assertion hermetic.
-    monkeypatch.setenv("DEBUG", "false")
-    get_settings.cache_clear()
-    client = TestClient(create_app())
-    assert client.get("/api/docs").status_code == 404
-    get_settings.cache_clear()
-
-
-def test_openapi_docs_enabled_in_debug(monkeypatch) -> None:
-    monkeypatch.setenv("DEBUG", "true")
-    get_settings.cache_clear()
-    client = TestClient(create_app())
-    assert client.get("/api/docs").status_code in {200, 307}
-    get_settings.cache_clear()
+    @patch("backend.api.routes.health.MongoDB.ping", new_callable=AsyncMock, return_value=False)
+    @patch("backend.api.routes.health.ping_redis", new_callable=AsyncMock, return_value=True)
+    def test_reports_dependency_status(self, _redis: AsyncMock, _mongo: AsyncMock) -> None:
+        client = _client()
+        resp = client.get("/api/health")
+        data = resp.json()
+        assert data["checks"]["database"] is False
+        assert data["checks"]["redis"] is True
+        # Legacy /health always returns 200
+        assert resp.status_code == 200

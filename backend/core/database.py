@@ -151,6 +151,7 @@ class MongoDB:
                 minPoolSize=settings.mongodb_min_pool_size,
                 maxPoolSize=settings.mongodb_max_pool_size,
                 serverSelectionTimeoutMS=settings.mongodb_server_selection_timeout_ms,
+                socketTimeoutMS=settings.mongodb_socket_timeout_ms,
                 event_listeners=listeners,
                 # Return BSON datetimes as aware UTC so they compare cleanly
                 # against `core.security.utcnow()` (Mongo defaults to naive).
@@ -320,5 +321,8 @@ class MongoDB:
     @classmethod
     async def close(cls) -> None:
         if cls._client is not None:
+            # Motor's AsyncIOMotorClient.close() is a synchronous teardown in the
+            # pinned version (returns None), so it is invoked directly rather
+            # than awaited.
             cls._client.close()
             cls._client = None

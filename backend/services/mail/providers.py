@@ -10,7 +10,7 @@ from email.utils import parseaddr
 from backend.core.config import get_settings
 from backend.services.mail.base import EmailMessage
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("webchat_ai")
 
 
 class MailpitProvider:

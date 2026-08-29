@@ -13,10 +13,12 @@ export function CodeBlock({
   code,
   language = 'html',
   copyLabel = 'Copy code',
+  filename,
 }: {
   code: string;
   language?: string;
   copyLabel?: string;
+  filename?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -31,14 +33,21 @@ export function CodeBlock({
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-input bg-muted">
+    <div className="overflow-hidden rounded-lg border border-input bg-muted">
       <div className="flex items-center justify-between gap-2 border-b border-input bg-muted/60 px-3 py-1.5">
-        <span className="text-xs font-medium text-muted-foreground">{language}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          {filename ? (
+            <span className="truncate font-mono text-xs text-muted-foreground">{filename}</span>
+          ) : null}
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {language}
+          </span>
+        </div>
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className="h-6 px-2 text-xs"
+          className="h-6 shrink-0 px-2 text-xs"
           aria-label={copied ? 'Copied!' : copyLabel}
           onClick={() => void copy()}
         >
@@ -46,7 +55,9 @@ export function CodeBlock({
           {copied ? 'Copied!' : 'Copy'}
         </Button>
       </div>
-      <pre className="max-h-80 overflow-auto p-4 font-mono text-xs leading-relaxed">{code}</pre>
+      <pre className="max-h-80 overflow-auto p-4 font-mono text-xs leading-relaxed text-foreground/90">
+        <code>{code}</code>
+      </pre>
     </div>
   );
 }

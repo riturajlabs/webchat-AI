@@ -23,10 +23,11 @@ venv/
 .mypy_cache/
 htmlcov/
 
-# Environment & secrets
+# Environment & secrets — never commit real credentials
 .env
 .env.*
 !.env.example
+!.env.*.example
 
 # Package manager caches
 .npm/

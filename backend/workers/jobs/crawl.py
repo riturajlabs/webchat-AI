@@ -20,6 +20,8 @@ from backend.core.cache import CacheStore, RedisCacheStore
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import InvalidUrlError
+from backend.core.metrics import record_crawl_completed, record_crawl_failed, record_crawl_started
+from backend.core.redis import get_redis
 from backend.core.security import utcnow
 from backend.models.audit_log import AUDIT_CRAWL_COMPLETED, AUDIT_CRAWL_FAILED, AuditLog
 from backend.models.crawl_job import (
@@ -58,18 +60,17 @@ def _arq_redis() -> ArqRedis:
 def _build_cache() -> CacheStore | None:
     """Build a RedisCacheStore for retrieval cache invalidation.
 
-    Returns ``None`` if Redis is unavailable — invalidation is best-effort
-    and must never fail the crawl job.
+    Uses the shared singleton Redis client from ``core.redis`` so worker
+    connections are pooled and closed on shutdown.  Returns ``None`` if
+    Redis is unavailable — invalidation is best-effort and must never fail
+    the crawl job.
     """
     try:
-        from redis.asyncio import Redis as _Redis
-
-        redis = _Redis.from_url(get_settings().redis_url, decode_responses=True)
         # Audit R-01: the API writes retrieval entries under
         # `{redis_prefix}:rag:...` (see deps.get_rag_service). The worker must
         # invalidate that exact namespace, otherwise stale answers survive the
         # full TTL after every re-crawl.
-        return RedisCacheStore(redis, prefix=f"{get_settings().redis_prefix}:rag")
+        return RedisCacheStore(get_redis(), prefix=f"{get_settings().redis_prefix}:rag")
     except Exception:
         logger.warning("Could not build cache for crawl invalidation", exc_info=True)
         return None
@@ -137,6 +138,13 @@ async def _run_crawl_job(
     job.updated_at = utcnow()
     await crawl_jobs.update(job)
     await crawl_events.publish_started(job.id)
+    record_crawl_started()
+    logger.info(
+        "crawl_started job_id=%s tenant_id=%s website_id=%s",
+        job.id,
+        job.tenant_id,
+        job.website_id,
+    )
 
     async def on_progress(completed: int, total: int) -> None:
         job.pages_completed = completed
@@ -156,8 +164,8 @@ async def _run_crawl_job(
         await crawl_events.publish_fetching(
             job.id,
             current_url=url,
-            pages_processed=job.pages_completed,
-            total_pages=job.pages_total,
+            pages_completed=job.pages_completed,
+            pages_total=job.pages_total,
         )
 
     async def on_extracting(url: str) -> None:
@@ -205,7 +213,9 @@ async def _run_crawl_job(
         job.error_message = None
         job.updated_at = utcnow()
         await crawl_jobs.update(job)
-        await crawl_events.publish_completed(job.id, pages=stored, chunks=0)
+        await crawl_events.publish_completed(
+            job.id, pages_completed=stored, pages_total=job.pages_total, chunks=0
+        )
 
         website.status = WEBSITE_STATUS_READY
         website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
@@ -240,6 +250,14 @@ async def _run_crawl_job(
                     job.website_id,
                     exc_info=True,
                 )
+        record_crawl_completed()
+        logger.info(
+            "crawl_completed job_id=%s tenant_id=%s website_id=%s pages=%d",
+            job.id,
+            job.tenant_id,
+            job.website_id,
+            stored,
+        )
         return {"status": "completed", "pages": stored}
     except InvalidUrlError as exc:
         # Deterministic failure: the seed is not crawlable (SSRF-blocked,
@@ -255,7 +273,13 @@ async def _run_crawl_job(
         website.updated_at = utcnow()
         await websites.update(website)
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
-        logger.warning("crawl job %s failed (permanent): %s", crawl_job_id, exc)
+        record_crawl_failed(reason="invalid_url")
+        logger.warning(
+            "crawl_failed job_id=%s tenant_id=%s reason=permanent: %s",
+            crawl_job_id,
+            job.tenant_id,
+            exc,
+        )
         return {"status": "failed"}
     except Exception as exc:
         job_try = int(ctx.get("job_try", 1))
@@ -274,7 +298,15 @@ async def _run_crawl_job(
         else:
             job.updated_at = utcnow()
             await crawl_jobs.update(job)
-        logger.warning("crawl job %s failed (try %s/%s): %s", crawl_job_id, job_try, max_tries, exc)
+        record_crawl_failed(reason="exception")
+        logger.warning(
+            "crawl_failed job_id=%s tenant_id=%s try=%s/%s: %s",
+            crawl_job_id,
+            job.tenant_id,
+            job_try,
+            max_tries,
+            exc,
+        )
         raise
 
 

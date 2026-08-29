@@ -26,6 +26,7 @@ export function CrawlJobProgressBar({ job, progress, sseConnected }: CrawlJobPro
         <div className="flex items-center gap-2">
           <Loader2 className="size-3 animate-spin" aria-hidden="true" />
           <span className="font-medium">
+            {status === 'started' && 'Starting\u2026'}
             {status === 'fetching' && 'Fetching pages\u2026'}
             {status === 'extracting' && 'Extracting content\u2026'}
             {status === 'embedding' && 'Generating embeddings\u2026'}

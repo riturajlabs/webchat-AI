@@ -163,7 +163,7 @@ export const WIDGET_STYLES = `
   .wc-more-toggle:focus-visible,
   .wc-code-copy:focus-visible,
   .wc-chip:focus-visible,
-  .wc-composer-input:focus-visible,
+  // .wc-composer-input:focus-visible,
   .wc-thumb:focus-visible {
     outline: 2px solid var(--wc-accent);
     outline-offset: 2px;
@@ -1059,13 +1059,15 @@ export const WIDGET_STYLES = `
   /* Compact pill: input + send/stop in one rounded container. */
   .wc-composer-pill {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 4px;
     padding: 3px 4px 3px 14px;
     border: 1px solid var(--wc-border);
     border-radius: 22px;
     background: var(--wc-input-bg, var(--wc-surface-elevated));
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    box-shadow:
+    0 2px 8px rgba(0,0,0,0.08),
+    0 1px 2px rgba(0,0,0,0.04);
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
@@ -1079,26 +1081,40 @@ export const WIDGET_STYLES = `
     resize: none;
     border: none;
     background: transparent;
+
     padding: 5px 0;
+
     font-size: 0.93em;
     font-family: inherit;
     color: var(--wc-text);
-    min-height: 20px;
+
+    min-height: 28px;
     max-height: 88px;
+
+    display: flex;
+    align-items: center;
+
     box-shadow: none;
     outline: none;
-    line-height: 1.45;
+
+    line-height: 1.35;
   }
 
-  .wc-composer-input::placeholder {
+ .wc-composer-input::placeholder {
     color: var(--wc-muted);
-    opacity: 0.8;
-  }
+    opacity:0.65;
+    transition:opacity .2s ease;
+}
+
+
+.wc-composer-input:focus::placeholder {
+    opacity:0.4;
+}
 
   .wc-send {
     flex: none;
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     border: none;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
@@ -1113,8 +1129,10 @@ export const WIDGET_STYLES = `
   }
 
   .wc-send:hover:not(:disabled) {
-    transform: translateY(-1px) scale(1.06);
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--wc-primary) 30%, transparent);
+    transform: translateY(-2px) scale(1.08);
+    box-shadow:
+      0 6px 14px
+      color-mix(in srgb,var(--wc-primary) 35%,transparent);
   }
 
   .wc-send:active:not(:disabled) {

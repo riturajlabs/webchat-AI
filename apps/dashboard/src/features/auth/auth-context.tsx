@@ -11,7 +11,13 @@ import {
 } from 'react';
 
 import { api } from '@/lib/api';
-import { clearSession, getAccessToken, setAccessToken, setCsrfToken } from '@/lib/session';
+import {
+  clearSession,
+  getAccessToken,
+  hasSessionCookie,
+  setAccessToken,
+  setCsrfToken,
+} from '@/lib/session';
 
 import type { AuthResponse, MessageResponse, RefreshResponse, UserOut } from './types';
 
@@ -62,11 +68,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // and clears the session + redirects to /login when that refresh
           // fails. Never trigger a second refresh here (R1).
         }
-      } else {
-        // No in-memory token: restore the session from the httpOnly refresh
-        // cookie. refreshSession sets the user on success and clears nothing
-        // on failure, so the status is finalized here either way. Single
-        // refresh attempt.
+      } else if (hasSessionCookie()) {
+        // No in-memory token but the session cookies exist: restore the
+        // session from the httpOnly refresh cookie. refreshSession sets the
+        // user on success and clears nothing on failure, so the status is
+        // finalized here either way. Single refresh attempt, and anonymous
+        // visitors (no session cookie) skip the network call entirely (NET-1).
         await refreshSession();
       }
 

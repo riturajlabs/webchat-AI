@@ -4,6 +4,7 @@ import {
   buildPublicConfigUrl,
   buildWidgetTestHtml,
   fetchPublicConfig,
+  parseApiBaseUrl,
   parseScriptSrc,
 } from './widget-test';
 
@@ -27,6 +28,27 @@ describe('parseScriptSrc', () => {
   });
 });
 
+describe('parseApiBaseUrl', () => {
+  it('extracts the data-api-base-url from a backend embed script', () => {
+    expect(
+      parseApiBaseUrl(
+        '<script src="http://localhost:8080/webchat-widget.iife.min.js" ' +
+          'data-widget-id="w-1" data-api-base-url="http://localhost:8000" defer></script>',
+      ),
+    ).toBe('http://localhost:8000');
+  });
+
+  it('returns null when data-api-base-url is absent', () => {
+    expect(
+      parseApiBaseUrl(
+        '<script src="http://localhost:8080/webchat-widget.iife.min.js" ' +
+          'data-widget-id="w-1" defer></script>',
+      ),
+    ).toBeNull();
+    expect(parseApiBaseUrl('no script here')).toBeNull();
+  });
+});
+
 describe('buildWidgetTestHtml', () => {
   it('boots the SDK from the script src and widget id', () => {
     const html = buildWidgetTestHtml({
@@ -46,6 +68,23 @@ describe('buildWidgetTestHtml', () => {
     });
     expect(html).toMatch(/^<!doctype html>/);
     expect(html).toContain('</html>');
+  });
+
+  it('forwards data-api-base-url onto the script tag so the SDK is not same-origin', () => {
+    const html = buildWidgetTestHtml({
+      scriptSrc: 'http://localhost:8080/webchat-widget.iife.min.js',
+      widgetId: 'w-3',
+      apiBaseUrl: 'http://localhost:8000',
+    });
+    expect(html).toContain('data-api-base-url="http://localhost:8000"');
+  });
+
+  it('omits data-api-base-url when no api base is provided', () => {
+    const html = buildWidgetTestHtml({
+      scriptSrc: 'http://localhost:8080/webchat-widget.iife.min.js',
+      widgetId: 'w-3',
+    });
+    expect(html).not.toContain('data-api-base-url');
   });
 });
 

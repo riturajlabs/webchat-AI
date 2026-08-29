@@ -1,6 +1,12 @@
-import { Bot } from 'lucide-react';
+'use client';
 
-const SUGGESTED_QUESTIONS = ['What do you offer?', 'How do I install it?'];
+import { Bot, Check, Quote, Send, Sparkles } from 'lucide-react';
+
+const SUGGESTED_QUESTIONS = [
+  'How do I install it?',
+  'What integrations are supported?',
+  'Is pricing per website?',
+];
 
 export function WidgetShowcase() {
   return (
@@ -18,22 +24,57 @@ export function WidgetShowcase() {
           <span className="flex h-9 w-9 items-center justify-center rounded-full bg-white/20">
             <Bot className="size-5 text-white" />
           </span>
-          <div>
+          <div className="flex-1">
             <p className="text-sm font-semibold text-white">Website Assistant</p>
-            <p className="text-xs text-white/80">Powered by your content</p>
+            <span className="inline-flex items-center gap-1 text-[11px] text-white/80">
+              <span className="size-1.5 rounded-full bg-green-300" />
+              Grounded in your content
+            </span>
           </div>
+          <Sparkles className="size-4 text-white/80" aria-hidden="true" />
         </div>
-        <div className="flex flex-col gap-3 px-4 py-5">
+
+        <div className="flex flex-col gap-3.5 px-4 py-5">
           <div className="max-w-[85%] self-start rounded-2xl rounded-bl-sm bg-muted px-3.5 py-2.5 text-sm">
-            Hi! Ask me anything about this website.
+            Hi! Ask me anything about this website — pricing, setup, integrations and more.
           </div>
           <div className="max-w-[85%] self-end rounded-2xl rounded-br-sm bg-blue-600 px-3.5 py-2.5 text-sm text-white">
-            Where can I find your documentation?
+            How do I get started?
           </div>
-          <div className="max-w-[85%] self-start rounded-2xl rounded-bl-sm bg-muted px-3.5 py-2.5 text-sm">
-            Everything lives under Docs — installation, configuration and troubleshooting guides
-            included.
+          <div className="self-start">
+            <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted px-3.5 py-2.5 text-sm">
+              <p>
+                Connect your site in the dashboard, let WebChat AI crawl and index it, then paste
+                one script tag to go live.
+              </p>
+              <span className="mt-2 inline-flex items-center gap-1 rounded-md bg-blue-600/10 px-2 py-1 text-[11px] font-medium text-blue-700 dark:text-blue-400">
+                <Quote className="size-3" aria-hidden="true" />
+                Source: docs/getting-started
+              </span>
+            </div>
           </div>
+
+          {/* Streaming indicator */}
+          <div className="self-start">
+            <div className="rounded-2xl rounded-bl-sm bg-muted px-4 py-3 text-sm">
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-blue-600"
+                  style={{ animationDelay: '0ms' }}
+                />
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-blue-600"
+                  style={{ animationDelay: '150ms' }}
+                />
+                <span
+                  className="size-1.5 animate-pulse rounded-full bg-blue-600"
+                  style={{ animationDelay: '300ms' }}
+                />
+                <span className="ml-1 text-xs text-muted-foreground">Writing answer…</span>
+              </span>
+            </div>
+          </div>
+
           <div className="mt-1 flex flex-wrap gap-2">
             {SUGGESTED_QUESTIONS.map((question) => (
               <span
@@ -44,24 +85,30 @@ export function WidgetShowcase() {
               </span>
             ))}
           </div>
+
           <div className="mt-2 flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2">
             <span className="flex-1 text-sm text-muted-foreground">Type your message…</span>
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-600">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                className="size-3.5 text-white"
-              >
-                <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <Send className="size-3 text-white" aria-hidden="true" />
             </span>
           </div>
         </div>
       </div>
-      <span className="absolute -bottom-5 -right-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-600 shadow-lg ring-4 ring-background">
-        <Bot className="size-6 text-white" />
+
+      {/* Floating demo cards (clearly illustrative) */}
+      <span className="absolute -right-6 top-16 hidden flex-col gap-1 rounded-lg border border-border/60 bg-card px-3 py-2 shadow-md sm:flex">
+        <span className="text-[11px] text-muted-foreground">Knowledge base</span>
+        <span className="flex items-center gap-1 text-xs font-semibold">
+          <Check className="size-3 text-green-600" aria-hidden="true" />
+          156 pages indexed
+        </span>
+      </span>
+      <span className="absolute -left-6 bottom-16 hidden flex-col gap-1 rounded-lg border border-border/60 bg-card px-3 py-2 shadow-md sm:flex">
+        <span className="text-[11px] text-muted-foreground">AI answers</span>
+        <span className="flex items-center gap-1 text-xs font-semibold">
+          <Sparkles className="size-3 text-blue-600" aria-hidden="true" />
+          Grounded in your content
+        </span>
       </span>
     </div>
   );

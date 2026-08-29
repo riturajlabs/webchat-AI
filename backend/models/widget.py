@@ -40,8 +40,8 @@ class Widget(BaseModel):
     widget_id: str
     theme: str = "light"
     position: str = "bottom-right"
-    primary_color: str = "#2563eb"
-    accent_color: str = "#4f46e5"
+    primary_color: str = "#10A37F"
+    accent_color: str = "#25D366"
     font_size: str = "md"
     theme_preset: str = ""
     logo_url: str | None = None

@@ -436,11 +436,41 @@ describe('inline citation links (audit W-09)', () => {
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[9]');
   });
 
+  it('handles many citations in one text node without hanging (regression: infinite loop)', () => {
+    const sources = Array.from({ length: 12 }, (_, i) => ({
+      url: `https://example.com/${i}`,
+      title: `Source ${i + 1}`,
+    }));
+    const content = sources.map((_, i) => `[${i + 1}]`).join(' ');
+    const start = performance.now();
+    const list = createMessageList();
+    document.body.appendChild(list);
+    renderMessages(list, [message('assistant', content, { sources })]);
+    wireMessageActions(list, {
+      onCopyCode: vi.fn(),
+      onRetry: vi.fn(),
+      onToggleMore: vi.fn(),
+    });
+    const elapsed = performance.now() - start;
+    expect(elapsed).toBeLessThan(1000);
+    const chips = list.querySelectorAll('.wc-citation');
+    expect(chips.length).toBe(12);
+  });
+
   it('does not touch markers inside code blocks', () => {
     const list = rendered('Use `arr[1]` indexing and:\n\n```\nmatrix[2]\n```');
     expect(list.querySelector('.wc-citation')).toBeNull();
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('arr[1]');
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('matrix[2]');
+  });
+
+  it('handles interleaved valid and out-of-range markers', () => {
+    const list = rendered('See [1] and [99] and [2].');
+    const chips = list.querySelectorAll('.wc-citation');
+    expect(chips.length).toBe(2);
+    expect(chips[0].textContent).toBe('1');
+    expect(chips[1].textContent).toBe('2');
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[99]');
   });
 
   it('keeps markers plain while streaming; converts once sources arrive on completion', () => {

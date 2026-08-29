@@ -44,8 +44,10 @@ MAX_ALLOWED_DOMAIN_LENGTH = 253
 
 _HTML_HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 # CSS length for window/launcher sizing (safe subset: the widget passes the
-# string straight through to CSS custom properties).
-_CSS_LENGTH = re.compile(r"^\d+(?:\.\d+)?(?:px|em|rem|vh|vw|%)$")
+# string straight through to CSS custom properties).  vh/vw are excluded
+# because chat widgets use fixed pixel dimensions; viewport-relative units
+# would break on small screens and make the widget unpredictable.
+_CSS_LENGTH = re.compile(r"^\d+(?:\.\d+)?(?:px|em|rem|%)$")
 
 WIDGET_THEMES_ALLOWED = WIDGET_THEMES
 WIDGET_POSITIONS_ALLOWED = WIDGET_POSITIONS
@@ -116,7 +118,7 @@ class WidgetConfigUpdate(BaseModel):
             # An empty string means "clear the override" (revert to default).
             return None
         if not _HTML_HEX_COLOR.match(cleaned):
-            raise ValueError("colors must be a hex value like #2563eb")
+            raise ValueError("colors must be a hex value like #10A37F")
         return cleaned
 
     @field_validator("welcome_message", "placeholder", "bot_status_text")

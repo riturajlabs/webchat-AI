@@ -478,6 +478,7 @@ async def test_build_embed_script_omits_api_base_when_unset_in_production(
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("JWT_SECRET", "x" * 40)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("ENABLE_DOCS", "false")
     monkeypatch.setenv("EMBEDDING_PROVIDER_ORDER", '["gemini"]')
     monkeypatch.setenv("EMBEDDING_DIMENSIONS", "768")
     monkeypatch.setenv("WIDGET_SCRIPT_URL", "https://cdn.example.com/webchat-widget.iife.min.js")
@@ -487,6 +488,9 @@ async def test_build_embed_script_omits_api_base_when_unset_in_production(
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
     monkeypatch.setenv("CORS_ORIGINS", '["https://app.example.com"]')
     monkeypatch.setenv("ALLOWED_HOSTS", "app.example.com")
+    monkeypatch.setenv("MONGO_USERNAME", "test-user")
+    monkeypatch.setenv("MONGO_PASSWORD", "test-pass")
+    monkeypatch.setenv("REDIS_PASSWORD", "test-pass")
     get_settings.cache_clear()
     try:
         env = build_website_env()

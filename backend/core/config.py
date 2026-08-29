@@ -24,6 +24,21 @@ _RAZORPAY_WEBHOOK_URL_MARKERS = frozenset(
     }
 )
 
+# Known-placeholder / dev-default secrets that must never validate in
+# production regardless of length (Phase 14.9.5). The docker compose dev
+# fallback (`dev-only-jwt-secret-change-me-please`) and the `.env.example`
+# placeholder (`CHANGE_ME`) both match so a forgotten override fails fast
+# instead of shipping a guessable signing key.
+_INSECURE_PRODUCTION_JWT_MARKERS = frozenset(
+    {
+        "change_me",
+        "changeme",
+        "dev-only-jwt-secret",
+        "your-secret",
+        "your_signing",
+    }
+)
+
 
 class Settings(BaseSettings):
     """Central settings object. Values come from environment variables or a
@@ -40,6 +55,10 @@ class Settings(BaseSettings):
     app_name: str = "webchat-ai"
     environment: str = "development"
     debug: bool = False
+    log_level: str = "INFO"
+    # Gate OpenAPI docs and schema endpoints. Disabled in production by
+    # validator; production must explicitly set ENABLE_DOCS=false.
+    enable_docs: bool = True
 
     # Explicit local-production-testing mode. When True, `environment` stays
     # "production" (so all production code paths - JSON logs, Resend mail, real
@@ -69,6 +88,9 @@ class Settings(BaseSettings):
     # Reverse-proxy trust. When True, `X-Forwarded-For` is honored for client
     # IP extraction (rate limiting); must only be enabled behind a trusted proxy.
     trust_proxy: bool = False
+
+    # Maximum request body size in bytes (default 10 MB).
+    request_body_max_bytes: int = 10 * 1024 * 1024
 
     # Trusted Host header values (Phase 16). The API rejects requests whose
     # `Host` header is not listed here (TrustedHostMiddleware). Accepts a
@@ -103,10 +125,20 @@ class Settings(BaseSettings):
     mongodb_min_pool_size: int = 10
     mongodb_max_pool_size: int = 100
     mongodb_server_selection_timeout_ms: int = 30000
+    mongodb_socket_timeout_ms: int = 30000
+    # MongoDB authentication (Phase 14.9.2). Optional in development; required
+    # in production. When set, the deployment composes them into MONGODB_URI
+    # (or the URI already embeds them) so the database is never unauthenticated.
+    mongo_username: str | None = None
+    mongo_password: str | None = None
 
     # Redis
     redis_url: str = "redis://localhost:6379"
     redis_prefix: str = "webchat_ai"
+    # Redis authentication (Phase 14.9.3). Optional in development; required in
+    # production. Injected into REDIS_URL (redis://:password@host) by the
+    # deployment so the cache/broker is never unauthenticated.
+    redis_password: str | None = None
 
     # CORS / public URLs. Local dev sites commonly serve the widget embed from
     # Live Server (port 5500); production origins are set via CORS_ORIGINS.
@@ -320,6 +352,18 @@ class Settings(BaseSettings):
     # For fallback providers (Groq, OpenRouter), TTFT can be 2-5s. Values
     # below 5s may cause premature fallbacks on slow networks.
     generation_first_token_timeout_seconds: float = 10.0
+    # Maximum number of retries for transient LLM failures (timeout, rate limit).
+    llm_max_retries: int = 2
+    # Base delay between retries in seconds (exponential backoff multiplier).
+    llm_retry_base_delay: float = 1.0
+    # Maximum context tokens to send to the LLM (prevents exceeding model limits).
+    llm_max_context_tokens: int = 30000
+    # Production AI spend protection (Phase 14.9.4). Cumulative per-tenant token
+    # budgets and a per-minute request ceiling, tracked in Redis. 0 disables that
+    # specific limit (unlimited).
+    llm_daily_token_limit: int = 0
+    llm_monthly_token_limit: int = 0
+    llm_request_limit_per_minute: int = 0
     # Conversation/session retention (ADR-005 §5.7; TTL safety net is 90 days).
     chat_retention_days: int = 90
     # Daily usage rollup retention (ADR-005 §5.7: 3 years).
@@ -456,6 +500,11 @@ class Settings(BaseSettings):
     # client-visible streaming semantics. 0 disables buffering (raw per-token
     # frames). Default 50ms balances latency vs. frame count.
     sse_buffer_ms: float = 50.0
+    # Maximum idle seconds for a crawl SSE stream before it is closed.
+    # Large websites may exceed the previous 10-minute hard-coded limit;
+    # this setting lets operators tune the trade-off between connection
+    # lifetime and resource usage.
+    sse_idle_timeout: int = 1800
 
     # Adaptive provider routing (Phase 12.6). When "adaptive", the router
     # queries Redis for per-provider health and reorders the fallback chain
@@ -532,6 +581,28 @@ class Settings(BaseSettings):
         lowered = value.lower()
         return any(marker in lowered for marker in self._loopback_markers())
 
+    @staticmethod
+    def _mongodb_uri_has_credentials(value: str) -> bool:
+        """True when a mongodb(s) URI embeds user credentials (user:pass@host)."""
+        try:
+            parsed = urlparse(value.strip())
+        except ValueError:
+            return False
+        if parsed.scheme.lower() not in {"mongodb", "mongodb+srv"}:
+            return False
+        return bool(parsed.username)
+
+    @staticmethod
+    def _redis_url_has_password(value: str) -> bool:
+        """True when a redis(s) URL embeds a password (:pass@host)."""
+        try:
+            parsed = urlparse(value.strip())
+        except ValueError:
+            return False
+        if parsed.scheme.lower() not in {"redis", "rediss"}:
+            return False
+        return bool(parsed.password)
+
     def _is_loopback_host(self, host: str) -> bool:
         return host.strip().lower() in {
             "localhost",
@@ -601,6 +672,12 @@ class Settings(BaseSettings):
         if self.environment.lower() == "production":
             if len(self.jwt_secret.encode("utf-8")) < 32:
                 raise ValueError("JWT_SECRET must be at least 32 characters in production.")
+            secret_lower = self.jwt_secret.lower()
+            if any(marker in secret_lower for marker in _INSECURE_PRODUCTION_JWT_MARKERS):
+                raise ValueError(
+                    "JWT_SECRET must be a real production secret, not a placeholder/"
+                    "dev default (found a known placeholder value)."
+                )
             # At least one provider per capability must be configured (ADR-009).
             generation_keys = bool(
                 self.gemini_api_key or self.groq_api_key or self.openrouter_api_key
@@ -716,8 +793,77 @@ class Settings(BaseSettings):
             # expose the API to abuse.
             if not self.rate_limit_enabled:
                 raise ValueError("RATE_LIMIT_ENABLED must be true in production.")
+            # Auth cookies must use Secure flag in production so refresh tokens
+            # are never transmitted over plain HTTP (ADR-003). Relaxed ONLY
+            # under the explicit local-production-test flag, which runs the
+            # stack over plain HTTP on loopback.
+            if not self.cookie_secure and not self.local_production_test:
+                raise ValueError(
+                    "COOKIE_SECURE must be true in production "
+                    "(auth cookies require the Secure flag)."
+                )
+            # Database + cache authentication (SEC). A production deployment must
+            # not run an unauthenticated MongoDB or Redis. Credentials are either
+            # embedded in MONGODB_URI/REDIS_URL or supplied via MONGO_USERNAME/
+            # MONGO_PASSWORD/REDIS_PASSWORD. Relaxed ONLY under
+            # LOCAL_PRODUCTION_TEST (the local harness runs auth-less docker
+            # services); every other production security check still applies.
+            if not self.local_production_test:
+                if not self._mongodb_uri_has_credentials(self.mongodb_uri):
+                    if not (self.mongo_username and self.mongo_password):
+                        raise ValueError(
+                            "MONGODB_URI must include authentication credentials "
+                            "in production, or set MONGO_USERNAME/MONGO_PASSWORD."
+                        )
+                if not self._redis_url_has_password(self.redis_url) and not self.redis_password:
+                    raise ValueError(
+                        "REDIS_URL must include a password in production, or set "
+                        "REDIS_PASSWORD."
+                    )
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled
+        return self
+
+    @model_validator(mode="after")
+    def _validate_production_debug_and_docs(self) -> "Settings":
+        """Fail fast on DEBUG or ENABLE_DOCS in production.
+
+        OpenAPI docs expose every route, its schema and example payloads.
+        Leaving them enabled in production leaks internal API surface to
+        unauthenticated visitors.
+        """
+        if self.environment.lower() == "production":
+            if self.debug:
+                raise ValueError("DEBUG must be false in production.")
+            if self.enable_docs:
+                raise ValueError(
+                    "ENABLE_DOCS must be false in production "
+                    "(openapi.json and /docs expose internal API surface)."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_request_body_max_bytes(self) -> "Settings":
+        if self.request_body_max_bytes < 1024:
+            raise ValueError(
+                "REQUEST_BODY_MAX_BYTES must be at least 1024 (1 KB)."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_ai_quota_limits(self) -> "Settings":
+        """AI spend-protection limits (Phase 14.9.4) must be non-negative.
+
+        A value of 0 disables that specific limit (unlimited); any negative
+        value is a misconfiguration and fails fast at boot.
+        """
+        for name, value in (
+            ("LLM_DAILY_TOKEN_LIMIT", self.llm_daily_token_limit),
+            ("LLM_MONTHLY_TOKEN_LIMIT", self.llm_monthly_token_limit),
+            ("LLM_REQUEST_LIMIT_PER_MINUTE", self.llm_request_limit_per_minute),
+        ):
+            if value < 0:
+                raise ValueError(f"{name} must be >= 0.")
         return self
 
 

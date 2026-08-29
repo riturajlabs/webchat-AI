@@ -185,6 +185,7 @@ async function refreshSession(): Promise<boolean> {
     if (typeof payload.access_token !== 'string') {
       return false;
     }
+    // setAccessToken mirrors the token to the SSE cookie automatically.
     setAccessToken(payload.access_token);
     setCsrfToken(payload.csrf_token ?? readCsrfCookie());
     return true;
