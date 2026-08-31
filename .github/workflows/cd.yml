@@ -61,6 +61,12 @@ jobs:
         # v4 → Node 24 runtime (v3 targeted Node 20, deprecated).
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Set up QEMU (multi-arch cross-build)
+        # Registers the binfmt emulators needed to build linux/arm64 alongside
+        # linux/amd64 on the x86_64 runner, so the published GHCR manifests
+        # carry both architectures (Oracle Cloud Ampere A1 runs ARM64).
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3.6.0
+
       - name: Log in to GHCR
         # v4 → Node 24 runtime (v3 targeted Node 20, deprecated).
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -92,6 +98,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.api
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.api_tags }}
           cache-from: type=gha,scope=webchat-api
@@ -102,6 +109,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.worker
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.worker_tags }}
           cache-from: type=gha,scope=webchat-worker
@@ -112,6 +120,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.dashboard
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.dashboard_tags }}
           build-args: |
@@ -125,6 +134,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile.widget
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.widget_tags }}
           build-args: |
