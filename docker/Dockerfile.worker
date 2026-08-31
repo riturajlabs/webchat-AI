@@ -57,6 +57,12 @@ RUN addgroup --system --gid 1001 appgroup && \
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Default healthcheck (can be overridden): assert the ARQ broker connection
+# (Redis) is reachable. REDIS_URL carries any required password, so this works
+# with authenticated production Redis too.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "import os,asyncio,redis.asyncio as r; asyncio.run(r.from_url(os.environ.get('REDIS_URL','redis://localhost:6379')).ping())"
+
 USER appuser
 
 CMD ["python", "-m", "backend.workers"]

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2, Save } from 'lucide-react';
 import { toast } from 'sonner';
+import { DEFAULT_ACCENT_COLOR, DEFAULT_PRIMARY_COLOR } from '@webchat/themes';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -52,6 +53,29 @@ const EDITABLE_FIELDS: (keyof WidgetConfigChanges)[] = [
 ];
 
 const UNSAVED_MESSAGE = 'You have unsaved widget changes. Leave anyway?';
+
+const FONT_OPTIONS: { key: string; label: string; stack: string | null }[] = [
+  { key: 'system', label: 'System default', stack: null },
+  { key: 'inter', label: 'Inter', stack: "'Inter', system-ui, sans-serif" },
+  { key: 'roboto', label: 'Roboto', stack: "'Roboto', system-ui, sans-serif" },
+  { key: 'open-sans', label: 'Open Sans', stack: "'Open Sans', system-ui, sans-serif" },
+  { key: 'lato', label: 'Lato', stack: "'Lato', system-ui, sans-serif" },
+  { key: 'poppins', label: 'Poppins', stack: "'Poppins', system-ui, sans-serif" },
+  { key: 'montserrat', label: 'Montserrat', stack: "'Montserrat', system-ui, sans-serif" },
+  { key: 'nunito', label: 'Nunito', stack: "'Nunito', system-ui, sans-serif" },
+  { key: 'source-sans-3', label: 'Source Sans 3', stack: "'Source Sans 3', system-ui, sans-serif" },
+  { key: 'dm-sans', label: 'DM Sans', stack: "'DM Sans', system-ui, sans-serif" },
+];
+
+function fontFamilyToKey(value: string | null): string {
+  const match = FONT_OPTIONS.find((option) => option.key !== 'system' && option.stack === value);
+  return match ? match.key : 'system';
+}
+
+function fontKeyToStack(key: string): string | null {
+  const option = FONT_OPTIONS.find((candidate) => candidate.key === key);
+  return option ? option.stack : null;
+}
 
 function GroupHeading({ children }: { children: React.ReactNode }) {
   return (
@@ -120,7 +144,7 @@ function OptionalColorPicker({
 }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <Label>{label}</Label>
         <button
           type="button"
@@ -131,7 +155,7 @@ function OptionalColorPicker({
           Reset to default
         </button>
       </div>
-      <ColorPicker label={label} value={value ?? '#000000'} onChange={onChange} />
+      <ColorPicker showLabel={false} label={label} value={value ?? '#000000'} onChange={onChange} />
     </div>
   );
 }
@@ -221,6 +245,32 @@ export function WidgetEditor({
     setDraft((current) => ({ ...current, ...partial }));
   }
 
+  /**
+   * Selecting a curated theme preset applies its full palette. Any bespoke
+   * color overrides the tenant may have set earlier (e.g. a legacy brand blue)
+   * would otherwise silently override the preset's own colors and the preview
+   * would no longer match the selected theme. Reset those overrides so the
+   * preset palette is expressed faithfully. This is generic for every preset —
+   * the renderer never branches on a theme id. The tenant can still re-apply
+   * individual custom colors afterwards (each is a separate field below).
+   */
+  function patchThemePreset(theme_preset: WidgetConfig['theme_preset']) {
+    if (!theme_preset) {
+      // Back to Classic: keep current custom colors as authored.
+      patch({ theme_preset });
+      return;
+    }
+    patch({
+      theme_preset,
+      primary_color: DEFAULT_PRIMARY_COLOR,
+      accent_color: DEFAULT_ACCENT_COLOR,
+      secondary_color: null,
+      header_color: null,
+      background_color: null,
+      text_color: null,
+    });
+  }
+
   async function save() {
     try {
       const result = await updateWidget.mutateAsync({ websiteId: config.website_id, changes });
@@ -243,7 +293,7 @@ export function WidgetEditor({
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr] xl:grid-cols-[minmax(0,460px)_1fr]">
       <div className="flex min-w-0 flex-col gap-5">
-        <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-b bg-background/95 px-1 pb-3 pt-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="sticky -top-8 z-30 flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-b bg-background pb-3 pt-1 shadow-sm">
           <div className="min-w-0">
             <h2 className="font-sans text-lg font-semibold">Customize widget</h2>
             <p className="text-sm text-muted-foreground">
@@ -297,10 +347,7 @@ export function WidgetEditor({
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4 p-4 pt-2">
-              <ThemeSelector
-                value={draft.theme_preset}
-                onChange={(theme_preset) => patch({ theme_preset })}
-              />
+              <ThemeSelector value={draft.theme_preset} onChange={patchThemePreset} />
               {draft.theme_preset ? (
                 <p className="text-xs text-muted-foreground">
                   Custom colors set below override this preset.
@@ -351,13 +398,18 @@ export function WidgetEditor({
                 onChange={(text_color) => patch({ text_color })}
               />
               <Field id="font-family" label="Font family">
-                <Input
+                <select
                   id="font-family"
-                  value={draft.font_family ?? ''}
-                  maxLength={100}
-                  placeholder="System default"
-                  onChange={(event) => patch({ font_family: event.target.value || null })}
-                />
+                  value={fontFamilyToKey(draft.font_family)}
+                  onChange={(event) => patch({ font_family: fontKeyToStack(event.target.value) })}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {FONT_OPTIONS.map(({ key, label }) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </Field>
             </CardContent>
           </Card>

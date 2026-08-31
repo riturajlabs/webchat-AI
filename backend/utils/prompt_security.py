@@ -252,9 +252,7 @@ class InjectionTracker:
         self._attempts[visitor_id].append(ts)
         # Prune old entries outside the window
         cutoff = ts - self._window
-        self._attempts[visitor_id] = [
-            t for t in self._attempts[visitor_id] if t > cutoff
-        ]
+        self._attempts[visitor_id] = [t for t in self._attempts[visitor_id] if t > cutoff]
 
     def is_escalated(self, visitor_id: str, *, now: float | None = None) -> bool:
         """Return True if the visitor has exceeded the escalation threshold."""

@@ -31,6 +31,7 @@ interface AuthContextValue {
   register: (name: string, email: string, password: string) => Promise<UserOut>;
   logout: () => Promise<void>;
   refreshSession: () => Promise<boolean>;
+  updateUser: (patch: Partial<Pick<UserOut, 'name' | 'avatar_url'>>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -120,6 +121,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateUser = useCallback((patch: Partial<Pick<UserOut, 'name' | 'avatar_url'>>) => {
+    setUser((current) => (current ? { ...current, ...patch } : current));
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -129,8 +134,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       register,
       logout,
       refreshSession,
+      updateUser,
     }),
-    [user, status, login, register, logout, refreshSession],
+    [user, status, login, register, logout, refreshSession, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

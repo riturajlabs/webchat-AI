@@ -817,8 +817,7 @@ class Settings(BaseSettings):
                         )
                 if not self._redis_url_has_password(self.redis_url) and not self.redis_password:
                     raise ValueError(
-                        "REDIS_URL must include a password in production, or set "
-                        "REDIS_PASSWORD."
+                        "REDIS_URL must include a password in production, or set REDIS_PASSWORD."
                     )
         if self.widget_rate_limit_enabled is None:
             self.widget_rate_limit_enabled = self.rate_limit_enabled
@@ -845,9 +844,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _validate_request_body_max_bytes(self) -> "Settings":
         if self.request_body_max_bytes < 1024:
-            raise ValueError(
-                "REQUEST_BODY_MAX_BYTES must be at least 1024 (1 KB)."
-            )
+            raise ValueError("REQUEST_BODY_MAX_BYTES must be at least 1024 (1 KB).")
         return self
 
     @model_validator(mode="after")

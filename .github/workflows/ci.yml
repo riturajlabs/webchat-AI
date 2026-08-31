@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -16,6 +19,8 @@ jobs:
     defaults:
       run:
         working-directory: .
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +47,8 @@ jobs:
   frontend:
     name: Frontend (lint · typecheck · build · test)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -71,23 +78,154 @@ jobs:
       - name: Test
         run: pnpm test
 
-  docker:
-    name: Docker (build images)
+  validate:
+    name: Security & infra validation (secrets · compose · hardening)
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build API image
-        run: docker build -f docker/Dockerfile.api -t webchat-api:ci .
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
 
-      - name: Build Worker image
-        run: docker build -f docker/Dockerfile.worker -t webchat-worker:ci .
+      - name: Install dependencies
+        run: uv sync --frozen
 
-      - name: Build Dashboard image
-        run: docker build -f docker/Dockerfile.dashboard -t webchat-dashboard:ci .
+      - name: Secret scan (never track .env / secrets)
+        run: scripts/check-secrets.sh
 
-      - name: Build Widget image
-        run: docker build -f docker/Dockerfile.widget -t webchat-widget:ci .
+      - name: Docker security posture
+        run: scripts/check-docker-security.sh
+
+      - name: Compose file validation (base)
+        run: docker compose -f docker/compose.yml config --quiet
+
+      - name: Compose file validation (base + production overlay)
+        run: docker compose --env-file .env.production.example -f docker/compose.yml -f docker/compose.prod.yml config --quiet
+
+      - name: Production env template passes config.py validators
+        run: |
+          cp .env.production.example /tmp/env.prod
+          sed -i "s|^JWT_SECRET=.*|JWT_SECRET=0123456789abcdef$(openssl rand -hex 20)|" /tmp/env.prod
+          uv run python -c "
+          import sys; sys.path.insert(0, '.')
+          from backend.core.config import Settings
+          s = Settings(_env_file='/tmp/env.prod')
+          assert s.environment == 'production', s.environment
+          assert s.enable_docs is False, 'ENABLE_DOCS must be false in production'
+          assert s.rate_limit_enabled is True, 'RATE_LIMIT_ENABLED must be true'
+          print('production env template passes config.py validators')
+          "
+
+  docker:
+    name: Docker (build cached · scan with Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build API image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          tags: webchat-api:ci
+          load: true
+          cache-from: type=gha,scope=webchat-api
+          cache-to: type=gha,mode=max,scope=webchat-api
+
+      - name: Build Worker image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.worker
+          tags: webchat-worker:ci
+          load: true
+          cache-from: type=gha,scope=webchat-worker
+          cache-to: type=gha,mode=max,scope=webchat-worker
+
+      - name: Build Dashboard image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.dashboard
+          tags: webchat-dashboard:ci
+          load: true
+          cache-from: type=gha,scope=webchat-dashboard
+          cache-to: type=gha,mode=max,scope=webchat-dashboard
+
+      - name: Build Widget image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.widget
+          tags: webchat-widget:ci
+          load: true
+          cache-from: type=gha,scope=webchat-widget
+          cache-to: type=gha,mode=max,scope=webchat-widget
+
+      # Container vulnerability scanning. Fails on HIGH/CRITICAL findings with a
+      # fix available (--ignore-unfixed) to avoid false failures from base-image
+      # backports that the distro has not yet shipped. SARIF is uploaded so
+      # findings surface in the GitHub Security tab.
+      - name: Scan API image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: webchat-api:ci
+          format: sarif
+          output: trivy-api.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Scan Worker image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: webchat-worker:ci
+          format: sarif
+          output: trivy-worker.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Scan Dashboard image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: webchat-dashboard:ci
+          format: sarif
+          output: trivy-dashboard.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Scan Widget image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: webchat-widget:ci
+          format: sarif
+          output: trivy-widget.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: .
+          category: trivy
 
   # Widget E2E (Playwright) - full no-mock flow via scripts/e2e-widget.sh.
   #
@@ -105,6 +243,8 @@ jobs:
     needs: [backend, frontend]
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

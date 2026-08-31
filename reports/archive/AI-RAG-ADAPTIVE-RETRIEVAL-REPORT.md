@@ -49,7 +49,7 @@ Score ≤ 0 → SIMPLE, 1–2 → MEDIUM, ≥ 3 → COMPLEX.
 ### Feature Flag
 
 ```python
-enable_adaptive_retrieval: bool = False          # opt-in
+enable_adaptive_retrieval: bool = False  # opt-in
 adaptive_simple_top_k: int = 4
 adaptive_simple_rerank_top_k: int = 3
 adaptive_simple_max_context_chars: int = 8000
@@ -100,9 +100,7 @@ raw_results = await self._vector.similarity_search(
 Accepts optional `max_context_chars` kwarg to override the fixed default:
 
 ```python
-context_items, sources = self._build_context(
-    results, max_context_chars=adaptive_max_context_chars
-)
+context_items, sources = self._build_context(results, max_context_chars=adaptive_max_context_chars)
 ```
 
 ## Test Results

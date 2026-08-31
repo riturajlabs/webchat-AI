@@ -23,7 +23,9 @@ echo ""
 # ── 1. Check tracked env files ──────────────────────────────────────────────
 echo "[1/4] Tracked .env files"
 TRACKED_ENVS=$(git ls-files --cached 2>/dev/null | grep -E '\.env' || true)
-BAD_ENVS=$(echo "$TRACKED_ENVS" | grep -v '\.env\.example' || true)
+# Allow committed templates only: .env.example and .env.<name>.example.
+# Real env files (.env, .env.development, .env.production) must never be tracked.
+BAD_ENVS=$(echo "$TRACKED_ENVS" | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example$' || true)
 
 if [ -z "$BAD_ENVS" ]; then
     pass "No tracked .env files (only .env.example)"
@@ -63,44 +65,44 @@ TRACKED_FILES=$(git ls-files --cached 2>/dev/null \
 SECRET_FOUND=0
 
 # Pattern: MongoDB URI with credentials (mongodb+srv://user:pass@)
-if echo "$TRACKED_FILES" | xargs grep -rn -E 'mongodb(\+srv)?://[^/]*:[^/]*@' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -E 'mongodb(\+srv)?://[^/]*:[^/]*@' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
     fail "MongoDB URI with embedded credentials found"
-    echo "$TRACKED_FILES" | xargs grep -rn -E 'mongodb(\+srv)?://[^/]*:[^/]*@' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -E 'mongodb(\+srv)?://[^/]*:[^/]*@' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 
 # Pattern: Redis URL with password (redis://:pass@)
-if echo "$TRACKED_FILES" | xargs grep -rn -E 'redis(s)?://:[^@]+@' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -E 'redis(s)?://:[^@]+@' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
     fail "Redis URL with embedded password found"
-    echo "$TRACKED_FILES" | xargs grep -rn -E 'redis(s)?://:[^@]+@' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -E 'redis(s)?://:[^@]+@' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 
 # Pattern: Generic API key assignments (KEY=sk-..., KEY=sk_live_, etc.)
-if echo "$TRACKED_FILES" | xargs grep -rn -E '(API_KEY|SECRET|TOKEN|PASSWORD)\s*=\s*(sk[_-]|whsec_|ghp_|gho_|xoxb-|xoxp-|AKIA|AIza)' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'YOUR_API_KEY' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -E '(API_KEY|SECRET|TOKEN|PASSWORD)\s*=\s*(sk[_-]|whsec_|ghp_|gho_|xoxb-|xoxp-|AKIA|AIza)' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'YOUR_API_KEY' | head -5 > /dev/null 2>&1; then
     fail "Possible API key or secret value found in tracked file"
-    echo "$TRACKED_FILES" | xargs grep -rn -E '(API_KEY|SECRET|TOKEN|PASSWORD)\s*=\s*(sk[_-]|whsec_|ghp_|gho_|xoxb-|xoxp-|AKIA|AIza)' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'YOUR_API_KEY' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -E '(API_KEY|SECRET|TOKEN|PASSWORD)\s*=\s*(sk[_-]|whsec_|ghp_|gho_|xoxb-|xoxp-|AKIA|AIza)' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'YOUR_API_KEY' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 
 # Pattern: Private key blocks
-if echo "$TRACKED_FILES" | xargs grep -rn -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | head -5 > /dev/null 2>&1; then
     fail "Private key file tracked in git"
-    echo "$TRACKED_FILES" | xargs grep -rn -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -l 'BEGIN.*PRIVATE KEY' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 
 # Pattern: Bearer tokens with real-looking values
-if echo "$TRACKED_FILES" | xargs grep -rn -E 'Bearer\s+[A-Za-z0-9_\-]{20,}' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -E 'Bearer\s+[A-Za-z0-9_\-]{20,}' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 > /dev/null 2>&1; then
     fail "Possible Bearer token found in tracked file"
-    echo "$TRACKED_FILES" | xargs grep -rn -E 'Bearer\s+[A-Za-z0-9_\-]{20,}' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -E 'Bearer\s+[A-Za-z0-9_\-]{20,}' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 
 # Pattern: Generic password in config with real-looking value
-if echo "$TRACKED_FILES" | xargs grep -rn -iE '(password|passwd|pwd)\s*[:=]\s*["\x27]?[A-Za-z0-9_\-]{8,}' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'CHANGE_ME' | grep -v 'YOUR_' | head -5 > /dev/null 2>&1; then
+if echo "$TRACKED_FILES" | xargs grep -rn -iE '(password|passwd|pwd)\s*[:=]\s*["\x27]?[A-Za-z0-9_\-]{8,}' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'CHANGE_ME' | grep -v 'YOUR_' | head -5 > /dev/null 2>&1; then
     fail "Possible hardcoded password found"
-    echo "$TRACKED_FILES" | xargs grep -rn -iE '(password|passwd|pwd)\s*[:=]\s*["\x27]?[A-Za-z0-9_\-]{8,}' 2>/dev/null | grep -v '\.env\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'CHANGE_ME' | grep -v 'YOUR_' | head -5 | while IFS= read -r line; do echo "         $line"; done
+    echo "$TRACKED_FILES" | xargs grep -rn -iE '(password|passwd|pwd)\s*[:=]\s*["\x27]?[A-Za-z0-9_\-]{8,}' 2>/dev/null | grep -vE '\.env([.-][a-zA-Z0-9_-]+)*\.example' | grep -v 'check-secrets.sh' | grep -v '\.md:' | grep -v 'CHANGE_ME' | grep -v 'YOUR_' | head -5 | while IFS= read -r line; do echo "         $line"; done
     SECRET_FOUND=1
 fi
 

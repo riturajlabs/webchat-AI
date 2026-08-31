@@ -4,20 +4,19 @@
  * backend/schemas/widget.py).
  */
 
+import type { THEME_PRESETS } from '@webchat/themes';
+
 export type WidgetTheme = 'light' | 'dark' | 'auto';
 
 export type WidgetPosition = 'bottom-right' | 'bottom-left';
 
-/** Theme preset id (`@webchat/themes`); empty string = classic custom colors. */
-export type WidgetThemePreset =
-  | ''
-  | 'ocean-blue'
-  | 'midnight-dark'
-  | 'emerald-support'
-  | 'purple-ai'
-  | 'minimal-white'
-  | 'sunset'
-  | 'modern-gradient';
+/**
+ * Theme preset id (`@webchat/themes`); empty string = classic custom colors.
+ * Derived from the canonical `THEME_PRESETS` registry in `@webchat/themes` so
+ * every registered preset is automatically selectable, previewable and savable
+ * without re-listing ids here (dynamic theme registration).
+ */
+export type WidgetThemePreset = '' | (typeof THEME_PRESETS)[number]['id'];
 
 export type WidgetFontSize = 'sm' | 'md' | 'lg';
 

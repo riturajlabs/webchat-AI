@@ -36,6 +36,19 @@
   --input: hsl(0 0% 89.8%);
   --ring: hsl(217.2 91.2% 59.8%);
   --radius: 0.625rem;
+
+  /*
+   * Analytics chart palette (analytics-chart.tsx reads these as CSS vars so
+   * every series adapts to light/dark without hard-coded hex values).
+   * --chart-1 conversations, --chart-2 messages, --chart-3 input tokens,
+   * --chart-4 output tokens, --chart-5 questions, --chart-6 ratings.
+   */
+  --chart-1: hsl(243 75% 59%);
+  --chart-2: hsl(160 84% 39%);
+  --chart-3: hsl(38 92% 50%);
+  --chart-4: hsl(258 90% 66%);
+  --chart-5: hsl(330 81% 60%);
+  --chart-6: hsl(217.2 91.2% 59.8%);
 }
 
 .dark {
@@ -62,6 +75,13 @@
   --border: hsl(0 0% 14.9%);
   --input: hsl(0 0% 14.9%);
   --ring: hsl(217.2 91.2% 59.8%);
+
+  --chart-1: hsl(243 75% 67%);
+  --chart-2: hsl(160 84% 45%);
+  --chart-3: hsl(38 92% 55%);
+  --chart-4: hsl(258 90% 72%);
+  --chart-5: hsl(330 81% 68%);
+  --chart-6: hsl(217.2 91.2% 65%);
 }
 
 @theme inline {

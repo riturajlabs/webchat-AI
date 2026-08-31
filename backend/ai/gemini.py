@@ -128,9 +128,7 @@ class GoogleGeminiClient:
         for attempt in range(max_retries + 1):
             emitted_any = False
             try:
-                async for delta in self._stream_generate_once(
-                    system=system, messages=messages
-                ):
+                async for delta in self._stream_generate_once(system=system, messages=messages):
                     emitted_any = True
                     yield delta
                 return  # success — exit retry loop
@@ -145,7 +143,7 @@ class GoogleGeminiClient:
                 # caller emits an error and discards the partial text.
                 if emitted_any or attempt >= max_retries:
                     raise
-                delay = base_delay * (2 ** attempt)
+                delay = base_delay * (2**attempt)
                 logger.warning(
                     "gemini_retry attempt=%d/%d delay=%.1fs error=%s",
                     attempt + 1,

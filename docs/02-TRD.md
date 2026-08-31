@@ -58,76 +58,76 @@ The architecture is designed with scalability, security, maintainability, and pe
 
 ## Frontend
 
-| Technology | Purpose |
-|------------|---------|
-| Next.js 15 | Dashboard Framework |
-| React 19 | UI Library |
-| TypeScript | Type Safety |
-| Tailwind CSS | Styling |
-| shadcn/ui | UI Components |
-| React Query | API State Management |
-| React Hook Form | Forms |
-| Zod | Validation |
-| Axios | HTTP Client |
+| Technology      | Purpose              |
+| --------------- | -------------------- |
+| Next.js 15      | Dashboard Framework  |
+| React 19        | UI Library           |
+| TypeScript      | Type Safety          |
+| Tailwind CSS    | Styling              |
+| shadcn/ui       | UI Components        |
+| React Query     | API State Management |
+| React Hook Form | Forms                |
+| Zod             | Validation           |
+| Axios           | HTTP Client          |
 
 ---
 
 ## Backend
 
-| Technology | Purpose |
-|------------|---------|
-| FastAPI | REST API |
-| Python 3.13 | Backend Language |
-| Uvicorn | ASGI Server |
-| Pydantic v2 | Validation |
-| Motor | Async MongoDB Driver |
-| Celery | Background Jobs |
-| Redis | Queue & Cache |
+| Technology  | Purpose              |
+| ----------- | -------------------- |
+| FastAPI     | REST API             |
+| Python 3.13 | Backend Language     |
+| Uvicorn     | ASGI Server          |
+| Pydantic v2 | Validation           |
+| Motor       | Async MongoDB Driver |
+| Celery      | Background Jobs      |
+| Redis       | Queue & Cache        |
 
 ---
 
 ## AI Stack
 
-| Technology | Purpose |
-|------------|---------|
-| LangGraph | AI Workflow |
-| LangChain | RAG Components |
-| Gemini 2.5 Flash | LLM |
-| Google Text Embedding-004 | Embeddings |
-| MongoDB Vector Search | Similarity Search |
+| Technology                | Purpose           |
+| ------------------------- | ----------------- |
+| LangGraph                 | AI Workflow       |
+| LangChain                 | RAG Components    |
+| Gemini 2.5 Flash          | LLM               |
+| Google Text Embedding-004 | Embeddings        |
+| MongoDB Vector Search     | Similarity Search |
 
 ---
 
 ## Web Crawling
 
-| Technology | Purpose |
-|------------|---------|
-| Playwright | Dynamic Rendering |
-| BeautifulSoup | HTML Parsing |
-| Readability | Content Extraction |
-| lxml | Fast HTML Processing |
+| Technology    | Purpose              |
+| ------------- | -------------------- |
+| Playwright    | Dynamic Rendering    |
+| BeautifulSoup | HTML Parsing         |
+| Readability   | Content Extraction   |
+| lxml          | Fast HTML Processing |
 
 ---
 
 ## Database
 
-| Technology | Purpose |
-|------------|---------|
-| MongoDB Atlas | Primary Database |
+| Technology            | Purpose          |
+| --------------------- | ---------------- |
+| MongoDB Atlas         | Primary Database |
 | MongoDB Vector Search | Embedding Search |
-| Redis | Cache & Queue |
+| Redis                 | Cache & Queue    |
 
 ---
 
 ## Hosting
 
-| Component | Platform |
-|-----------|----------|
-| Frontend | Vercel |
-| Backend | Render |
-| Database | MongoDB Atlas |
-| Redis | Upstash Redis |
-| File Storage (Future) | Cloudinary |
+| Component             | Platform      |
+| --------------------- | ------------- |
+| Frontend              | Vercel        |
+| Backend               | Render        |
+| Database              | MongoDB Atlas |
+| Redis                 | Upstash Redis |
+| File Storage (Future) | Cloudinary    |
 
 ---
 
@@ -477,7 +477,6 @@ Support
 
 Future
 
-- Kubernetes
 - Load Balancer
 - Auto Scaling
 

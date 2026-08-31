@@ -22,15 +22,15 @@ export interface ChatSource {
 
 /**
  * Visitor feedback state on a completed assistant turn (Phase 12.4).
- * The widget only ever sends 5 (thumbs up) or 1 (thumbs down) on the backend's
- * 1-5 scale (ADR-005 §5.6). `status` drives the control: idle → submitting →
- * submitted, or error (with a retry path).
+ * The widget sends the visitor's 1-5 star rating on the backend's 1-5 scale
+ * (ADR-005 §5.6; 4-5 → helpful, 3 → other, 1-2 → wrong). `status` drives the
+ * control: idle → submitting → submitted, or error (with a retry path).
  */
 export type FeedbackStatus = 'idle' | 'submitting' | 'submitted' | 'error';
 
 export interface FeedbackState {
   status: FeedbackStatus;
-  rating: 1 | 5;
+  rating: 1 | 2 | 3 | 4 | 5;
   category: string;
   comment: string;
 }

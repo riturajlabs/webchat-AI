@@ -96,9 +96,7 @@ class AdaptiveProviderRouter:
         """
         ordered = await self._build_ordered_providers()
         self._fallback._providers = ordered
-        async for delta in self._fallback.stream_generate(
-            system=system, messages=messages
-        ):
+        async for delta in self._fallback.stream_generate(system=system, messages=messages):
             yield delta
         # After the stream completes, report success/failure for health
         # tracking.  ``FallbackGenerationClient`` already set
@@ -144,12 +142,8 @@ class AdaptiveProviderRouter:
         # Structured log for the selected provider.
         if healthy:
             best_name, best_score, best_health = healthy[0]
-            best_snapshot = next(
-                (s for n, s, _ in health_snapshots if n == best_name), None
-            )
-            best_latency = (
-                best_snapshot.average_latency_ms if best_snapshot else 0.0
-            )
+            best_snapshot = next((s for n, s, _ in health_snapshots if n == best_name), None)
+            best_latency = best_snapshot.average_latency_ms if best_snapshot else 0.0
             reason = "highest_score"
         elif cooldown:
             best_name = cooldown[0][0]

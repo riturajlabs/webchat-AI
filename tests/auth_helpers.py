@@ -13,6 +13,7 @@ from tests.fakes import (
     FakeAuditLogRepository,
     FakeMemberRepository,
     FakeRefreshTokenRepository,
+    FakeTenantPurgeRepository,
     FakeTenantRepository,
     FakeUserRepository,
     RecordingMailDispatcher,
@@ -32,6 +33,7 @@ class AuthEnv:
     audit: FakeAuditLogRepository
     mail: RecordingMailDispatcher
     service: AuthService
+    purge: FakeTenantPurgeRepository | None = None
 
 
 def build_auth_env(

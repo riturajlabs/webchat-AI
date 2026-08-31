@@ -233,7 +233,7 @@ describe('BillingPage', () => {
 
     await waitFor(() => expect(screen.getByRole('link', { name: 'Manage' })).toBeInTheDocument());
     expect(screen.queryAllByRole('button', { name: 'Upgrade' })).toHaveLength(0);
-    expect(screen.getAllByText('Unlimited').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Unlimited/).length).toBeGreaterThan(0);
   });
 
   it('shows non-purchasable plans without an upgrade button', async () => {

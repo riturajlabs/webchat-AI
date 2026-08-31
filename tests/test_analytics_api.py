@@ -240,6 +240,9 @@ async def test_performance_reports_response_time_stats(client) -> None:
     assert body["avg_response_time"] == 1.667
     assert body["fastest_response_time"] == 0.5
     assert body["slowest_response_time"] == 3.0
+    assert body["median_response_time"] == 1.5
+    assert body["p95_response_time"] == 3.0
+    assert body["distribution"] == {"<1s": 1, "1-2s": 1, "2-5s": 1, "5-10s": 0, "10s+": 0}
 
 
 async def test_performance_empty_returns_nulls(client) -> None:
@@ -254,6 +257,9 @@ async def test_performance_empty_returns_nulls(client) -> None:
         "avg_response_time": None,
         "fastest_response_time": None,
         "slowest_response_time": None,
+        "median_response_time": None,
+        "p95_response_time": None,
+        "distribution": {"<1s": 0, "1-2s": 0, "2-5s": 0, "5-10s": 0, "10s+": 0},
         "avg_embedding_ms": None,
         "avg_retrieval_ms": None,
         "avg_generation_ms": None,
@@ -318,6 +324,122 @@ async def test_analytics_rejects_invalid_days(client) -> None:
     assert test_client.get("/api/analytics/overview?days=0", headers=headers).status_code == 422
     assert test_client.get("/api/analytics/questions?limit=0", headers=headers).status_code == 422
     assert test_client.get("/api/analytics/questions?limit=51", headers=headers).status_code == 422
+
+
+async def test_custom_range_requires_both_dates_and_sane_span(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_day(analytics_env, tenant_id=tenant_id, website_id="web-1", date=_days_ago(1))
+
+    tomorrow = (datetime.now(UTC) + timedelta(days=1)).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
+    over_limit_end = _days_ago(91).date().isoformat()
+
+    # Both or neither.
+    assert (
+        test_client.get(f"/api/analytics/summary?start={today}", headers=headers).status_code == 422
+    )
+    assert (
+        test_client.get(f"/api/analytics/summary?end={today}", headers=headers).status_code == 422
+    )
+    # start after end.
+    assert (
+        test_client.get(
+            f"/api/analytics/summary?start={tomorrow}&end={today}", headers=headers
+        ).status_code
+        == 422
+    )
+    # span > 90 days.
+    assert (
+        test_client.get(
+            f"/api/analytics/summary?start={over_limit_end}&end={today}", headers=headers
+        ).status_code
+        == 422
+    )
+    # Invalid date format is rejected at parse time.
+    assert (
+        test_client.get(
+            "/api/analytics/summary?start=not-a-date&end=2026-01-02", headers=headers
+        ).status_code
+        == 422
+    )
+
+
+async def test_summary_reports_previous_period_for_deltas(client) -> None:
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_day(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(1),
+        chats=10,
+        messages=10,
+        input_tokens=100,
+        output_tokens=50,
+        response_times=[2.0],
+    )
+    await seed_day(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(8),
+        chats=4,
+        messages=4,
+        input_tokens=40,
+        output_tokens=20,
+        response_times=[1.0],
+    )
+
+    response = test_client.get("/api/analytics/summary", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_conversations"] == 10
+    assert body["previous_conversations"] == 4
+    assert body["previous_messages"] == 4
+    assert body["previous_tokens"] == 60
+    assert body["previous_avg_response_time"] == 1.0
+
+
+async def test_custom_range_and_days_agree_on_timeseries(client) -> None:
+    """A custom range is honored end-to-end and matches the days view."""
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    await seed_day(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        date=_days_ago(2),
+        chats=4,
+        messages=8,
+        input_tokens=200,
+        output_tokens=100,
+    )
+    start = (datetime.now(UTC) - timedelta(days=4)).date().isoformat()
+    end = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+
+    # Explicit range: 4 points (start..end), zero-filled except the seeded day.
+    response = test_client.get(
+        f"/api/analytics/timeseries?start={start}&end={end}", headers=headers
+    )
+
+    assert response.status_code == 200
+    points = response.json()
+    assert len(points) == 4
+    assert [point["date"] for point in points] == [
+        (datetime.now(UTC) - timedelta(days=4)).date().isoformat(),
+        (datetime.now(UTC) - timedelta(days=3)).date().isoformat(),
+        (datetime.now(UTC) - timedelta(days=2)).date().isoformat(),
+        (datetime.now(UTC) - timedelta(days=1)).date().isoformat(),
+    ]
+    active = next(point for point in points if point["date"] == _days_ago(2).date().isoformat())
+    assert active["conversations"] == 4
+    assert active["tokens"] == 300
+    assert sum(point["tokens"] for point in points) == 300
 
 
 async def test_analytics_requires_owner_or_admin_role(client) -> None:
@@ -568,6 +690,39 @@ async def test_feedback_reports_sentiment_and_distribution(client) -> None:
     assert body["negative_percentage"] == 33.3
     assert body["average_rating"] == 3.33  # (5+5+4+3+2+1) / 6
     assert body["distribution"] == {"5": 2, "4": 1, "3": 1, "2": 1, "1": 1}
+
+
+async def test_feedback_reports_rating_trend_per_day(client) -> None:
+    """The feedback response includes a chronological average-rating trend."""
+    test_client, _, analytics_env = client
+    headers, tenant_id = _auth(test_client)
+    await seed_website(analytics_env, tenant_id=tenant_id, website_id="web-1")
+    for _ in range(2):
+        await seed_feedback(
+            analytics_env,
+            tenant_id=tenant_id,
+            website_id="web-1",
+            rating=5,
+            date=_days_ago(2),
+        )
+    await seed_feedback(
+        analytics_env,
+        tenant_id=tenant_id,
+        website_id="web-1",
+        rating=2,
+        date=_days_ago(1),
+    )
+
+    response = test_client.get("/api/analytics/feedback", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [
+        (point["date"], point["average_rating"], point["ratings"]) for point in body["trend"]
+    ] == [
+        (_days_ago(2).date().isoformat(), 5.0, 2),
+        (_days_ago(1).date().isoformat(), 2.0, 1),
+    ]
 
 
 async def test_feedback_empty_returns_zero_sentiment(client) -> None:

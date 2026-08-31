@@ -1,7 +1,7 @@
 'use client';
 
 import { ChevronDown, ExternalLink, Pencil, Play, RefreshCw, Trash2, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from './status-badge';
@@ -31,10 +31,25 @@ export function WebsiteCard({
   onDelete,
 }: WebsiteCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [website.preview_image]);
   const isRunning = crawlJob?.status === 'running' || crawlPending;
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-sm">
+      {website.preview_image && !imageFailed ? (
+        <div className="-m-1 overflow-hidden rounded-md border border-border/60">
+          {/* eslint-disable-next-line @next/next/no-img-element -- page metadata preview image URL */}
+          <img
+            src={website.preview_image}
+            alt=""
+            className="aspect-[16/9] w-full object-cover"
+            onError={() => setImageFailed(true)}
+          />
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-semibold">{website.name}</h3>
@@ -113,19 +128,21 @@ export function WebsiteCard({
         {detailsOpen ? (
           <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <dt>Knowledge status</dt>
-            <dd className="text-right font-medium capitalize text-foreground">
+            <dd className="text-right font-medium capitalize text-foreground min-w-0">
               {website.knowledge_status}
             </dd>
             <dt>Chunks created</dt>
-            <dd className="text-right font-medium text-foreground">{website.knowledge_chunks}</dd>
+            <dd className="text-right font-medium text-foreground min-w-0">
+              {website.knowledge_chunks}
+            </dd>
             <dt>Documents embedded</dt>
-            <dd className="text-right font-medium text-foreground">
+            <dd className="text-right font-medium text-foreground min-w-0">
               {website.knowledge_documents}
             </dd>
             <dt>Widget ID</dt>
-            <dd className="text-right font-mono font-medium text-foreground">
+            <dd className="min-w-0 max-w-full text-right font-mono font-medium text-foreground">
               {website.widget_id ? (
-                <span className="truncate" title={website.widget_id}>
+                <span className="break-all" title={website.widget_id}>
                   {website.widget_id}
                 </span>
               ) : (

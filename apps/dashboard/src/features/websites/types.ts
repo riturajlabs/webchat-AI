@@ -23,6 +23,8 @@ export interface Website {
   knowledge_documents: number;
   knowledge_chunks: number;
   last_knowledge_at: string | null;
+  /** Open Graph / Twitter preview image URL surfaced on the website card. */
+  preview_image?: string | null;
 }
 
 export interface Widget {

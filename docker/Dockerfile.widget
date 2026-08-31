@@ -47,4 +47,8 @@ RUN chown -R nginx:nginx /usr/share/nginx/html && \
 
 EXPOSE 80
 
+# Default healthcheck (can be overridden): the stable widget bundle must exist.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- --spider http://127.0.0.1/webchat-widget.iife.min.js
+
 USER nginx

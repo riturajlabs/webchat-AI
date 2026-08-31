@@ -19,8 +19,13 @@ class TestSensitiveDataFilter:
     def test_masks_api_key_in_message(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="api_key=sk-abc123def456ghi789jkl0mno", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="api_key=sk-abc123def456ghi789jkl0mno",
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert "REDACTED" in record.msg
@@ -29,9 +34,13 @@ class TestSensitiveDataFilter:
     def test_masks_bearer_token(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
             msg="authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test.signature",
-            args=(), exc_info=None,
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert "REDACTED" in record.msg
@@ -39,8 +48,13 @@ class TestSensitiveDataFilter:
     def test_masks_password_assignment(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="password=SuperSecret123!", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="password=SuperSecret123!",
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert "REDACTED" in record.msg
@@ -49,9 +63,13 @@ class TestSensitiveDataFilter:
     def test_masks_github_token(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
             msg="using ghp_abcdefghij1234567890abcdefghij1234 for auth",
-            args=(), exc_info=None,
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert "REDACTED" in record.msg
@@ -60,9 +78,13 @@ class TestSensitiveDataFilter:
     def test_masks_slack_token(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
             msg="token xoxb-1234567890-1234567890123-abcdef",
-            args=(), exc_info=None,
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert "REDACTED" in record.msg
@@ -71,9 +93,13 @@ class TestSensitiveDataFilter:
     def test_preserves_normal_message(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
             msg="chat_request tenant=t1 website=w1",
-            args=(), exc_info=None,
+            args=(),
+            exc_info=None,
         )
         filt.filter(record)
         assert record.msg == "chat_request tenant=t1 website=w1"
@@ -81,16 +107,26 @@ class TestSensitiveDataFilter:
     def test_always_returns_true(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="normal", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="normal",
+            args=(),
+            exc_info=None,
         )
         assert filt.filter(record) is True
 
     def test_clears_args_after_formatting(self) -> None:
         filt = SensitiveDataFilter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="api_key=%s", args=("sk-abc123def456ghi789jkl0",), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="api_key=%s",
+            args=("sk-abc123def456ghi789jkl0",),
+            exc_info=None,
         )
         filt.filter(record)
         assert record.args is None

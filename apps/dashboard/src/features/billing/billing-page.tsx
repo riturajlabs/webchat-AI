@@ -20,6 +20,9 @@ import { formatCompact, formatNumber } from '@/lib/format';
 import { useCreateCheckout, useSubscriptionReport } from './hooks';
 import { SUBSCRIPTION_STATUS_LABELS, formatDate, formatPrice } from './types';
 import type { PaymentOut } from './types';
+import { PLAN_CATALOG, type MarketingPlan } from './plan-catalog';
+import { PricingCard } from './pricing-card';
+import type { Plan } from '@/features/usage/types';
 
 const PLAN_LIMIT_FIELDS: { key: keyof PlanLimits; label: string }[] = [
   { key: 'max_websites', label: 'Websites' },
@@ -144,16 +147,23 @@ function CurrentPlanCard({
   );
 }
 
-function PlanLimitsList({ limits }: { limits: PlanLimits }) {
+/** Merge a live plan with the static marketing presentation (features/highlighted). */
+function toMarketingPlan(plan: Plan): MarketingPlan {
+  const marketing = PLAN_CATALOG.find((entry) => entry.id === plan.id);
+  return {
+    ...plan,
+    features: marketing?.features ?? [],
+    cta: marketing?.cta ?? 'contact-sales',
+    highlighted: marketing?.highlighted ?? false,
+  };
+}
+
+function CurrentBadge() {
   return (
-    <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
-      {PLAN_LIMIT_FIELDS.map(({ key, label }) => (
-        <li key={key} className="flex items-center justify-between gap-2">
-          <span>{label}</span>
-          <span className="font-medium text-foreground">{formatLimit(limits[key])}</span>
-        </li>
-      ))}
-    </ul>
+    <span className="inline-flex items-center gap-1 rounded-full bg-blue-600/10 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/15 dark:text-blue-400">
+      <CheckCircle2 className="size-3" aria-hidden="true" />
+      Current plan
+    </span>
   );
 }
 
@@ -172,8 +182,8 @@ function AvailablePlans({
 
   if (isPending) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {[0, 1, 2].map((index) => (
+      <div className="grid gap-4 sm:grid-cols-2">
+        {[0, 1].map((index) => (
           <Card key={index}>
             <CardHeader>
               <Skeleton className="h-5 w-24" />
@@ -200,52 +210,47 @@ function AvailablePlans({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-6 sm:grid-cols-2">
         {(plans ?? []).map((plan) => {
           const isCurrent = plan.id === currentPlanId;
           const isPurchasable = (plan.price_cents ?? 0) > 0;
-          const price = formatPrice(plan.price_cents ?? null, plan.currency ?? 'USD');
+          const marketingPlan = toMarketingPlan(plan);
+
+          let footer: React.ReactNode;
+          if (isCurrent) {
+            footer = (
+              <div className="mt-auto flex flex-col gap-3">
+                <CurrentBadge />
+                <Button asChild variant="outline" className="w-full">
+                  <Link href="/usage">Manage</Link>
+                </Button>
+              </div>
+            );
+          } else if (isPurchasable) {
+            footer = (
+              <Button
+                className="mt-auto w-full"
+                disabled={pendingPlan === plan.id}
+                onClick={() => onUpgrade(plan.id)}
+              >
+                {pendingPlan === plan.id ? 'Redirecting…' : 'Upgrade'}
+              </Button>
+            );
+          } else {
+            footer = (
+              <p className="mt-auto text-center text-xs text-muted-foreground">
+                {plan.id === 'enterprise' ? 'Contact sales' : 'Trial plan'}
+              </p>
+            );
+          }
+
           return (
             <div
               key={plan.id}
               aria-current={isCurrent ? 'true' : undefined}
-              className={
-                isCurrent
-                  ? 'relative flex flex-col gap-3 rounded-lg border border-blue-600 bg-blue-600/5 p-4'
-                  : 'flex flex-col gap-3 rounded-lg border p-4'
-              }
+              className={isCurrent ? 'relative rounded-2xl' : 'relative'}
             >
-              {isCurrent ? (
-                <span className="absolute -top-2.5 left-4 inline-flex items-center gap-1 rounded-full bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">
-                  <CheckCircle2 className="size-3" aria-hidden="true" />
-                  Current plan
-                </span>
-              ) : null}
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="font-medium">{plan.name}</p>
-                <p className="text-sm text-muted-foreground">{price}</p>
-              </div>
-              <p className="text-xs text-muted-foreground">{plan.description}</p>
-              <PlanLimitsList limits={plan.limits} />
-              <div className="mt-auto pt-2">
-                {isCurrent ? (
-                  <Button asChild variant="outline" className="w-full">
-                    <Link href="/usage">Manage</Link>
-                  </Button>
-                ) : isPurchasable ? (
-                  <Button
-                    className="w-full"
-                    disabled={pendingPlan === plan.id}
-                    onClick={() => onUpgrade(plan.id)}
-                  >
-                    {pendingPlan === plan.id ? 'Redirecting…' : 'Upgrade'}
-                  </Button>
-                ) : (
-                  <p className="text-center text-xs text-muted-foreground">
-                    {plan.id === 'enterprise' ? 'Contact sales' : 'Trial plan'}
-                  </p>
-                )}
-              </div>
+              <PricingCard plan={marketingPlan} footer={footer} />
             </div>
           );
         })}

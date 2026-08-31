@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFeedbackControl } from './feedback';
+import { createFeedbackControl, type FeedbackRating } from './feedback';
 
 function makeControl() {
   const onSubmit = vi.fn();
@@ -11,26 +11,39 @@ function click(el: Element): void {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 }
 
-function clickByLabel(root: HTMLElement, label: string): void {
-  const target = root.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-  if (!target) {
-    throw new Error(`No element with aria-label="${label}"`);
+function clickStar(root: HTMLElement, rating: FeedbackRating): void {
+  const star = root.querySelector<HTMLElement>(`.wc-star[data-rating="${rating}"]`);
+  if (!star) {
+    throw new Error(`No star with data-rating="${rating}"`);
   }
-  click(target);
+  click(star);
+}
+
+function stars(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('.wc-star'));
+}
+
+function pressed(root: HTMLElement): FeedbackRating[] {
+  return stars(root)
+    .filter((star) => star.getAttribute('aria-pressed') === 'true')
+    .map((star) => Number(star.dataset.rating) as FeedbackRating);
 }
 
 describe('createFeedbackControl', () => {
-  it('renders thumbs with aria-pressed="false" and a status region', () => {
+  it('renders five stars with aria-pressed="false" and a status region', () => {
     const { control } = makeControl();
     const root = control.element;
 
     expect(root.className).toContain('wc-feedback');
-    const up = root.querySelector('.wc-thumb-up');
-    const down = root.querySelector('.wc-thumb-down');
-    expect(up?.getAttribute('aria-pressed')).toBe('false');
-    expect(down?.getAttribute('aria-pressed')).toBe('false');
-    expect(up?.tagName).toBe('BUTTON');
-    expect(down?.tagName).toBe('BUTTON');
+    const rendered = stars(root);
+    expect(rendered).toHaveLength(5);
+    expect(rendered.map((star) => star.getAttribute('aria-pressed'))).toEqual(
+      Array(5).fill('false'),
+    );
+    expect(rendered.every((star) => star.tagName === 'BUTTON')).toBe(true);
+    // Saved-selection buttons expose their value in a machine-usable way.
+    expect(rendered[0].getAttribute('aria-label')).toBe('Rate 1 star');
+    expect(rendered[4].getAttribute('aria-label')).toBe('Rate 5 stars');
     // Status region present (role="status") but hidden + empty in the idle state.
     const status = root.querySelector('[role="status"]');
     expect(status).toBeTruthy();
@@ -41,73 +54,90 @@ describe('createFeedbackControl', () => {
     expect(root.querySelector('.wc-feedback-submit')).toBeNull();
   });
 
-  it('submits rating 5 immediately on thumbs-up', () => {
+  it('submits rating 5 immediately on the five-star click', () => {
     const { control, onSubmit } = makeControl();
     const root = control.element;
 
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 5);
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith({ rating: 5, category: 'helpful', comment: '' });
-    expect(root.querySelector('.wc-thumb-up')?.getAttribute('aria-pressed')).toBe('true');
-    expect(root.querySelector('.wc-thumb-down')?.getAttribute('aria-pressed')).toBe('false');
+    expect(pressed(root)).toEqual([1, 2, 3, 4, 5]);
   });
 
-  it('submits rating 1 immediately on thumbs-down', () => {
+  it('submits rating 1 immediately with the negative category', () => {
     const { control, onSubmit } = makeControl();
     const root = control.element;
 
-    clickByLabel(root, 'This answer was not helpful');
+    clickStar(root, 1);
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(onSubmit).toHaveBeenCalledWith({ rating: 1, category: 'other', comment: '' });
-    expect(root.querySelector('.wc-thumb-down')?.getAttribute('aria-pressed')).toBe('true');
+    expect(onSubmit).toHaveBeenCalledWith({ rating: 1, category: 'wrong', comment: '' });
+    expect(pressed(root)).toEqual([1]);
   });
 
-  it('sync(submitted) shows the thanks line and disables both thumbs', () => {
+  it('submits rating 3 as a neutral category', () => {
+    const { control, onSubmit } = makeControl();
+    const root = control.element;
+
+    clickStar(root, 3);
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith({ rating: 3, category: 'other', comment: '' });
+    expect(pressed(root)).toEqual([1, 2, 3]);
+  });
+
+  it('submits rating 4 as helpful', () => {
+    const { control, onSubmit } = makeControl();
+    const root = control.element;
+
+    clickStar(root, 4);
+
+    expect(onSubmit).toHaveBeenCalledWith({ rating: 4, category: 'helpful', comment: '' });
+  });
+
+  it('sync(submitted) shows the thanks line and disables all stars', () => {
     const { control } = makeControl();
     const root = control.element;
 
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 5);
     control.sync('submitted');
 
     const status = root.querySelector('[role="status"]') as HTMLElement;
     expect(status.hidden).toBe(false);
     expect(status.textContent).toBe('Thanks for your feedback');
-    expect(root.querySelector('.wc-thumb-up')?.hasAttribute('disabled')).toBe(true);
-    expect(root.querySelector('.wc-thumb-down')?.hasAttribute('disabled')).toBe(true);
+    expect(stars(root).every((star) => star.hasAttribute('disabled'))).toBe(true);
   });
 
-  it('sync(submitted) after thumbs-down shows the improvement note', () => {
+  it('sync(submitted) after a low rating shows the improvement note', () => {
     const { control } = makeControl();
     const root = control.element;
 
-    clickByLabel(root, 'This answer was not helpful');
+    clickStar(root, 2);
     control.sync('submitted');
 
     const status = root.querySelector('[role="status"]') as HTMLElement;
     expect(status.textContent).toBe("Thanks, we'll improve");
   });
 
-  it('sync(submitting) shows a pending line and disables both thumbs', () => {
+  it('sync(submitting) shows a pending line and disables all stars', () => {
     const { control } = makeControl();
     const root = control.element;
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 5);
 
     control.sync('submitting');
 
     const status = root.querySelector('[role="status"]') as HTMLElement;
     expect(status.hidden).toBe(false);
     expect(status.textContent).toBe('Sending…');
-    expect(root.querySelector('.wc-thumb-up')?.hasAttribute('disabled')).toBe(true);
-    expect(root.querySelector('.wc-thumb-down')?.hasAttribute('disabled')).toBe(true);
+    expect(stars(root).every((star) => star.hasAttribute('disabled'))).toBe(true);
   });
 
-  it('sync(error) offers a retry prompt and re-enables the thumbs', () => {
+  it('sync(error) offers a retry prompt and re-enables the stars', () => {
     const { control, onSubmit } = makeControl();
     const root = control.element;
 
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 4);
     onSubmit.mockClear();
 
     control.sync('error');
@@ -115,24 +145,23 @@ describe('createFeedbackControl', () => {
     const status = root.querySelector('[role="status"]') as HTMLElement;
     expect(status.hidden).toBe(false);
     expect(status.textContent).toContain("Couldn't save");
-    expect(root.querySelector('.wc-thumb-up')?.hasAttribute('disabled')).toBe(false);
-    expect(root.querySelector('.wc-thumb-down')?.hasAttribute('disabled')).toBe(false);
+    expect(stars(root).every((star) => !star.hasAttribute('disabled'))).toBe(true);
 
     // A retry is simply a fresh submit through the same callback.
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 4);
     expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it('sync(idle) hides the status line and restores interactive thumbs', () => {
+  it('sync(idle) hides the status line and restores interactive stars', () => {
     const { control } = makeControl();
     const root = control.element;
-    clickByLabel(root, 'This answer was helpful');
+    clickStar(root, 5);
     control.sync('submitting');
     control.sync('idle');
 
     const status = root.querySelector('[role="status"]') as HTMLElement;
     expect(status.hidden).toBe(true);
     expect(status.textContent).toBe('');
-    expect(root.querySelector('.wc-thumb-up')?.hasAttribute('disabled')).toBe(false);
+    expect(stars(root).every((star) => !star.hasAttribute('disabled'))).toBe(true);
   });
 });

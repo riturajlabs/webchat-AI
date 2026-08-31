@@ -234,9 +234,7 @@ class RagService:
         self._rate_card = load_rate_card(settings.ai_model_pricing_json)
         self._warned_unpriced_models: set[str] = set()
 
-    async def _embed_question(
-        self, question: str
-    ) -> tuple[list[float], bool, EmbeddingIdentity]:
+    async def _embed_question(self, question: str) -> tuple[list[float], bool, EmbeddingIdentity]:
         """Embed `question`, caching identical questions across turns.
 
         Returns `(vector, cache_hit, identity)` so callers can report hit/miss and the
@@ -340,8 +338,7 @@ class RagService:
                 # History load failed: fall back to the raw question.  The
                 # later history await still surfaces the error downstream.
                 logger.exception(
-                    "query rewrite skipped: conversation memory unavailable "
-                    "(tenant=%s website=%s)",
+                    "query rewrite skipped: conversation memory unavailable (tenant=%s website=%s)",
                     tenant_id,
                     website_id,
                 )
@@ -391,9 +388,11 @@ class RagService:
                         # Hybrid keyword matching reranks cached vector hits
                         # only; it must not load unrelated website chunks.
                         load_chunks_ms = 0.0
-                        hybrid_candidate_count = len(raw_results) if isinstance(
-                            self._retrieval_strategy, HybridRetrievalStrategy
-                        ) else 0
+                        hybrid_candidate_count = (
+                            len(raw_results)
+                            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
+                            else 0
+                        )
                         all_chunks = None
                         results, metrics = self._retrieval_strategy.search(
                             query=search_query,
@@ -481,9 +480,9 @@ class RagService:
         # Hybrid keyword matching reranks vector hits only; it must not load
         # or introduce unrelated chunks from the rest of the website.
         load_chunks_ms = 0.0
-        hybrid_candidate_count = len(raw_results) if isinstance(
-            self._retrieval_strategy, HybridRetrievalStrategy
-        ) else 0
+        hybrid_candidate_count = (
+            len(raw_results) if isinstance(self._retrieval_strategy, HybridRetrievalStrategy) else 0
+        )
         all_chunks = None
         results, metrics = self._retrieval_strategy.search(
             query=search_query,
@@ -714,9 +713,7 @@ class RagService:
         confidence_score: float | None = None
         confidence_metrics: ConfidenceMetrics | None = None
         if self._confidence_check_enabled:
-            confidence_metrics = assess_confidence(
-                retrieval_scores, min_score=self._min_score
-            )
+            confidence_metrics = assess_confidence(retrieval_scores, min_score=self._min_score)
             confidence_score = confidence_metrics.confidence
             if confidence_score < self._confidence_threshold:
                 logger.warning(
@@ -779,9 +776,7 @@ class RagService:
                 question,
                 len(context_items),
             )
-            for idx, (item, src) in enumerate(
-                zip(context_items, sources, strict=True)
-            ):
+            for idx, (item, src) in enumerate(zip(context_items, sources, strict=True)):
                 logger.debug(
                     "chat_context_chunk idx=%d chunk_id=%s citation=%s "
                     "score=%s url=%s title=%s chunk_text_300=%r",
@@ -937,8 +932,7 @@ class RagService:
             faithfulness_score = _check_faithfulness(answer, context_items)
             if faithfulness_score < self._faithfulness_warning_threshold:
                 logger.warning(
-                    "faithfulness_low score=%.2f threshold=%.2f tenant=%s website=%s "
-                    "session=%s",
+                    "faithfulness_low score=%.2f threshold=%.2f tenant=%s website=%s session=%s",
                     faithfulness_score,
                     self._faithfulness_warning_threshold,
                     tenant_id,
@@ -1062,9 +1056,7 @@ class RagService:
                 confidence_metrics.average_score if confidence_metrics is not None else None
             ),
             "confidence_rejected_chunks_count": (
-                confidence_metrics.rejected_chunks_count
-                if confidence_metrics is not None
-                else None
+                confidence_metrics.rejected_chunks_count if confidence_metrics is not None else None
             ),
         }
         if faithfulness_score is not None:
@@ -1174,19 +1166,13 @@ class RagService:
                     "hybrid_candidate_count": hybrid_candidate_count,
                     "adaptive_max_context_chars": adaptive_max_context_chars,
                     "confidence_score": (
-                        round(confidence_score, 4)
-                        if confidence_score is not None
-                        else None
+                        round(confidence_score, 4) if confidence_score is not None else None
                     ),
                     "confidence_minimum_score": (
-                        confidence_metrics.minimum_score
-                        if confidence_metrics is not None
-                        else None
+                        confidence_metrics.minimum_score if confidence_metrics is not None else None
                     ),
                     "confidence_average_score": (
-                        confidence_metrics.average_score
-                        if confidence_metrics is not None
-                        else None
+                        confidence_metrics.average_score if confidence_metrics is not None else None
                     ),
                     "confidence_rejected_chunks_count": (
                         confidence_metrics.rejected_chunks_count
@@ -1194,24 +1180,16 @@ class RagService:
                         else None
                     ),
                     "original_context_chars": (
-                        opt_metrics.original_chars
-                        if opt_metrics is not None
-                        else None
+                        opt_metrics.original_chars if opt_metrics is not None else None
                     ),
                     "optimized_context_chars": (
-                        opt_metrics.optimized_chars
-                        if opt_metrics is not None
-                        else None
+                        opt_metrics.optimized_chars if opt_metrics is not None else None
                     ),
                     "removed_chunks_count": (
-                        opt_metrics.removed_chunks
-                        if opt_metrics is not None
-                        else None
+                        opt_metrics.removed_chunks if opt_metrics is not None else None
                     ),
                     "faithfulness_score": (
-                        round(faithfulness_score, 3)
-                        if faithfulness_score is not None
-                        else None
+                        round(faithfulness_score, 3) if faithfulness_score is not None else None
                     ),
                 },
             )
@@ -1230,9 +1208,7 @@ class RagService:
             # increment of the running daily/monthly token totals so the
             # pre-call `check()` enforces budgets across turns.
             try:
-                await LLMQuotaService().record(
-                    tenant_id, usage.input_tokens, usage.output_tokens
-                )
+                await LLMQuotaService().record(tenant_id, usage.input_tokens, usage.output_tokens)
             except Exception:  # pragma: no cover - best effort
                 logger.warning("llm_quota_record_failed tenant=%s", tenant_id)
 
@@ -1400,13 +1376,13 @@ class RagService:
             total_removed_sentences = 0
             compressed_items: list[ContextItem] = []
             for item in deduped_items:
-                compressed, removed = compress_text(
-                    item.text, seen_sentences=seen_sentences
-                )
+                compressed, removed = compress_text(item.text, seen_sentences=seen_sentences)
                 compressed_items.append(
                     ContextItem(
-                        url=item.url, title=item.title,
-                        heading=item.heading, text=compressed,
+                        url=item.url,
+                        title=item.title,
+                        heading=item.heading,
+                        text=compressed,
                     )
                 )
                 total_removed_sentences += removed
@@ -1508,14 +1484,10 @@ class RagService:
                     confidence_metrics.confidence if confidence_metrics is not None else None
                 ),
                 "confidence_minimum_score": (
-                    confidence_metrics.minimum_score
-                    if confidence_metrics is not None
-                    else None
+                    confidence_metrics.minimum_score if confidence_metrics is not None else None
                 ),
                 "confidence_average_score": (
-                    confidence_metrics.average_score
-                    if confidence_metrics is not None
-                    else None
+                    confidence_metrics.average_score if confidence_metrics is not None else None
                 ),
                 "confidence_rejected_chunks_count": (
                     confidence_metrics.rejected_chunks_count

@@ -21,19 +21,26 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
-from backend.core.config import get_settings
+from backend.core.config import Settings, get_settings
 from backend.core.errors import AIQuotaExceededError
 from backend.core.metrics import record_llm_quota_exceeded
 from backend.core.redis import get_redis
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis as AsyncRedisClient
 
 logger = logging.getLogger("webchat_ai")
 
 _DAILY_KEY = "llm:quota:tok:daily:{tenant}:{date}"
 _MONTHLY_KEY = "llm:quota:tok:monthly:{tenant}:{month}"
 _REQ_KEY = "llm:quota:req:{tenant}:{minute}"
-# TTL headroom so token counters expire well after the window closes (2 days).
-_TOKEN_TTL_SECONDS = 2 * 24 * 60 * 60
+# TTL for daily token counters: long enough to cover the day plus headroom.
+_DAILY_TOKEN_TTL_SECONDS = 2 * 24 * 60 * 60  # 2 days
+# TTL for monthly token counters: long enough to cover the full calendar month
+# plus headroom so the counter never expires mid-month (budget bypass).
+_MONTHLY_TOKEN_TTL_SECONDS = 35 * 24 * 60 * 60  # 35 days
 # Per-minute request counter TTL: long enough to cover the current minute.
 _REQ_TTL_SECONDS = 120
 
@@ -41,16 +48,18 @@ _REQ_TTL_SECONDS = 120
 class LLMQuotaService:
     """Redis-backed, tenant-isolated AI quota limiter."""
 
-    def __init__(self, redis=None, settings=None) -> None:
+    def __init__(
+        self, redis: AsyncRedisClient | None = None, settings: Settings | None = None
+    ) -> None:
         self._redis = redis
         self._settings = settings
 
-    async def _redis_client(self):
+    async def _redis_client(self) -> AsyncRedisClient:
         if self._redis is not None:
             return self._redis
         return get_redis()
 
-    def _settings_obj(self):
+    def _settings_obj(self) -> Settings:
         return self._settings if self._settings is not None else get_settings()
 
     # --- key builders (UTC windows) ---
@@ -91,29 +100,27 @@ class LLMQuotaService:
                 used = int(await redis.get(self._daily_key(tenant_id)) or 0)
                 if used >= daily_limit:
                     record_llm_quota_exceeded("daily")
-                    raise AIQuotaExceededError()
+                    raise AIQuotaExceededError(AIQuotaExceededError.message)
             if monthly_limit > 0:
                 used = int(await redis.get(self._monthly_key(tenant_id)) or 0)
                 if used >= monthly_limit:
                     record_llm_quota_exceeded("monthly")
-                    raise AIQuotaExceededError()
+                    raise AIQuotaExceededError(AIQuotaExceededError.message)
             if req_limit > 0:
-                count = int(await redis.get(self._req_key(tenant_id)) or 0)
-                if count >= req_limit:
-                    record_llm_quota_exceeded("request")
-                    raise AIQuotaExceededError()
-                # Count this request toward the per-minute ceiling.
-                await redis.incr(self._req_key(tenant_id))
+                # Atomic INCR-then-check: eliminates the TOCTOU race where
+                # concurrent requests read the same count and all pass.
+                new_count = await redis.incr(self._req_key(tenant_id))
                 await redis.expire(self._req_key(tenant_id), _REQ_TTL_SECONDS)
+                if new_count > req_limit:
+                    record_llm_quota_exceeded("request")
+                    raise AIQuotaExceededError(AIQuotaExceededError.message)
         except AIQuotaExceededError:
             raise
         except Exception:  # pragma: no cover - redis read error
             logger.warning("llm_quota_check_error tenant=%s", tenant_id)
             return
 
-    async def record(
-        self, tenant_id: str, input_tokens: int, output_tokens: int
-    ) -> None:
+    async def record(self, tenant_id: str, input_tokens: int, output_tokens: int) -> None:
         """Best-effort: add a turn's token usage to the tenant's running totals."""
         total = int(input_tokens or 0) + int(output_tokens or 0)
         if total <= 0:
@@ -130,10 +137,10 @@ class LLMQuotaService:
         try:
             if daily:
                 await redis.incrby(self._daily_key(tenant_id), total)
-                await redis.expire(self._daily_key(tenant_id), _TOKEN_TTL_SECONDS)
+                await redis.expire(self._daily_key(tenant_id), _DAILY_TOKEN_TTL_SECONDS)
             if monthly:
                 await redis.incrby(self._monthly_key(tenant_id), total)
-                await redis.expire(self._monthly_key(tenant_id), _TOKEN_TTL_SECONDS)
+                await redis.expire(self._monthly_key(tenant_id), _MONTHLY_TOKEN_TTL_SECONDS)
         except Exception:
             logger.warning("llm_quota_record_error tenant=%s", tenant_id)
 

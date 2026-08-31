@@ -22,10 +22,12 @@ export function ColorPicker({
   label,
   value,
   onChange,
+  showLabel = true,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  showLabel?: boolean;
 }) {
   const id = useId();
   const [text, setText] = useState(value);
@@ -39,7 +41,7 @@ export function ColorPicker({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
+      {showLabel ? <Label htmlFor={id}>{label}</Label> : null}
       <div className="flex items-center gap-2">
         <input
           id={id}

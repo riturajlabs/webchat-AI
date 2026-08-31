@@ -46,8 +46,8 @@ const LIGHT_VARS = Object.keys(DARK_VARS);
 
 let activeHost: HTMLElement | null = null;
 let darkMode = false;
-let primaryColor = '#2563eb';
-let accentColor = '#4f46e5';
+let primaryColor = '#10A37F';
+let accentColor = '#25D366';
 
 function applyThemeVars(): void {
   if (!activeHost) {

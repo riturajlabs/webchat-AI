@@ -66,6 +66,10 @@ from backend.repositories.subscription_repository import (
     MongoSubscriptionRepository,
     SubscriptionRepository,
 )
+from backend.repositories.tenant_purge_repository import (
+    MongoTenantPurgeRepository,
+    TenantPurgeRepository,
+)
 from backend.repositories.tenant_repository import MongoTenantRepository, TenantRepository
 from backend.repositories.usage_event_repository import (
     MongoUsageEventRepository,
@@ -120,6 +124,7 @@ __all__ = [
     "MongoKnowledgeChunkRepository",
     "MongoMemberRepository",
     "MongoRefreshTokenRepository",
+    "MongoTenantPurgeRepository",
     "MongoTenantRepository",
     "MongoUserRepository",
     "MongoUsageRecordRepository",
@@ -135,6 +140,7 @@ __all__ = [
     "ResponseMetricsRow",
     "SubscriptionRepository",
     "TenantRepository",
+    "TenantPurgeRepository",
     "TimeseriesRow",
     "TopWebsiteRow",
     "UserRepository",

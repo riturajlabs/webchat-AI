@@ -124,11 +124,13 @@ def _load_dataset(path: Path) -> list[dict[str, Any]]:
             "adversarial": "adversarial",
         }[category]
         for item in data.get(category, []):
-            questions.append({
-                "category": singular,
-                "question": item["question"],
-                "expected_urls": item.get("expected_urls", []),
-            })
+            questions.append(
+                {
+                    "category": singular,
+                    "question": item["question"],
+                    "expected_urls": item.get("expected_urls", []),
+                }
+            )
     return questions
 
 
@@ -140,18 +142,24 @@ async def run(args: argparse.Namespace) -> list[dict[str, object]]:
     website_id = args.website
     if args.dataset:
         questions = _load_dataset(Path(args.dataset))
-        print(f"dataset={args.dataset} "
-              f"({sum(1 for q in questions if q['category'] == 'positive')} positive / "
-              f"{sum(1 for q in questions if q['category'] == 'negative')} negative / "
-              f"{sum(1 for q in questions if q['category'] == 'adversarial')} adversarial)")
+        print(
+            f"dataset={args.dataset} "
+            f"({sum(1 for q in questions if q['category'] == 'positive')} positive / "
+            f"{sum(1 for q in questions if q['category'] == 'negative')} negative / "
+            f"{sum(1 for q in questions if q['category'] == 'adversarial')} adversarial)"
+        )
     else:
         questions = GOLDEN_QUESTIONS
     print(f"env_file={_ENV.name} environment={settings.environment}")
-    print(f"embedding={settings.embedding_model} dims={settings.embedding_dimensions} "
-          f"version={settings.embedding_version}")
-    print(f"top_k={settings.chat_top_k} min_score={settings.chat_context_min_score} "
-          f"confidence_threshold={settings.rag_confidence_threshold} "
-          f"hybrid={settings.enable_hybrid_search} rerank={settings.enable_reranking}")
+    print(
+        f"embedding={settings.embedding_model} dims={settings.embedding_dimensions} "
+        f"version={settings.embedding_version}"
+    )
+    print(
+        f"top_k={settings.chat_top_k} min_score={settings.chat_context_min_score} "
+        f"confidence_threshold={settings.rag_confidence_threshold} "
+        f"hybrid={settings.enable_hybrid_search} rerank={settings.enable_reranking}"
+    )
     print(f"tenant={tenant_id} website={website_id}")
     print()
 
@@ -160,24 +168,30 @@ async def run(args: argparse.Namespace) -> list[dict[str, object]]:
         question = item["question"]
         t0 = time.perf_counter()
         try:
-            events = [event async for event in rag.stream_answer(
-                tenant_id=tenant_id, website_id=website_id, question=question,
-            )]
+            events = [
+                event
+                async for event in rag.stream_answer(
+                    tenant_id=tenant_id,
+                    website_id=website_id,
+                    question=question,
+                )
+            ]
         except Exception as exc:  # noqa: BLE001 - report and continue
-            rows.append({
-                "category": item["category"], "question": question,
-                "error": f"{type(exc).__name__}: {exc}",
-                "wall_ms": round((time.perf_counter() - t0) * 1000, 1),
-            })
+            rows.append(
+                {
+                    "category": item["category"],
+                    "question": question,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "wall_ms": round((time.perf_counter() - t0) * 1000, 1),
+                }
+            )
             continue
         wall_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         done = next((e for e in events if e["event"] == "done"), None)
         sources_event = next((e for e in events if e["event"] == "sources"), None)
         error_event = next((e for e in events if e["event"] == "error"), None)
-        answer = "".join(
-            e["data"]["delta"] for e in events if e["event"] == "message"
-        )
+        answer = "".join(e["data"]["delta"] for e in events if e["event"] == "message")
 
         source_rows: list[dict[str, Any]] = [
             {"url": s["url"], "score": round(s["score"], 4)}
@@ -199,8 +213,10 @@ async def run(args: argparse.Namespace) -> list[dict[str, object]]:
         rows.append(row)
         label = f"[{item['category']:^10}]"
         print(f"{label} {question[:60]}")
-        print(f"             fallback={row['fallback']} confidence={row['confidence_score']} "
-              f"sources={len(source_rows)} wall={wall_ms}ms")
+        print(
+            f"             fallback={row['fallback']} confidence={row['confidence_score']} "
+            f"sources={len(source_rows)} wall={wall_ms}ms"
+        )
         for s in sorted(source_rows, key=lambda x: -x["score"])[:3]:
             print(f"               score={s['score']:.4f} {s['url'][:70]}")
 
@@ -242,8 +258,7 @@ def print_aggregates(rows: list[dict[str, object]]) -> None:
         if not expected:
             continue
         sources = cast(list[dict[str, Any]], row["sources"])
-        for rank, source in enumerate(
-                sorted(sources, key=lambda s: -s["score"]), start=1):
+        for rank, source in enumerate(sorted(sources, key=lambda s: -s["score"]), start=1):
             if source["url"] in expected:
                 hits += 1
                 reciprocal_ranks.append(1.0 / rank)
@@ -258,22 +273,21 @@ def print_aggregates(rows: list[dict[str, object]]) -> None:
     false_fallbacks = [r for r in positive if r.get("fallback") is True]
     fallback_accuracy = (
         (pos_answered + guard_abstained) / (len(positive) + len(guard))
-        if (positive or guard) else 0.0
+        if (positive or guard)
+        else 0.0
     )
 
     answered = [
-        r for r in rows
-        if r.get("fallback") is False and r.get("confidence_score") is not None
+        r for r in rows if r.get("fallback") is False and r.get("confidence_score") is not None
     ]
     conf_answered = [float(cast(float, r["confidence_score"])) for r in answered]
     abstained_conf = [
-        float(cast(float, r["confidence_score"])) for r in rows
+        float(cast(float, r["confidence_score"]))
+        for r in rows
         if r.get("fallback") is True and r.get("confidence_score") is not None
     ]
 
-    wall = _percentiles([
-        float(cast(float, r["wall_ms"])) for r in rows if "wall_ms" in r
-    ])
+    wall = _percentiles([float(cast(float, r["wall_ms"])) for r in rows if "wall_ms" in r])
 
     def _timing_ms(r: dict[str, object], key: str) -> float | None:
         timing = r.get("timing")
@@ -283,40 +297,54 @@ def print_aggregates(rows: list[dict[str, object]]) -> None:
                 return float(value)
         return None
 
-    ttft = _percentiles([
-        value for r in answered if (value := _timing_ms(r, "ttft_ms")) is not None
-    ])
-    total = _percentiles([
-        value for r in answered if (value := _timing_ms(r, "total_ms")) is not None
-    ])
+    ttft = _percentiles(
+        [value for r in answered if (value := _timing_ms(r, "ttft_ms")) is not None]
+    )
+    total = _percentiles(
+        [value for r in answered if (value := _timing_ms(r, "total_ms")) is not None]
+    )
 
     def _fmt(p: dict[str, float]) -> str:
-        return (f"avg={p['avg']:.0f} p50={p['p50']:.0f} p90={p['p90']:.0f} "
-                f"p95={p['p95']:.0f} p99={p['p99']:.0f} max={p['max']:.0f}")
+        return (
+            f"avg={p['avg']:.0f} p50={p['p50']:.0f} p90={p['p90']:.0f} "
+            f"p95={p['p95']:.0f} p99={p['p99']:.0f} max={p['max']:.0f}"
+        )
 
     print("\n" + "=" * 72)
     print("FINAL METRICS")
-    print(f"  questions: {len(positive)} positive / {len(negative)} negative / "
-          f"{len(adversarial)} adversarial | errors: {len(errors)}")
+    print(
+        f"  questions: {len(positive)} positive / {len(negative)} negative / "
+        f"{len(adversarial)} adversarial | errors: {len(errors)}"
+    )
     print(f"  Recall@K (positives):        {hits}/{len(positive)} = {recall_at_k:.2%}")
     print(f"  MRR (positives):             {mrr:.4f}")
-    print(f"  Fallback accuracy:           {pos_answered + guard_abstained}/"
-          f"{len(positive) + len(guard)} = {fallback_accuracy:.2%}")
-    print(f"    positives answered:        {pos_answered}/{len(positive)}"
-          f"  (false fallbacks: {len(false_fallbacks)})")
-    print(f"    guards abstained:          {guard_abstained}/{len(guard)}"
-          f"  (false answers: {len(false_answers)})")
+    print(
+        f"  Fallback accuracy:           {pos_answered + guard_abstained}/"
+        f"{len(positive) + len(guard)} = {fallback_accuracy:.2%}"
+    )
+    print(
+        f"    positives answered:        {pos_answered}/{len(positive)}"
+        f"  (false fallbacks: {len(false_fallbacks)})"
+    )
+    print(
+        f"    guards abstained:          {guard_abstained}/{len(guard)}"
+        f"  (false answers: {len(false_answers)})"
+    )
     for r in false_answers:
         print(f"      FALSE ANSWER: {str(r['question'])[:60]}")
     for r in false_fallbacks:
         print(f"      FALSE FALLBACK: {str(r['question'])[:60]}")
     if conf_answered:
-        print(f"  confidence (answered):       avg={statistics.mean(conf_answered):.4f} "
-              f"min={min(conf_answered):.4f} max={max(conf_answered):.4f} "
-              f"stdev={statistics.stdev(conf_answered) if len(conf_answered) > 1 else 0:.4f}")
+        print(
+            f"  confidence (answered):       avg={statistics.mean(conf_answered):.4f} "
+            f"min={min(conf_answered):.4f} max={max(conf_answered):.4f} "
+            f"stdev={statistics.stdev(conf_answered) if len(conf_answered) > 1 else 0:.4f}"
+        )
     if abstained_conf:
-        print(f"  confidence (abstained):      avg={statistics.mean(abstained_conf):.4f} "
-              f"min={min(abstained_conf):.4f} max={max(abstained_conf):.4f}")
+        print(
+            f"  confidence (abstained):      avg={statistics.mean(abstained_conf):.4f} "
+            f"min={min(abstained_conf):.4f} max={max(abstained_conf):.4f}"
+        )
     if wall:
         print(f"  wall latency ms:             {_fmt(wall)}")
     if ttft:

@@ -1,6 +1,6 @@
 """Unit tests for HTML extraction (Phase 4 ingestion)."""
 
-from backend.services.ingestion import extract_page
+from backend.services.ingestion import extract_page, pick_preview_image
 
 HOME = """<!doctype html>
 <html lang="en-GB">
@@ -59,3 +59,39 @@ def test_empty_document_yields_empty_fields() -> None:
     assert page.headings == []
     assert page.paragraphs == []
     assert page.links == []
+
+
+def test_pick_preview_image_prefers_og_over_twitter() -> None:
+    meta = {"og:image": "https://cdn.example/og.png", "twitter:image": "https://cdn.example/tw.png"}
+    assert pick_preview_image(meta, "https://acme.example/") == "https://cdn.example/og.png"
+
+
+def test_pick_preview_image_falls_back_to_twitter() -> None:
+    meta = {"twitter:image": "https://cdn.example/tw.png"}
+    assert pick_preview_image(meta, "https://acme.example/") == "https://cdn.example/tw.png"
+
+
+def test_pick_preview_image_normalizes_relative_url() -> None:
+    meta = {"og:image": "/og.png"}
+    assert pick_preview_image(meta, "https://acme.example/") == "https://acme.example/og.png"
+
+
+def test_pick_preview_image_rejects_non_http() -> None:
+    assert (
+        pick_preview_image({"og:image": "data:image/png;base64,xx"}, "https://acme.example/")
+        is None
+    )
+    assert pick_preview_image({"og:image": "javascript:alert(1)"}, "https://acme.example/") is None
+
+
+def test_pick_preview_image_falls_back_to_same_origin_favicon() -> None:
+    assert (
+        pick_preview_image({}, "https://acme.example/some/page")
+        == "https://acme.example/favicon.ico"
+    )
+    assert (
+        pick_preview_image({}, "http://acme.example:8080/")
+        == "http://acme.example:8080/favicon.ico"
+    )
+    # No usable origin (not http(s)) → still none, never a broken URL.
+    assert pick_preview_image({}, "ftp://acme.example/") is None

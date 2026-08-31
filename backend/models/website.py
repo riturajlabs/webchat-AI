@@ -54,6 +54,10 @@ class Website(BaseModel):
     knowledge_documents: int = 0
     knowledge_chunks: int = 0
     last_knowledge_at: datetime | None = None
+    # Open Graph / Twitter preview image (absolute URL) surfaced on the
+    # dashboard website card. Populated from the homepage's meta tags during a
+    # crawl; purely a metadata URL, never a fetched/byte payload.
+    preview_image: str | None = None
 
     @classmethod
     def new(cls, *, tenant_id: str, name: str, url: str) -> "Website":

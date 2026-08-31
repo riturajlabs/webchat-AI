@@ -278,8 +278,7 @@ class MongoVectorRepository(VectorRepository):
                 definition = index.get("latestDefinition") or index.get("definition") or {}
                 fields = definition.get("fields", []) if isinstance(definition, dict) else []
                 if any(
-                    isinstance(field, dict) and field.get("path") == "embedding"
-                    for field in fields
+                    isinstance(field, dict) and field.get("path") == "embedding" for field in fields
                 ):
                     return True
         except Exception:  # noqa: BLE001 - any probe failure means "no search"

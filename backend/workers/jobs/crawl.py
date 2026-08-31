@@ -221,6 +221,8 @@ async def _run_crawl_job(
         website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
         website.last_crawled_at = job.completed_at
         website.checksum = await _site_checksum(documents, job.tenant_id, job.website_id)
+        if session.preview_image is not None:
+            website.preview_image = session.preview_image
         website.updated_at = utcnow()
         await websites.update(website)
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_COMPLETED, tenant_id=job.tenant_id))

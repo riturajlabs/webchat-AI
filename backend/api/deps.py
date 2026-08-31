@@ -53,6 +53,7 @@ from backend.repositories import (
     MongoMemberRepository,
     MongoRefreshTokenRepository,
     MongoSubscriptionRepository,
+    MongoTenantPurgeRepository,
     MongoTenantRepository,
     MongoUsageEventRepository,
     MongoUsageRecordRepository,
@@ -62,6 +63,7 @@ from backend.repositories import (
     get_vector_repository,
 )
 from backend.schemas.widget import CreateWidgetSessionRequest
+from backend.services.account import AccountService
 from backend.services.admin import AdminService
 from backend.services.ai.provider_health import ProviderHealthStore
 from backend.services.ai.provider_router import AdaptiveProviderRouter
@@ -125,6 +127,21 @@ def get_auth_service(
     )
 
 
+def get_account_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> AccountService:
+    """Build the account service with MongoDB-backed repositories.
+
+    Self-service account deletion orchestrates an application-level cascade
+    purge across every tenant-scoped collection (MongoDB has no FK CASCADE).
+    """
+    return AccountService(
+        users=MongoUserRepository(db),
+        audit=MongoAuditLogRepository(db),
+        purge=MongoTenantPurgeRepository(db),
+    )
+
+
 def get_usage_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
 ) -> UsageService:
@@ -154,6 +171,7 @@ def get_llm_quota_service() -> "LLMQuotaService":
     from backend.core.quota import LLMQuotaService
 
     return LLMQuotaService()
+
 
 def get_subscription_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
@@ -185,6 +203,11 @@ def get_website_service(
         usage=usage,
         documents=MongoDocumentRepository(db),
         vector=get_vector_repository(db),
+        chat_sessions=MongoChatSessionRepository(db),
+        chat_messages=MongoChatMessageRepository(db),
+        feedback=MongoFeedbackRepository(db),
+        crawl_jobs=MongoCrawlJobRepository(db),
+        usage_records=MongoUsageRecordRepository(db),
     )
 
 

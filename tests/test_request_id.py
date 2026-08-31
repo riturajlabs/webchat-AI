@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 def _client() -> TestClient:
     from backend.main import create_app
+
     return TestClient(create_app(), raise_server_exceptions=False)
 
 

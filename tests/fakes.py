@@ -41,6 +41,7 @@ from backend.repositories.analytics_repository import (
     FeedbackAnalyticsRow,
     OverviewRow,
     QuestionCountRow,
+    RatingTrendPoint,
     ResponseMetricsRow,
     TimeseriesRow,
     TopWebsiteRow,
@@ -58,6 +59,7 @@ from backend.services.billing.payments.base import (
 )
 from backend.services.knowledge.embedding import EmbeddingIdentity
 from backend.services.mail.base import EmailMessage
+from backend.utils.analytics_stats import response_time_statistics
 
 
 def _avg_ms(values) -> float | None:
@@ -101,6 +103,21 @@ class FakeUserRepository:
         user = self._users[user_id]
         user.password_hash = password_hash
         user.pwd_token_version = pwd_token_version
+        user.updated_at = at
+
+    async def update_profile(
+        self,
+        user_id: str,
+        *,
+        updates: dict[str, object],
+        at: datetime,
+    ) -> None:
+        user = self._users[user_id]
+        if "name" in updates:
+            user.name = updates["name"]
+        # avatar_url is authoritative: None/"" clears it.
+        if "avatar_url" in updates:
+            user.avatar_url = updates["avatar_url"]
         user.updated_at = at
 
     async def list_users(
@@ -322,6 +339,20 @@ class FakeAuditLogRepository:
                 limit=10**9,
             )
         )
+
+
+class FakeTenantPurgeRepository:
+    """In-memory tenant purge capturing the cascade calls for assertions."""
+
+    def __init__(self) -> None:
+        self.purged_tenants: list[str] = []
+        self.purged_user_sessions: list[str] = []
+
+    async def purge_tenant(self, tenant_id: str) -> None:
+        self.purged_tenants.append(tenant_id)
+
+    async def purge_user_sessions(self, user_id: str) -> None:
+        self.purged_user_sessions.append(user_id)
 
 
 class FakeAdminAuditLogRepository:
@@ -674,6 +705,16 @@ class FakeCrawlJobRepository:
                 if job.tenant_id == tenant_id and job.status in CRAWL_ACTIVE_STATUSES
             ]
         )
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        to_delete = [
+            jid
+            for jid, job in self._jobs.items()
+            if job.tenant_id == tenant_id and job.website_id == website_id
+        ]
+        for jid in to_delete:
+            del self._jobs[jid]
+        return len(to_delete)
 
 
 class FakeDocumentRepository:
@@ -1114,6 +1155,16 @@ class FakeChatSessionRepository:
             return True
         return False
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        to_delete = [
+            sid
+            for sid, session in self._sessions.items()
+            if session.tenant_id == tenant_id and session.website_id == website_id
+        ]
+        for sid in to_delete:
+            del self._sessions[sid]
+        return len(to_delete)
+
 
 class FakeChatMessageRepository:
     """In-memory chat message repository (tenant-scoped like the Mongo impl)."""
@@ -1233,6 +1284,16 @@ class FakeChatMessageRepository:
         self._messages = remaining
         return deleted
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        remaining = [
+            message
+            for message in self._messages
+            if not (message.tenant_id == tenant_id and message.website_id == website_id)
+        ]
+        deleted = len(self._messages) - len(remaining)
+        self._messages = remaining
+        return deleted
+
 
 class FakeFeedbackRepository:
     """In-memory feedback repository (tenant-scoped like the Mongo impl)."""
@@ -1324,6 +1385,16 @@ class FakeFeedbackRepository:
             distribution[item.rating] = distribution.get(item.rating, 0) + 1
         return FeedbackSummary(total=len(items), average_rating=None, distribution=distribution)
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        to_delete = [
+            fid
+            for fid, item in self._feedback.items()
+            if item.tenant_id == tenant_id and item.website_id == website_id
+        ]
+        for fid in to_delete:
+            del self._feedback[fid]
+        return len(to_delete)
+
 
 class FakeUsageRecordRepository:
     """In-memory usage rollup repository (ADR-005 §5.5)."""
@@ -1376,9 +1447,7 @@ class FakeUsageRecordRepository:
             estimated_cost_micros=cost_micros,
         )
 
-    async def sum_by_website(
-        self, tenant_id: str, website_id: str
-    ) -> TenantUsageSummary:
+    async def sum_by_website(self, tenant_id: str, website_id: str) -> TenantUsageSummary:
         chats = messages = input_tokens = output_tokens = cost_micros = 0
         for record in self._records.values():
             if record.tenant_id != tenant_id or record.website_id != website_id:
@@ -1395,6 +1464,16 @@ class FakeUsageRecordRepository:
             output_tokens=output_tokens,
             estimated_cost_micros=cost_micros,
         )
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        to_delete = [
+            key
+            for key, record in self._records.items()
+            if record.tenant_id == tenant_id and record.website_id == website_id
+        ]
+        for key in to_delete:
+            del self._records[key]
+        return len(to_delete)
 
 
 class FakeUsageEventRepository:
@@ -1705,18 +1784,22 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> AnalyticsSummaryRow:
-        conversations = self._conversations(tenant_id, website_id=website_id, since=since)
+        conversations = self._conversations(
+            tenant_id, website_id=website_id, since=since, until=until
+        )
         responses = [
             msg
             for msg in self._messages.messages
             if msg.tenant_id == tenant_id
             and msg.role == CHAT_ROLE_ASSISTANT
             and msg.created_at >= since
+            and (until is None or msg.created_at < until)
             and (website_id is None or msg.website_id == website_id)
         ]
         response_times = [m.response_time for m in responses if m.response_time is not None]
-        records = self._usage_records(tenant_id, website_id=website_id, since=since)
+        records = self._usage_records(tenant_id, website_id=website_id, since=since, until=until)
         return AnalyticsSummaryRow(
             total_conversations=conversations,
             total_messages=sum(r.counters.get("messages", 0) for r in records),
@@ -1734,6 +1817,7 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> list[TimeseriesRow]:
         return [
             TimeseriesRow(
@@ -1748,7 +1832,9 @@ class FakeAnalyticsRepository:
                 output_tokens=sum(r.counters.get("output_tokens", 0) for r in rows),
             )
             for date, rows in sorted(
-                self._usage_grouped(tenant_id, website_id=website_id, since=since).items()
+                self._usage_grouped(
+                    tenant_id, website_id=website_id, since=since, until=until
+                ).items()
             )
         ]
 
@@ -1757,11 +1843,15 @@ class FakeAnalyticsRepository:
         tenant_id: str,
         *,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[TopWebsiteRow]:
         groups: dict[str, tuple[int, int]] = {}
+        until_date = until.date().isoformat() if until is not None else None
         for record in self._usage.records:
             if record.tenant_id != tenant_id or record.date < since.date().isoformat():
+                continue
+            if until_date is not None and record.date >= until_date:
                 continue
             chats, messages = groups.get(record.website_id, (0, 0))
             groups[record.website_id] = (
@@ -1788,6 +1878,7 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> ResponseMetricsRow:
         messages = [
             m
@@ -1796,15 +1887,18 @@ class FakeAnalyticsRepository:
             and m.role == CHAT_ROLE_ASSISTANT
             and m.response_time is not None
             and m.created_at >= since
+            and (until is None or m.created_at < until)
             and (website_id is None or m.website_id == website_id)
         ]
-        if not messages:
-            return ResponseMetricsRow(None, None, None)
-        response_times = [m.response_time for m in messages if m.response_time is not None]
+        response_times = [m.response_time for m in messages]
+        stats = response_time_statistics(response_times)
         return ResponseMetricsRow(
-            avg_response_time=round(sum(response_times) / len(response_times), 3),
-            fastest_response_time=round(min(response_times), 3),
-            slowest_response_time=round(max(response_times), 3),
+            avg_response_time=stats.avg,
+            fastest_response_time=stats.fastest,
+            slowest_response_time=stats.slowest,
+            median_response_time=stats.median,
+            p95_response_time=stats.p95,
+            distribution=stats.distribution,
             avg_embedding_ms=_avg_ms(m.latency_embedding_ms for m in messages),
             avg_retrieval_ms=_avg_ms(m.latency_retrieval_ms for m in messages),
             avg_generation_ms=_avg_ms(m.latency_generation_ms for m in messages),
@@ -1816,13 +1910,16 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> OverviewRow:
-        messages = self._window_messages(tenant_id, website_id=website_id, since=since)
+        messages = self._window_messages(tenant_id, website_id=website_id, since=since, until=until)
         assistants = [m for m in messages if m.role == CHAT_ROLE_ASSISTANT]
         response_times = [m.response_time for m in assistants if m.response_time is not None]
-        records = self._usage_records(tenant_id, website_id=website_id, since=since)
+        records = self._usage_records(tenant_id, website_id=website_id, since=since, until=until)
         return OverviewRow(
-            total_conversations=self._conversations(tenant_id, website_id=website_id, since=since),
+            total_conversations=self._conversations(
+                tenant_id, website_id=website_id, since=since, until=until
+            ),
             total_messages=sum(r.counters.get("messages", 0) for r in records),
             total_questions=sum(1 for m in messages if m.role == CHAT_ROLE_USER),
             total_ai_responses=len(assistants),
@@ -1839,10 +1936,13 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[QuestionCountRow]:
         counts: dict[str, int] = {}
-        for message in self._window_messages(tenant_id, website_id=website_id, since=since):
+        for message in self._window_messages(
+            tenant_id, website_id=website_id, since=since, until=until
+        ):
             if message.role != CHAT_ROLE_USER:
                 continue
             question = message.content.strip()
@@ -1858,23 +1958,29 @@ class FakeAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> FeedbackAnalyticsRow:
         items = [
             item
             for item in (self._feedback.feedback if self._feedback else [])
             if item.tenant_id == tenant_id
             and (website_id is None or item.website_id == website_id)
-            and (since is None or item.created_at >= since)
+            and item.created_at >= since
+            and (until is None or item.created_at < until)
         ]
         distribution: dict[int, int] = {}
         total = 0
         weighted = 0
+        by_day: dict[str, tuple[int, int]] = {}
         for item in items:
             if not 1 <= item.rating <= 5:
                 continue
             distribution[item.rating] = distribution.get(item.rating, 0) + 1
             total += 1
             weighted += item.rating
+            day = item.created_at.date().isoformat()
+            day_count, day_sum = by_day.get(day, (0, 0))
+            by_day[day] = (day_count + 1, day_sum + item.rating)
         positive = sum(
             count for rating, count in distribution.items() if rating >= FEEDBACK_POSITIVE_RATING
         )
@@ -1886,6 +1992,14 @@ class FakeAnalyticsRepository:
             for rating, count in distribution.items()
             if FEEDBACK_NEGATIVE_RATING < rating < FEEDBACK_POSITIVE_RATING
         )
+        trend: list[RatingTrendPoint] = [
+            RatingTrendPoint(
+                date=day,
+                average_rating=round(day_sum / day_count, 2) if day_count else None,
+                ratings=day_count,
+            )
+            for day, (day_count, day_sum) in sorted(by_day.items())
+        ]
         return FeedbackAnalyticsRow(
             total=total,
             positive=positive,
@@ -1893,47 +2007,76 @@ class FakeAnalyticsRepository:
             neutral=neutral,
             average_rating=round(weighted / total, 2) if total else None,
             distribution=distribution,
+            trend=trend,
         )
 
     # ------------------------------------------------------------- internals
 
     def _window_messages(
-        self, tenant_id: str, *, website_id: str | None, since: datetime
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None,
+        since: datetime,
+        until: datetime | None = None,
     ) -> list[ChatMessage]:
         return [
             message
             for message in self._messages.messages
             if message.tenant_id == tenant_id
             and message.created_at >= since
+            and (until is None or message.created_at < until)
             and (website_id is None or message.website_id == website_id)
         ]
 
-    def _conversations(self, tenant_id: str, *, website_id: str | None, since: datetime) -> int:
+    def _conversations(
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None,
+        since: datetime,
+        until: datetime | None = None,
+    ) -> int:
         return sum(
             1
             for session in self._sessions.sessions.values()
             if session.tenant_id == tenant_id
             and session.status != CHAT_SESSION_STATUS_DELETED
             and session.started_at >= since
+            and (until is None or session.started_at < until)
             and (website_id is None or session.website_id == website_id)
         )
 
     def _usage_records(
-        self, tenant_id: str, *, website_id: str | None, since: datetime
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None,
+        since: datetime,
+        until: datetime | None = None,
     ) -> list[UsageRecord]:
+        until_date = until.date().isoformat() if until is not None else None
         return [
             record
             for record in self._usage.records
             if record.tenant_id == tenant_id
             and record.date >= since.date().isoformat()
+            and (until_date is None or record.date < until_date)
             and (website_id is None or record.website_id == website_id)
         ]
 
     def _usage_grouped(
-        self, tenant_id: str, *, website_id: str | None, since: datetime
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None,
+        since: datetime,
+        until: datetime | None = None,
     ) -> dict[str, list[UsageRecord]]:
         grouped: dict[str, list[UsageRecord]] = {}
-        for record in self._usage_records(tenant_id, website_id=website_id, since=since):
+        for record in self._usage_records(
+            tenant_id, website_id=website_id, since=since, until=until
+        ):
             grouped.setdefault(record.date, []).append(record)
         return grouped
 

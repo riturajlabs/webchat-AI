@@ -1,11 +1,11 @@
 /**
- * Visitor feedback control (compact UX).
+ * Visitor feedback control — 1 to 5 star rating.
  *
- * A single row of two thumbs — 👍 👎 — under a completed assistant answer.
- * Clicking a thumb immediately submits the rating through the existing
- * feedback API (unchanged) and the control shows a short confirmation line.
- * There is deliberately no modal, no category picker, no comment textarea and
- * no submit button: rating is one tap.
+ * A single row of five stars under a completed assistant answer. Clicking a
+ * star immediately submits that rating through the existing feedback API
+ * (unchanged) and the control shows a short confirmation line. There is
+ * deliberately no modal, no category picker, no comment textarea and no submit
+ * button: rating is one tap.
  *
  * The host (mount) owns the network call and drives `sync()` with the
  * feedback status so the control reflects submitting / submitted / error.
@@ -13,9 +13,12 @@
 
 import type { FeedbackStatus } from '../stream/chat';
 
+/** Star ratings on the backend 1-5 scale. */
+export type FeedbackRating = 1 | 2 | 3 | 4 | 5;
+
 export interface FeedbackSubmitPayload {
-  /** 1-5 scale: thumbs up → 5, thumbs down → 1. */
-  rating: 1 | 5;
+  /** 1-5 scale; 4-5 map to `helpful`, 3 to `other`, 1-2 to `wrong`. */
+  rating: FeedbackRating;
   category: string;
   comment: string;
 }
@@ -30,7 +33,7 @@ export interface FeedbackControlOptions {
   onSubmit: (payload: FeedbackSubmitPayload) => void;
 }
 
-function thumbIcon(direction: 'up' | 'down'): SVGElement {
+function starIcon(): SVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('width', '16');
@@ -42,94 +45,111 @@ function thumbIcon(direction: 'up' | 'down'): SVGElement {
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute(
     'd',
-    direction === 'up'
-      ? 'M1 21h4V9H1v12zM23 10c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L14.17 1 7.59 7.59C7.22 7.95 7 8.45 7 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z'
-      : 'M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z',
+    'M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
   );
   svg.appendChild(path);
   return svg;
 }
 
-function button(label: string, className: string): HTMLButtonElement {
+function starButton(rating: FeedbackRating): HTMLButtonElement {
   const node = document.createElement('button');
   node.type = 'button';
-  node.className = className;
+  node.className = 'wc-star';
+  node.dataset.rating = String(rating);
+  const label = labelForRating(rating);
   node.setAttribute('aria-label', label);
+  node.title = label;
+  node.setAttribute('aria-pressed', 'false');
+  node.appendChild(starIcon());
   return node;
+}
+
+function labelForRating(rating: FeedbackRating): string {
+  return `Rate ${rating} star${rating === 1 ? '' : 's'}`;
+}
+
+/** Backend category derived from the star rating (ADR-005 §5.6 taxonomy). */
+export function categoryForRating(rating: FeedbackRating): string {
+  if (rating >= 4) {
+    return 'helpful';
+  }
+  if (rating === 3) {
+    return 'other';
+  }
+  return 'wrong';
 }
 
 export function createFeedbackControl(options: FeedbackControlOptions): FeedbackControl {
   const root = document.createElement('div');
   root.className = 'wc-feedback';
 
-  const thumbs = document.createElement('div');
-  thumbs.className = 'wc-feedback-thumbs';
-  thumbs.setAttribute('role', 'group');
-  thumbs.setAttribute('aria-label', 'Rate this answer');
+  const stars = document.createElement('div');
+  stars.className = 'wc-feedback-stars';
+  stars.setAttribute('role', 'group');
+  stars.setAttribute('aria-label', 'Rate this answer (1 to 5 stars)');
 
-  const upButton = button('This answer was helpful', 'wc-thumb wc-thumb-up');
-  upButton.setAttribute('aria-pressed', 'false');
-  upButton.title = 'This answer was helpful';
-  upButton.appendChild(thumbIcon('up'));
-
-  const downButton = button('This answer was not helpful', 'wc-thumb wc-thumb-down');
-  downButton.setAttribute('aria-pressed', 'false');
-  downButton.title = 'This answer was not helpful';
-  downButton.appendChild(thumbIcon('down'));
-
-  thumbs.appendChild(upButton);
-  thumbs.appendChild(downButton);
+  const buttons = [1, 2, 3, 4, 5].map((rating) => starButton(rating as FeedbackRating));
+  for (const button of buttons) {
+    stars.appendChild(button);
+  }
 
   const note = document.createElement('span');
   note.className = 'wc-feedback-note';
   note.setAttribute('role', 'status');
   note.hidden = true;
 
-  root.appendChild(thumbs);
+  root.appendChild(stars);
   root.appendChild(note);
 
-  let selection: 'up' | 'down' | null = null;
+  let selection: FeedbackRating | null = null;
 
   function setPressing(): void {
-    upButton.setAttribute('aria-pressed', String(selection === 'up'));
-    downButton.setAttribute('aria-pressed', String(selection === 'down'));
+    for (const button of buttons) {
+      const rating = Number(button.dataset.rating) as FeedbackRating;
+      button.setAttribute('aria-pressed', String(selection !== null && rating <= selection));
+    }
   }
 
-  function rate(direction: 'up' | 'down'): void {
-    selection = direction;
+  function rate(rating: FeedbackRating): void {
+    selection = rating;
     setPressing();
     options.onSubmit({
-      rating: direction === 'up' ? 5 : 1,
-      category: direction === 'up' ? 'helpful' : 'other',
+      rating,
+      category: categoryForRating(rating),
       comment: '',
     });
   }
 
-  upButton.addEventListener('click', () => rate('up'));
-  downButton.addEventListener('click', () => rate('down'));
+  for (const button of buttons) {
+    button.addEventListener('click', () => rate(Number(button.dataset.rating) as FeedbackRating));
+  }
 
   function sync(status: FeedbackStatus): void {
     if (status === 'submitted') {
       note.textContent =
-        selection === 'down' ? "Thanks, we'll improve" : 'Thanks for your feedback';
+        selection !== null && selection <= 3 ? "Thanks, we'll improve" : 'Thanks for your feedback';
       note.hidden = false;
-      upButton.disabled = true;
-      downButton.disabled = true;
+      for (const button of buttons) {
+        button.disabled = true;
+      }
     } else if (status === 'error') {
       note.textContent = "Couldn't save. Tap again to retry.";
       note.hidden = false;
-      upButton.disabled = false;
-      downButton.disabled = false;
+      for (const button of buttons) {
+        button.disabled = false;
+      }
     } else if (status === 'submitting') {
       note.textContent = 'Sending…';
       note.hidden = false;
-      upButton.disabled = true;
-      downButton.disabled = true;
+      for (const button of buttons) {
+        button.disabled = true;
+      }
     } else {
       note.textContent = '';
       note.hidden = true;
-      upButton.disabled = false;
-      downButton.disabled = false;
+      for (const button of buttons) {
+        button.disabled = false;
+      }
     }
   }
 

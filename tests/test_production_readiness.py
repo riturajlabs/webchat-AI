@@ -21,6 +21,7 @@ class TestLifespanStartup:
 
     def test_lifespan_context_manager_exists(self) -> None:
         from backend.main import create_app
+
         app = create_app()
         assert hasattr(app, "router")
 
@@ -64,6 +65,7 @@ class TestMongoUnavailable:
     @patch("backend.main.MongoDB.ping", new_callable=AsyncMock, return_value=False)
     def test_mongo_ping_returns_false(self, _ping: AsyncMock) -> None:
         from backend.core.database import MongoDB
+
         result = asyncio.run(MongoDB.ping())
         assert result is False
 
@@ -71,6 +73,7 @@ class TestMongoUnavailable:
     @patch("backend.core.database.MongoDB.client")
     def test_mongo_client_lazy_init(self, client_mock: MagicMock) -> None:
         from backend.core.database import MongoDB
+
         mock_client = MagicMock()
         client_mock.return_value = mock_client
         MongoDB._client = None
@@ -116,6 +119,7 @@ class TestRedisUnavailable:
     @patch("backend.core.redis.get_redis")
     def test_ping_redis_handles_connection_error(self, get_redis_mock: MagicMock) -> None:
         from backend.core.redis import ping_redis
+
         mock_redis = MagicMock()
         mock_redis.ping = AsyncMock(side_effect=ConnectionError("refused"))
         get_redis_mock.return_value = mock_redis
@@ -125,6 +129,7 @@ class TestRedisUnavailable:
     @patch("backend.core.redis.get_redis")
     def test_ping_redis_returns_true_when_healthy(self, get_redis_mock: MagicMock) -> None:
         from backend.core.redis import ping_redis
+
         mock_redis = MagicMock()
         mock_redis.ping = AsyncMock(return_value=True)
         get_redis_mock.return_value = mock_redis
@@ -143,18 +148,21 @@ class TestWorkerCacheResilience:
     @patch("backend.workers.jobs.crawl.get_redis", side_effect=ConnectionError("refused"))
     def test_crawl_build_cache_returns_none_on_redis_down(self, _redis_mock: MagicMock) -> None:
         from backend.workers.jobs.crawl import _build_cache
+
         result = _build_cache()
         assert result is None
 
     @patch("backend.workers.jobs.knowledge.get_redis", side_effect=ConnectionError("refused"))
     def test_knowledge_build_cache_returns_none_on_redis_down(self, _redis_mock: MagicMock) -> None:
         from backend.workers.jobs.knowledge import _build_cache
+
         result = _build_cache()
         assert result is None
 
     @patch("backend.workers.jobs.crawl.get_redis")
     def test_crawl_build_cache_returns_store_when_healthy(self, get_redis_mock: MagicMock) -> None:
         from backend.workers.jobs.crawl import _build_cache
+
         mock_redis = MagicMock()
         get_redis_mock.return_value = mock_redis
         result = _build_cache()
@@ -165,6 +173,7 @@ class TestWorkerCacheResilience:
         self, get_redis_mock: MagicMock
     ) -> None:
         from backend.workers.jobs.knowledge import _build_cache
+
         mock_redis = MagicMock()
         get_redis_mock.return_value = mock_redis
         result = _build_cache()
@@ -181,11 +190,13 @@ class TestMongoSocketTimeout:
 
     def test_default_socket_timeout(self) -> None:
         from backend.core.config import get_settings
+
         settings = get_settings()
         assert settings.mongodb_socket_timeout_ms == 30000
 
     def test_socket_timeout_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from backend.core.config import get_settings
+
         # Reset the lru_cache so env override takes effect
         get_settings.cache_clear()
         try:

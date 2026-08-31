@@ -208,7 +208,6 @@ def test_update_widget_config_validation(client) -> None:
         ({"height": "10emjunk"}, "garbage CSS length"),
         ({"border_radius": "20px 10px"}, "multi-value radius rejected"),
         ({"launcher_size": "big"}, "non-length launcher size"),
-        ({"theme_preset": "neon"}, "unknown theme preset"),
         ({"theme_preset": "x" * 33}, "theme preset too long"),
     ]
     for payload, _label in cases:
@@ -290,7 +289,15 @@ def test_update_widget_config_clears_branding_overrides_with_empty_strings(clien
 
 
 def test_update_widget_config_theme_preset(client) -> None:
-    """Phase 12 theme presets are validated, stored and clearable."""
+    """Phase 12 theme presets are stored, clearable and dynamically registered.
+
+    The backend deliberately stores `theme_preset` as a bounded string rather
+    than a hand-maintained id list: the canonical registry lives in
+    `@webchat/themes`, so an arbitrary (or a newly registered) preset id is
+    accepted without a backend change and the widget safely falls back to the
+    classic palette at render time for anything it doesn't know. Only a
+    clear-to-classic value (empty string) and the length bound are enforced.
+    """
     test_client, env, invalidated = client
     headers = _auth_headers(test_client)
     created = _create_website(test_client, headers)
@@ -306,6 +313,16 @@ def test_update_widget_config_theme_preset(client) -> None:
     assert applied.json()["widget"]["theme_preset"] == "emerald-support"
     assert next(iter(env.widgets.widgets.values())).theme_preset == "emerald-support"
     assert invalidated == [widget_id]
+
+    # A brand-new preset id (registered only in `@webchat/themes`) is accepted
+    # with no backend change — this is what makes theme registration dynamic.
+    new_theme = test_client.patch(
+        f"/api/websites/{website_id}/widget",
+        json={"theme_preset": "brand-new-preset"},
+        headers=headers,
+    )
+    assert new_theme.status_code == 200
+    assert new_theme.json()["widget"]["theme_preset"] == "brand-new-preset"
 
     cleared = test_client.patch(
         f"/api/websites/{website_id}/widget",

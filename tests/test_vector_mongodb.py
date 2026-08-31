@@ -158,8 +158,7 @@ class _FakeDb:
         """The `listSearchIndexes` *command* form always fails here (BUG-2):
         production pymongo rejects it, so the probe must never rely on it."""
         raise RuntimeError(
-            "command not found, full error: {'ok': 0, "
-            "'errmsg': 'command not found', 'code': 59}"
+            "command not found, full error: {'ok': 0, 'errmsg': 'command not found', 'code': 59}"
         )
 
 

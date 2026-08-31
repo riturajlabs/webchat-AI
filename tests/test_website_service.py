@@ -514,3 +514,101 @@ async def test_get_widget_returns_tenant_widget() -> None:
 
     with pytest.raises(WebsiteNotFoundError):
         await env.service.get_widget("tenant-b", result.website.id)
+
+
+async def test_delete_website_cascades_conversation_and_related_data() -> None:
+    """Deleting a website must purge tenant-owned conversations, messages,
+    feedback, crawl jobs and usage rollups (retention/compliance)."""
+    from backend.models.chat_message import ChatMessage
+    from backend.models.chat_session import ChatSession
+    from backend.models.crawl_job import CrawlJob
+    from backend.models.feedback import Feedback
+    from backend.services.website import WebsiteService
+
+    from tests.fakes import (
+        FakeAuditLogRepository,
+        FakeChatMessageRepository,
+        FakeChatSessionRepository,
+        FakeCrawlJobRepository,
+        FakeFeedbackRepository,
+        FakeUsageRecordRepository,
+        FakeWebsiteRepository,
+        FakeWidgetRepository,
+    )
+
+    websites = FakeWebsiteRepository()
+    widgets = FakeWidgetRepository()
+    audit = FakeAuditLogRepository()
+    sessions = FakeChatSessionRepository()
+    messages = FakeChatMessageRepository()
+    feedback = FakeFeedbackRepository()
+    crawl_jobs = FakeCrawlJobRepository()
+    usage_records = FakeUsageRecordRepository()
+    service = WebsiteService(
+        websites=websites,
+        widgets=widgets,
+        audit=audit,
+        chat_sessions=sessions,
+        chat_messages=messages,
+        feedback=feedback,
+        crawl_jobs=crawl_jobs,
+        usage_records=usage_records,
+    )
+
+    principal = make_principal(tenant_id="tenant-a")
+    created = await service.create_website(
+        principal=principal, name="A", url="https://a.example", ip_address=None, user_agent=None
+    )
+    website_id = created.website.id
+
+    session = ChatSession.new(
+        tenant_id="tenant-a",
+        website_id=website_id,
+        visitor_id="v1",
+        session_id="s1",
+    )
+    await sessions.create(session)
+    message = ChatMessage.new(
+        tenant_id="tenant-a",
+        website_id=website_id,
+        session_id="s1",
+        role="assistant",
+        content="hello",
+    )
+    await messages.create(message)
+    fb = Feedback.new(
+        tenant_id="tenant-a",
+        website_id=website_id,
+        message_id=message.id,
+        rating=5,
+        category="helpful",
+        session_id="s1",
+    )
+    await feedback.create(fb)
+    job = CrawlJob.new(tenant_id="tenant-a", website_id=website_id)
+    await crawl_jobs.create(job)
+    await usage_records.increment(
+        tenant_id="tenant-a", website_id=website_id, date="20260101", counters={"chats": 1}
+    )
+
+    # A different tenant's data must NOT be touched by the cascade.
+    other_session = ChatSession.new(
+        tenant_id="tenant-b",
+        website_id="site-b",
+        visitor_id="v2",
+        session_id="s2",
+    )
+    await sessions.create(other_session)
+
+    await service.delete_website(
+        principal=principal, website_id=website_id, ip_address=None, user_agent=None
+    )
+
+    assert len(sessions.sessions) == 1
+    assert "s2" in sessions.sessions
+    assert "s1" not in sessions.sessions
+    assert len(messages.messages) == 0
+    assert len(feedback.feedback) == 0
+    assert len(crawl_jobs.jobs) == 0
+    assert len(usage_records.records) == 0
+    assert len(widgets.widgets) == 0

@@ -81,7 +81,9 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
             style={{
               [left ? 'left' : 'right']: 20,
               bottom: 88,
-              width,
+              width: `min(${width}px, calc(100% - 40px))`,
+              maxWidth: '100%',
+              minWidth: 0,
               height: 'calc(100% - 108px)',
               maxHeight: 460,
               borderRadius: radius,
@@ -99,7 +101,7 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               className="flex items-center gap-2 px-4 py-3"
               style={{
                 background: theme.header,
-                color: theme.headerText,
+                color: theme.headerForeground,
                 borderTopLeftRadius: radius,
                 borderTopRightRadius: radius,
               }}
@@ -113,13 +115,21 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               </div>
               <div className="flex flex-col">
                 <span className="text-sm font-semibold leading-tight">{botName}</span>
-                <span className="text-xs opacity-90">{statusText}</span>
+                <span className="flex items-center gap-1.5 text-xs opacity-90">
+                  <span
+                    className="size-1.5 rounded-full"
+                    style={{ background: theme.onlineIndicator }}
+                    aria-hidden="true"
+                  />
+                  {statusText}
+                </span>
               </div>
               <button
                 type="button"
                 aria-label="Close preview"
                 onClick={() => setOpen(false)}
-                className="ml-auto rounded-full p-1 hover:bg-white/20"
+                className="ml-auto rounded-full p-1 hover:bg-white/20 focus-visible:outline-2 focus-visible:outline-offset-2"
+                style={{ color: theme.closeButtonForeground, outlineColor: theme.focusRing }}
               >
                 <X aria-hidden="true" className="size-4" />
               </button>
@@ -138,7 +148,7 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                 className="mb-2 flex max-w-[80%] items-center gap-2 rounded-xl px-3 py-2"
                 style={{
                   background: theme.assistantBubble,
-                  color: theme.text,
+                  color: theme.messageAssistantForeground,
                   fontSize: '0.9em',
                 }}
               >
@@ -154,7 +164,7 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                 className="mb-2 ml-auto w-fit max-w-[80%] rounded-xl px-3 py-2"
                 style={{
                   background: theme.userBubble,
-                  color: theme.userText,
+                  color: theme.messageUserForeground,
                   fontSize: '0.9em',
                 }}
               >
@@ -172,9 +182,9 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                     key={question}
                     className="rounded-full border px-3 py-1 text-xs"
                     style={{
-                      borderColor: theme.border,
-                      color: theme.text,
-                      background: theme.surface,
+                      borderColor: theme.suggestionBorder,
+                      color: theme.suggestionForeground,
+                      background: theme.suggestionBackground,
                     }}
                   >
                     {question}
@@ -190,8 +200,8 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               <div
                 className="flex-1 rounded-full border px-3 py-2 text-[0.85em]"
                 style={{
-                  background: theme.inputBg,
-                  borderColor: theme.border,
+                  background: theme.inputBackground,
+                  borderColor: theme.inputBorder,
                   color: theme.muted,
                 }}
               >
@@ -200,9 +210,11 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               <button
                 type="button"
                 aria-label="Send"
-                className="flex size-9 items-center justify-center rounded-full text-white"
+                className="flex size-9 items-center justify-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-2"
                 style={{
-                  background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+                  background: theme.sendButtonBackground,
+                  color: theme.sendButtonForeground,
+                  outlineColor: theme.focusRing,
                 }}
               >
                 <Send aria-hidden="true" className="size-4" />
@@ -224,13 +236,15 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
           type="button"
           aria-label="Open assistant"
           onClick={() => setOpen((value) => !value)}
-          className="absolute flex items-center justify-center rounded-full text-white shadow-lg transition-transform hover:scale-105"
+          className="absolute flex items-center justify-center rounded-full shadow-lg transition-transform hover:scale-105 focus-visible:outline-2 focus-visible:outline-offset-2"
           style={{
             [left ? 'left' : 'right']: 20,
             bottom: 20,
             width: launcherSize,
             height: launcherSize,
-            background: `linear-gradient(135deg, ${theme.primary}, ${theme.secondary})`,
+            background: theme.launcherBackground,
+            color: theme.launcherForeground,
+            outlineColor: theme.focusRing,
           }}
         >
           {open ? (
@@ -241,6 +255,7 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               alt=""
               aria-hidden="true"
               className="size-6"
+              style={{ stroke: theme.launcherForeground }}
             />
           )}
         </button>

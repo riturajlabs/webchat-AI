@@ -121,12 +121,8 @@ class TestCompressText:
 
     def test_cross_chunk_dedup(self) -> None:
         seen: set[str] = set()
-        _, r1 = compress_text(
-            "Cats are great pets. They are independent.", seen_sentences=seen
-        )
-        _, r2 = compress_text(
-            "Cats are great pets. Dogs are loyal.", seen_sentences=seen
-        )
+        _, r1 = compress_text("Cats are great pets. They are independent.", seen_sentences=seen)
+        _, r2 = compress_text("Cats are great pets. Dogs are loyal.", seen_sentences=seen)
         assert r1 == 0  # First chunk: nothing to compress
         assert r2 == 1  # Second chunk: "Cats are great pets" removed
 
@@ -143,21 +139,27 @@ class TestOptimizationMetrics:
 
     def test_savings_chars(self) -> None:
         m = OptimizationMetrics(
-            original_chars=1000, optimized_chars=700,
-            removed_chunks=2, removed_sentences=5,
+            original_chars=1000,
+            optimized_chars=700,
+            removed_chunks=2,
+            removed_sentences=5,
         )
         assert m.savings_chars == 300
 
     def test_savings_pct(self) -> None:
         m = OptimizationMetrics(
-            original_chars=1000, optimized_chars=700,
-            removed_chunks=2, removed_sentences=5,
+            original_chars=1000,
+            optimized_chars=700,
+            removed_chunks=2,
+            removed_sentences=5,
         )
         assert m.savings_pct == 30.0
 
     def test_zero_original_chars(self) -> None:
         m = OptimizationMetrics(
-            original_chars=0, optimized_chars=0,
-            removed_chunks=0, removed_sentences=0,
+            original_chars=0,
+            optimized_chars=0,
+            removed_chunks=0,
+            removed_sentences=0,
         )
         assert m.savings_pct == 0.0

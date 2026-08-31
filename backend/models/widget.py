@@ -11,17 +11,13 @@ from backend.core.security import new_id, utcnow
 WIDGET_THEMES = {"light", "dark", "auto"}
 WIDGET_POSITIONS = {"bottom-left", "bottom-right"}
 WIDGET_FONT_SIZES = {"sm", "md", "lg"}
-# Curated theme presets (Phase 12). ids mirror `packages/themes` so the
-# dashboard and the widget SDK resolve the same palette.
-WIDGET_THEME_PRESETS = {
-    "ocean-blue",
-    "midnight-dark",
-    "emerald-support",
-    "purple-ai",
-    "minimal-white",
-    "sunset",
-    "modern-gradient",
-}
+# Curated theme presets are registered in the canonical `@webchat/themes`
+# registry (packages/themes) — the single source of truth for preset ids,
+# names and palettes shared by the dashboard, the widget SDK and the preview.
+# The backend stores `theme_preset` as a bounded string and does NOT maintain a
+# hardcoded id list, so adding a theme to the registry makes it available
+# everywhere without a backend change. Unregistered/obsolete ids safely fall
+# back to the classic palette at render time (see `resolveTheme`).
 
 
 class Widget(BaseModel):

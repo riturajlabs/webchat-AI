@@ -12,9 +12,9 @@
 
 export const WIDGET_STYLES = `
   :host {
-    --wc-primary: #2563eb;
-    --wc-accent: #4f46e5;
-    --wc-secondary: #4f46e5;
+    --wc-primary: #10A37F;
+    --wc-accent: #25D366;
+    --wc-secondary: #25D366;
     --wc-header-color: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
     --wc-header-bg: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
     --wc-header-text: #ffffff;
@@ -34,6 +34,17 @@ export const WIDGET_STYLES = `
     --wc-input-bg: var(--wc-surface-elevated);
     --wc-scrollbar-thumb: rgba(100, 116, 139, 0.35);
     --wc-scrollbar-track: #eef2f7;
+    --wc-send-button: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
+    --wc-send-button-foreground: #ffffff;
+    --wc-launcher-bg: linear-gradient(135deg, var(--wc-primary), var(--wc-accent));
+    --wc-launcher-fg: #ffffff;
+    --wc-close-button-fg: #ffffff;
+    --wc-suggestion-bg: var(--wc-surface-elevated);
+    --wc-suggestion-fg: var(--wc-text);
+    --wc-suggestion-border: var(--wc-border);
+    --wc-input-border: var(--wc-border);
+    --wc-focus-ring: var(--wc-accent);
+    --wc-online-indicator: #4ade80;
     --wc-radius: 20px;
     --wc-width: 380px;
     --wc-height: 600px;
@@ -106,8 +117,8 @@ export const WIDGET_STYLES = `
     height: var(--wc-launcher-size);
     border: none;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--wc-primary), var(--wc-accent));
-    color: var(--wc-on-primary, #ffffff);
+    background: var(--wc-launcher-bg, linear-gradient(135deg, var(--wc-primary), var(--wc-accent)));
+    color: var(--wc-launcher-fg, var(--wc-on-primary, #ffffff));
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -163,9 +174,8 @@ export const WIDGET_STYLES = `
   .wc-more-toggle:focus-visible,
   .wc-code-copy:focus-visible,
   .wc-chip:focus-visible,
-  // .wc-composer-input:focus-visible,
-  .wc-thumb:focus-visible {
-    outline: 2px solid var(--wc-accent);
+  .wc-star:focus-visible {
+    outline: 2px solid var(--wc-focus-ring, var(--wc-accent));
     outline-offset: 2px;
   }
 
@@ -284,20 +294,20 @@ export const WIDGET_STYLES = `
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #4ade80;
-    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.6);
+    background: var(--wc-online-indicator, #4ade80);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-online-indicator, #4ade80) 60%, transparent);
     animation: wc-dot-pulse 1.8s ease-out infinite;
   }
 
   @keyframes wc-dot-pulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-online-indicator, #4ade80) 55%, transparent);
     }
     70% {
-      box-shadow: 0 0 0 5px rgba(74, 222, 128, 0);
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--wc-online-indicator, #4ade80) 0%, transparent);
     }
     100% {
-      box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--wc-online-indicator, #4ade80) 0%, transparent);
     }
   }
 
@@ -305,7 +315,7 @@ export const WIDGET_STYLES = `
     flex: none;
     border: none;
     background: transparent;
-    color: var(--wc-header-text, #ffffff);
+    color: var(--wc-close-button-fg, var(--wc-header-text, #ffffff));
     line-height: 1;
     cursor: pointer;
     width: 30px;
@@ -318,7 +328,7 @@ export const WIDGET_STYLES = `
   }
 
   .wc-close:hover {
-    background: color-mix(in srgb, var(--wc-header-text, #ffffff) 18%, transparent);
+    background: color-mix(in srgb, var(--wc-close-button-fg, var(--wc-header-text, #ffffff)) 18%, transparent);
   }
 
   .wc-status-live,
@@ -653,7 +663,7 @@ export const WIDGET_STYLES = `
   }
 
   .wc-citation:focus-visible {
-    outline: 2px solid var(--wc-accent);
+    outline: 2px solid var(--wc-focus-ring, var(--wc-accent));
     outline-offset: 2px;
   }
 
@@ -838,7 +848,7 @@ export const WIDGET_STYLES = `
     }
   }
 
-  /* Compact thumbs-only visitor feedback under completed answers. */
+  /* Compact 5-star visitor feedback under completed answers. */
   .wc-feedback {
     margin-top: 9px;
     padding-top: 8px;
@@ -848,56 +858,51 @@ export const WIDGET_STYLES = `
     gap: 8px;
   }
 
-  .wc-feedback-thumbs {
-    display: flex;
-    gap: 6px;
+  .wc-feedback-stars {
+    display: inline-flex;
+    gap: 2px;
   }
 
-  .wc-thumb {
+  .wc-star {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--wc-border);
-    border-radius: 50%;
-    background: var(--wc-surface-elevated);
+    padding: 2px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
     color: var(--wc-muted);
     cursor: pointer;
     min-height: 24px;
-    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease,
-      transform 0.15s ease;
+    transition: color 0.15s ease, transform 0.15s ease;
   }
 
-  .wc-thumb svg {
+  .wc-star svg {
     transition: transform 0.15s ease;
   }
 
-  .wc-thumb:hover:not(:disabled) {
-    color: var(--wc-primary);
-    border-color: var(--wc-primary);
+  .wc-star:hover:not(:disabled) {
+    color: var(--wc-warning, var(--wc-primary));
     transform: translateY(-1px);
   }
 
-  .wc-thumb:hover:not(:disabled) svg {
-    transform: scale(1.1);
+  .wc-star:hover:not(:disabled) svg {
+    transform: scale(1.12);
   }
 
-  .wc-thumb:active:not(:disabled) {
-    transform: scale(0.92);
+  .wc-star:active:not(:disabled) {
+    transform: scale(0.9);
   }
 
-  .wc-thumb[aria-pressed='true'] {
-    color: var(--wc-primary);
-    border-color: var(--wc-primary);
-    background: color-mix(in srgb, var(--wc-primary) 12%, transparent);
+  .wc-star[aria-pressed='true'] {
+    color: var(--wc-warning, var(--wc-primary));
   }
 
-  .wc-thumb[aria-pressed='true'] svg {
+  .wc-star[aria-pressed='true'] svg {
     fill: currentColor;
   }
 
-  .wc-thumb:disabled {
+  .wc-star:disabled {
     opacity: 0.55;
     cursor: default;
   }
@@ -1031,9 +1036,9 @@ export const WIDGET_STYLES = `
   }
 
   .wc-chip {
-    border: 1px solid var(--wc-border);
-    background: var(--wc-surface-elevated);
-    color: var(--wc-text);
+    border: 1px solid var(--wc-suggestion-border, var(--wc-border));
+    background: var(--wc-suggestion-bg, var(--wc-surface-elevated));
+    color: var(--wc-suggestion-fg, var(--wc-text));
     border-radius: 999px;
     padding: 6px 12px;
     font-size: 0.85em;
@@ -1062,7 +1067,7 @@ export const WIDGET_STYLES = `
     align-items: center;
     gap: 4px;
     padding: 3px 4px 3px 14px;
-    border: 1px solid var(--wc-border);
+    border: 1px solid var(--wc-input-border, var(--wc-border));
     border-radius: 22px;
     background: var(--wc-input-bg, var(--wc-surface-elevated));
     box-shadow:
@@ -1072,8 +1077,8 @@ export const WIDGET_STYLES = `
   }
 
   .wc-composer-pill:focus-within {
-    border-color: var(--wc-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-primary) 18%, transparent);
+    border-color: var(--wc-focus-ring, var(--wc-primary));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-focus-ring, var(--wc-primary)) 18%, transparent);
   }
 
   .wc-composer-input {
@@ -1117,8 +1122,8 @@ export const WIDGET_STYLES = `
     height: 36px;
     border: none;
     border-radius: 50%;
-    background: linear-gradient(135deg, var(--wc-primary), var(--wc-secondary));
-    color: var(--wc-on-primary, #ffffff);
+    background: var(--wc-send-button, linear-gradient(135deg, var(--wc-primary), var(--wc-secondary)));
+    color: var(--wc-send-button-foreground, var(--wc-on-primary, #ffffff));
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -1151,8 +1156,8 @@ export const WIDGET_STYLES = `
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--wc-on-primary, #ffffff) 35%, transparent);
-    border-top-color: var(--wc-on-primary, #ffffff);
+    border: 2px solid color-mix(in srgb, var(--wc-send-button-foreground, var(--wc-on-primary, #ffffff)) 35%, transparent);
+    border-top-color: var(--wc-send-button-foreground, var(--wc-on-primary, #ffffff));
     animation: wc-spin 0.7s linear infinite;
   }
 
@@ -1259,7 +1264,7 @@ export const WIDGET_STYLES = `
     .wc-send-spinner,
     .wc-send,
     .wc-close,
-    .wc-thumb,
+    .wc-star,
     .wc-chip {
       transition: none;
       animation: none;

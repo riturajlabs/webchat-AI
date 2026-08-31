@@ -165,6 +165,23 @@ describe('WebsiteList', () => {
     expect(screen.getByText('ready')).toBeInTheDocument();
   });
 
+  it('renders a website preview image and falls back gracefully when it is broken', () => {
+    mockWebsites({
+      data: [{ ...SITE, preview_image: 'https://cdn.example/acme.png' }],
+    });
+    const { container } = renderList();
+
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute('src', 'https://cdn.example/acme.png');
+
+    // A broken remote image must not break the card — the banner hides and the
+    // website content remains.
+    fireEvent.error(img as HTMLImageElement);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('Acme Inc')).toBeInTheDocument();
+  });
+
   it('shows the knowledge base statistics in the advanced details section', () => {
     renderList();
     fireEvent.click(screen.getByRole('button', { name: /Advanced details/ }));

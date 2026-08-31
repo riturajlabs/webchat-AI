@@ -24,6 +24,7 @@ class User(BaseModel):
     onboarding_completed: bool = False
     onboarding_step: str = "welcome"
     pwd_token_version: int = 0
+    avatar_url: str | None = None
     last_login: datetime | None = None
     failed_login_attempts: int = 0
     locked_until: datetime | None = None

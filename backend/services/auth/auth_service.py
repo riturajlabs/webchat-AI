@@ -64,6 +64,9 @@ from backend.workers.timing import chat_stage
 
 logger = logging.getLogger("webchat_ai")
 
+# Sentinel for optional profile fields omitted from a PATCH body.
+_UNSET = object()
+
 
 @dataclass(frozen=True)
 class AuthResult:
@@ -88,6 +91,7 @@ class Principal:
     email_verified: bool
     status: str
     created_at: datetime
+    avatar_url: str | None = None
 
 
 class AuthService:
@@ -200,6 +204,37 @@ class AuthService:
                 user_agent=user_agent,
             )
         )
+
+    async def update_profile(
+        self,
+        *,
+        user_id: str,
+        name: str | None | object = _UNSET,
+        avatar_url: str | None | object = _UNSET,
+    ) -> User:
+        """Update editable profile fields for the signed-in user (name/avatar).
+
+        Omitted fields (default `_UNSET`) are left untouched; pass `name` and
+        `avatar_url` explicitly to set them (`avatar_url=None`/`""` clears the
+        photo). Returns the refreshed user.
+        """
+        current = await self._users.find_by_id(user_id)
+        if current is None:
+            raise InvalidCredentialsError("Invalid or expired session.")
+        updates: dict[str, object] = {}
+        if name is not _UNSET:
+            updates["name"] = name
+        if avatar_url is not _UNSET:
+            updates["avatar_url"] = avatar_url
+        await self._users.update_profile(
+            user_id,
+            updates=updates,
+            at=utcnow(),
+        )
+        updated = await self._users.find_by_id(user_id)
+        if updated is None:
+            raise InvalidCredentialsError("Invalid or expired session.")
+        return updated
 
     async def login(
         self,
@@ -459,6 +494,7 @@ class AuthService:
             email_verified=user.email_verified,
             status=user.status,
             created_at=user.created_at,
+            avatar_url=user.avatar_url,
         )
 
     # ------------------------------------------------------------- internals

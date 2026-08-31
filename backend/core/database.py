@@ -309,9 +309,12 @@ class MongoDB:
         await db["api_keys"].create_index("tenant_id")
         await db["api_keys"].create_index([("tenant_id", 1), ("created_at", -1)])
         # Phase 12.4 visitor feedback (docs/05 §19, ADR-005 §5.6): tenant reads,
-        # created_at sorting, rating/category filters, 2-year TTL.
+        # created_at sorting, rating/category filters, 2-year TTL. The
+        # (tenant, website, created_at) index serves the dashboard's feedback
+        # analytics breakdowns filtered per website (retail analytics view).
         await db["feedback"].create_index("tenant_id")
         await db["feedback"].create_index([("tenant_id", 1), ("created_at", -1)])
+        await db["feedback"].create_index([("tenant_id", 1), ("website_id", 1), ("created_at", -1)])
         await db["feedback"].create_index("rating")
         await db["feedback"].create_index(
             [("tenant_id", 1), ("message_id", 1)], unique=True, name="uniq_tenant_message"

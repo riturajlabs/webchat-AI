@@ -106,9 +106,7 @@ class EmbeddingReranker:
                 )
 
         if not candidates or self._top_k <= 0:
-            return candidates, RerankMetrics(
-                input_count=input_count, output_count=input_count
-            )
+            return candidates, RerankMetrics(input_count=input_count, output_count=input_count)
 
         limit = min(self._top_k, len(candidates))
 
@@ -214,8 +212,7 @@ def _log_rerank_after(query: str, reranked: list[VectorSearchResult]) -> None:
     )
     for idx, res in enumerate(reranked):
         logger.debug(
-            "rerank_candidate_after idx=%d chunk_id=%s title=%s "
-            "score=%.4f chunk_text_150=%r",
+            "rerank_candidate_after idx=%d chunk_id=%s title=%s score=%.4f chunk_text_150=%r",
             idx,
             res.chunk.id,
             res.chunk.metadata.get("title", ""),

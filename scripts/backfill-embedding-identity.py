@@ -56,10 +56,8 @@ def backfill(
 ) -> int:
     settings = get_settings()
     provider = (
-    settings.embedding_provider_order[0]
-    if settings.embedding_provider_order
-    else "gemini"
-    )   
+        settings.embedding_provider_order[0] if settings.embedding_provider_order else "gemini"
+    )
     model = settings.embedding_model
     dimensions = settings.embedding_dimensions
     version = settings.embedding_version
@@ -110,7 +108,9 @@ def backfill(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--uri", default=None, help="defaults to $MONGODB_URI or mongodb://localhost:27017")
+    parser.add_argument(
+        "--uri", default=None, help="defaults to $MONGODB_URI or mongodb://localhost:27017"
+    )
     parser.add_argument("--db", default=None, help="defaults to $MONGODB_DB or webchat_ai")
     parser.add_argument(
         "--env-file",

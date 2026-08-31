@@ -284,3 +284,32 @@ async def test_init_indexes_declares_api_key_indexes(monkeypatch) -> None:
     assert any(
         keys == (("tenant_id", 1), ("created_at", -1)) and not unique for (keys, unique) in indexes
     )
+
+
+async def test_init_indexes_declares_feedback_indexes(monkeypatch) -> None:
+    """Phase 12.4 visitor feedback: tenant reads + the analytics breakdowns.
+
+    The (tenant_id, website_id, created_at) compound index serves the
+    feedback analytics endpoint filtered per website (retail analytics view),
+    the (tenant_id, message_id) unique key keeps submissions write-once, and
+    created_at TTL matches ADR-005 §5.7's two-year retention.
+    """
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    indexes = _index_map(db["feedback"])
+    assert ("tenant_id", False) in indexes
+    assert any(
+        keys == (("tenant_id", 1), ("created_at", -1)) and not unique for (keys, unique) in indexes
+    )
+    assert any(
+        keys == (("tenant_id", 1), ("website_id", 1), ("created_at", -1)) and not unique
+        for (keys, unique) in indexes
+    )
+    assert any(
+        keys == (("tenant_id", 1), ("message_id", 1)) and unique for (keys, unique) in indexes
+    )
+    ttl = [kwargs for keys, kwargs in db["feedback"].indexes if kwargs.get("expireAfterSeconds")]
+    assert ttl == [{"expireAfterSeconds": 2 * 365 * 24 * 60 * 60}]

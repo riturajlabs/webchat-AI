@@ -40,6 +40,7 @@ class WebsiteOut(BaseModel):
     knowledge_documents: int
     knowledge_chunks: int
     last_knowledge_at: datetime | None
+    preview_image: str | None = None
 
     @classmethod
     def from_website(cls, website: Any, *, widget_id: str) -> "WebsiteOut":
@@ -59,6 +60,7 @@ class WebsiteOut(BaseModel):
             knowledge_documents=website.knowledge_documents,
             knowledge_chunks=website.knowledge_chunks,
             last_knowledge_at=website.last_knowledge_at,
+            preview_image=website.preview_image,
         )
 
 

@@ -42,6 +42,16 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
 
+# Default healthcheck (can be overridden by the orchestrator): probe the
+# liveness endpoint, which deliberately avoids dependency I/O so a MongoDB/
+# Redis partition never causes an orchestrator to restart a healthy process.
+# Use /api/health/ready for readiness gating instead (it fails closed 503).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/live', timeout=4)"
+
 USER appuser
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run as many uvicorn workers as UVICORN_WORKERS (default 1). The compose file
+# forwards it; keep it at 1 per container unless DB-pool/serving profiling
+# justifies more (vertical scaling via compose deploy.limits is preferred).
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers \"${UVICORN_WORKERS:-1}\""]

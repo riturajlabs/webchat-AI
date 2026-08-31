@@ -341,9 +341,12 @@ Each delta is yielded individually from the RAG service, then buffered in SSE (`
 
 ```python
 import numpy as np
+
 query_vec = np.array(query_embedding)
 chunk_vecs = np.array([c.chunk.embedding for c in candidates])
-similarities = np.dot(chunk_vecs, query_vec) / (np.linalg.norm(chunk_vecs, axis=1) * np.linalg.norm(query_vec))
+similarities = np.dot(chunk_vecs, query_vec) / (
+    np.linalg.norm(chunk_vecs, axis=1) * np.linalg.norm(query_vec)
+)
 ```
 
 **Expected improvement**: ~10-50x speedup for the similarity computation. Total savings: < 5ms at current scale.

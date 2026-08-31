@@ -12,7 +12,7 @@ from backend.services.ingestion.crawler import (
     FetchError,
     PageFetcher,
 )
-from backend.services.ingestion.extractor import ExtractedPage, extract_page
+from backend.services.ingestion.extractor import ExtractedPage, extract_page, pick_preview_image
 from backend.services.ingestion.ssrf_guard import SsrFGuard
 
 __all__ = [
@@ -25,4 +25,5 @@ __all__ = [
     "SsrFGuard",
     "clean_html",
     "extract_page",
+    "pick_preview_image",
 ]

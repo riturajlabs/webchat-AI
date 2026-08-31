@@ -18,6 +18,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { THEME_PRESETS } from '@webchat/themes';
 
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -182,13 +183,7 @@ function CustomizeStep({
             <div className="flex flex-wrap gap-2">
               {[
                 { value: '', label: 'None' },
-                { value: 'ocean-blue', label: 'Ocean Blue' },
-                { value: 'midnight-dark', label: 'Midnight' },
-                { value: 'emerald-support', label: 'Emerald' },
-                { value: 'purple-ai', label: 'Purple AI' },
-                { value: 'minimal-white', label: 'Minimal' },
-                { value: 'sunset', label: 'Sunset' },
-                { value: 'modern-gradient', label: 'Gradient' },
+                ...THEME_PRESETS.map((preset) => ({ value: preset.id, label: preset.name })),
               ].map((p) => (
                 <Button
                   key={p.value}

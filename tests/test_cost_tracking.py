@@ -251,16 +251,27 @@ async def test_sum_by_tenant_and_by_website_aggregate_cost() -> None:
         env = build_chat_env()
     usage = env.usage
     await usage.increment(
-        tenant_id=TENANT_A, website_id="web-1", date="2026-08-01",
-        counters={"chats": 1, "messages": 2, "input_tokens": 10, "output_tokens": 20,
-                  "estimated_cost_micros": 100},
+        tenant_id=TENANT_A,
+        website_id="web-1",
+        date="2026-08-01",
+        counters={
+            "chats": 1,
+            "messages": 2,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "estimated_cost_micros": 100,
+        },
     )
     await usage.increment(
-        tenant_id=TENANT_A, website_id="web-2", date="2026-08-01",
+        tenant_id=TENANT_A,
+        website_id="web-2",
+        date="2026-08-01",
         counters={"chats": 1, "messages": 2, "estimated_cost_micros": 250},
     )
     await usage.increment(
-        tenant_id="tenant-b", website_id="web-9", date="2026-08-02",
+        tenant_id="tenant-b",
+        website_id="web-9",
+        date="2026-08-02",
         counters={"chats": 1, "messages": 2, "estimated_cost_micros": 999},
     )
 
@@ -304,18 +315,14 @@ class _FakeUsageCollection:
         return all(doc.get(key) == value for key, value in query.items())
 
     def aggregate(self, pipeline: list[dict]) -> "_FakeAggregateCursor":
-        selected = [
-            doc for doc in self._docs if self._matches(pipeline[0]["$match"], doc)
-        ]
+        selected = [doc for doc in self._docs if self._matches(pipeline[0]["$match"], doc)]
         group_stage = pipeline[1]["$group"]
         result: dict = {"_id": None}
         for field, spec in group_stage.items():
             if field == "_id":
                 continue
             source = spec["$sum"].lstrip("$").split(".")[-1]  # "counters.chats" -> "chats"
-            result[field] = sum(
-                doc.get("counters", {}).get(source, 0) for doc in selected
-            )
+            result[field] = sum(doc.get("counters", {}).get(source, 0) for doc in selected)
         return _FakeAggregateCursor([result])
 
 

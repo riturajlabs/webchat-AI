@@ -86,12 +86,15 @@ docker compose --env-file .env.development -f docker/compose.yml up --build
 Secrets are set as **environment variables** on your deployment platform — no
 `.env` file is shipped. Examples:
 
-| Platform       | How to set secrets                                                                 |
-| -------------- | ---------------------------------------------------------------------------------- |
-| **Railway**    | Project → Variables tab (supports multi-line JSON, secret masking)                 |
-| **AWS**        | Secrets Manager / SSM Parameter Store → inject via task definition or ECS          |
-| **Docker**     | `docker run -e MONGODB_URI=...` or Docker Compose `secrets` / `.env` (not tracked) |
-| **Kubernetes** | `kubectl create secret generic webchat-secrets --from-literal=MONGODB_URI=...`     |
+| Platform    | How to set secrets                                                                 |
+| ----------- | ---------------------------------------------------------------------------------- |
+| **Railway** | Project → Variables tab (supports multi-line JSON, secret masking)                 |
+| **AWS**     | Secrets Manager / SSM Parameter Store → inject via task definition or ECS          |
+| **Docker**  | `docker run -e MONGODB_URI=...` or Docker Compose `secrets` / `.env` (not tracked) |
+
+> Kubernetes is explicitly NOT a deployment target. Production uses the Docker
+> Compose stack with immutable GHCR images (see `docs/deployment/README.md` and
+> `.github/workflows/cd.yml`).
 
 ### Required secrets for production
 

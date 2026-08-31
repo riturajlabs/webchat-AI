@@ -401,9 +401,7 @@ async def test_session_access_fails_closed_without_lookup() -> None:
         FakeWebsiteRepository(),
         FakeWidgetStore(),
     )
-    service = WidgetService(
-        widgets=widgets, tenants=tenants, websites=websites, store=store
-    )
+    service = WidgetService(widgets=widgets, tenants=tenants, websites=websites, store=store)
 
     with pytest.raises(SessionNotFoundError):
         await service.validate_session_access(

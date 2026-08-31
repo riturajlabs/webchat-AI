@@ -41,6 +41,8 @@ class CrawlJobRepository(Protocol):
 
     async def count_active_for_tenant(self, tenant_id: str) -> int: ...
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
 
 class MongoCrawlJobRepository:
     """MongoDB-backed crawl job repository (docs/05 §8, ADR-002)."""
@@ -109,3 +111,9 @@ class MongoCrawlJobRepository:
                 "status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)},
             }
         )
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return result.deleted_count

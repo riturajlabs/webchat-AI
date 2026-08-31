@@ -81,6 +81,8 @@ class ChatMessageRepository(Protocol):
 
     async def delete_by_session(self, tenant_id: str, session_id: str) -> int: ...
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
 
 class MongoChatMessageRepository:
     """MongoDB-backed chat message repository."""
@@ -191,6 +193,12 @@ class MongoChatMessageRepository:
     async def delete_by_session(self, tenant_id: str, session_id: str) -> int:
         result = await self._collection.delete_many(
             {"tenant_id": tenant_id, "session_id": session_id}
+        )
+        return result.deleted_count
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
         )
         return result.deleted_count
 

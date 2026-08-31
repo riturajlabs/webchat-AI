@@ -569,9 +569,7 @@ async def test_stream_answer_with_usage_gate_frames_include_request_id() -> None
     token = request_id_var.set("trace-7")
     try:
         request = FakeRequest()
-        usage = _RecordingUsageService(
-            limit_error=AppError("Monthly messages_sent limit reached.")
-        )
+        usage = _RecordingUsageService(limit_error=AppError("Monthly messages_sent limit reached."))
 
         async def _never_called():  # pragma: no cover - pipeline must not start
             yield {"event": "done", "data": {}}
@@ -843,9 +841,7 @@ async def test_buffered_stream_flushes_trailing_deltas_on_normal_completion() ->
 
     frames = [
         frame
-        async for frame in buffered_stream_with_disconnect(
-            request, _events(), buffer_ms=60_000.0
-        )
+        async for frame in buffered_stream_with_disconnect(request, _events(), buffer_ms=60_000.0)
     ]
 
     assert len(frames) == 1
@@ -874,9 +870,7 @@ async def test_buffered_stream_disconnect_flushes_live_tail_before_close() -> No
 
     frames = [
         frame
-        async for frame in buffered_stream_with_disconnect(
-            request, _events(), buffer_ms=60_000.0
-        )
+        async for frame in buffered_stream_with_disconnect(request, _events(), buffer_ms=60_000.0)
     ]
 
     assert [f.split("\n")[0] for f in frames] == ["event: sources", "event: message"]
@@ -902,9 +896,7 @@ async def test_buffered_stream_flushes_at_deadline_without_upstream_input() -> N
 
     received: list[tuple[str, float]] = []
     start = time.monotonic()
-    async for frame in buffered_stream_with_disconnect(
-        request, _paused_events(), buffer_ms=50.0
-    ):
+    async for frame in buffered_stream_with_disconnect(request, _paused_events(), buffer_ms=50.0):
         received.append((frame, time.monotonic() - start))
 
     message_frames = [(frame, at) for frame, at in received if frame.startswith("event: message")]

@@ -59,9 +59,7 @@ class TestClassifyQuery:
         assert classify_query("Where is the download link?") == QueryComplexity.SIMPLE
 
     def test_medium_length_how_query(self) -> None:
-        result = classify_query(
-            "How do I configure the webhook settings for the API?"
-        )
+        result = classify_query("How do I configure the webhook settings for the API?")
         assert result in (QueryComplexity.MEDIUM, QueryComplexity.COMPLEX)
 
     def test_conjunction_boosts_score(self) -> None:

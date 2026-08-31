@@ -24,7 +24,7 @@ from backend.models.document import Document
 from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED
 from backend.repositories import DocumentRepository
 from backend.services.ingestion.cleaner import clean_html
-from backend.services.ingestion.extractor import extract_page
+from backend.services.ingestion.extractor import extract_page, pick_preview_image
 from backend.services.ingestion.ssrf_guard import SsrFGuard
 from backend.utils.robots import RobotsTxt
 from backend.utils.url_validator import normalize_crawl_url, validate_hostname
@@ -93,6 +93,8 @@ class CrawlSession:
         # URLs successfully persisted during run(); consumed by post-crawl
         # reconciliation so pages removed from the site can be purged (R-02).
         self.stored_urls: list[str] = []
+        # Open Graph / Twitter preview image captured from the seed (home) page.
+        self.preview_image: str | None = None
 
     async def run(self) -> int:
         """Crawl the site and persist cleaned pages. Returns pages stored."""
@@ -138,6 +140,8 @@ class CrawlSession:
             final_url = normalize_crawl_url(page.url, page.url) or page.url
             if self._on_extracting is not None:
                 await self._on_extracting(final_url)
+            if stored == 0 and self.preview_image is None:
+                self.preview_image = pick_preview_image(extracted.meta, page.url)
             content = clean_html(page.html, max_chars=self._settings.crawl_max_content_bytes)
             checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
             document = Document.new(

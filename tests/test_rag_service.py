@@ -1291,9 +1291,7 @@ async def test_mixed_embedding_corpus_only_serves_active_identity() -> None:
 async def test_invalid_citation_markers_are_stripped_from_answer() -> None:
     """[N] markers beyond the retrieved source count are removed before the
     answer is persisted; valid markers and unrelated brackets survive."""
-    env = build_chat_env(
-        deltas=["Plans start at $9 [1]. Compare tiers [7]. Release notes [2024]."]
-    )
+    env = build_chat_env(deltas=["Plans start at $9 [1]. Compare tiers [7]. Release notes [2024]."])
     await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
     await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Starter costs $9.")
 
@@ -1303,10 +1301,7 @@ async def test_invalid_citation_markers_are_stripped_from_answer() -> None:
     assert _done_event(events)["data"]["fallback"] is False
 
     _user, assistant = env.messages.messages
-    assert (
-        assistant.content
-        == "Plans start at $9 [1]. Compare tiers . Release notes [2024]."
-    )
+    assert assistant.content == "Plans start at $9 [1]. Compare tiers . Release notes [2024]."
 
 
 def test_strip_invalid_citations_unit_cases() -> None:
@@ -1354,15 +1349,9 @@ async def test_completed_turn_records_llm_token_cost_metrics(monkeypatch) -> Non
     def record_failure(code: str) -> None:
         recorded["failure"].append(code)
 
-    monkeypatch.setattr(
-        "backend.services.chat.rag_service.record_llm_tokens", record_tokens
-    )
-    monkeypatch.setattr(
-        "backend.services.chat.rag_service.record_llm_request", record_request
-    )
-    monkeypatch.setattr(
-        "backend.services.chat.rag_service.record_llm_failure", record_failure
-    )
+    monkeypatch.setattr("backend.services.chat.rag_service.record_llm_tokens", record_tokens)
+    monkeypatch.setattr("backend.services.chat.rag_service.record_llm_request", record_request)
+    monkeypatch.setattr("backend.services.chat.rag_service.record_llm_failure", record_failure)
 
     events = await _stream(
         env,
@@ -1399,12 +1388,8 @@ async def test_failed_generation_records_llm_failure_metric(monkeypatch) -> None
     def record_tokens(kind: str, count: float) -> None:
         recorded["input"].append((kind, count))
 
-    monkeypatch.setattr(
-        "backend.services.chat.rag_service.record_llm_failure", record_failure
-    )
-    monkeypatch.setattr(
-        "backend.services.chat.rag_service.record_llm_tokens", record_tokens
-    )
+    monkeypatch.setattr("backend.services.chat.rag_service.record_llm_failure", record_failure)
+    monkeypatch.setattr("backend.services.chat.rag_service.record_llm_tokens", record_tokens)
 
     events = await _stream(
         env,

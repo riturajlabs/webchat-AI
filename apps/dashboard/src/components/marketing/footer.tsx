@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Github, Globe, Instagram, Linkedin } from 'lucide-react';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { getLandingDestination } from '@/lib/landing-navigation';
@@ -23,6 +24,33 @@ const RESOURCE_DOC_LINKS = [
 const LEGAL_LINKS = [
   { href: '/privacy', label: 'Privacy Policy' },
   { href: '/terms', label: 'Terms of Service' },
+];
+
+const SOCIAL_LINKS = [
+  {
+    href: 'https://www.linkedin.com/in/riturajlabs/',
+    label: 'LinkedIn',
+    handle: 'riturajlabs',
+    icon: Linkedin,
+  },
+  {
+    href: 'https://github.com/riturajlabs',
+    label: 'GitHub',
+    handle: 'riturajlabs',
+    icon: Github,
+  },
+  {
+    href: 'https://www.instagram.com/riturajlabs/',
+    label: 'Instagram',
+    handle: 'riturajlabs',
+    icon: Instagram,
+  },
+  {
+    href: 'https://riturajlabs.vercel.app/',
+    label: 'Portfolio',
+    handle: 'riturajlabs',
+    icon: Globe,
+  },
 ];
 
 function FooterColumn({
@@ -67,6 +95,24 @@ export function Footer() {
             <p className="max-w-xs text-sm text-muted-foreground">
               Build intelligent AI assistants trained on your website content.
             </p>
+            <div className="mt-3 border-t border-border/60 pt-4">
+              <h3 className="text-sm font-semibold text-foreground">Connect with us</h3>
+              <nav aria-label="Social media" className="mt-3 flex items-center gap-1.5">
+                {SOCIAL_LINKS.map(({ href, label, icon: Icon }) => (
+                  <a
+                    key={label}
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={label}
+                    title={label}
+                    className="flex size-9 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <Icon aria-hidden="true" className="size-4" />
+                  </a>
+                ))}
+              </nav>
+            </div>
           </div>
           <FooterColumn title="Product" links={PRODUCT_LINKS} />
           <div>

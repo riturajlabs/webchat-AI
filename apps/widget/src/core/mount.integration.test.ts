@@ -450,7 +450,7 @@ describe('mount integration', () => {
     controller.destroy();
   });
 
-  it('thumbs-up submits feedback immediately with no comment form', async () => {
+  it('five-star rating submits feedback immediately with no comment form', async () => {
     const fetchImpl = apiFetch(() => [
       'event: message\ndata: {"delta":"answer"}\n\n',
       'event: done\ndata: {"session_id":"s-1","message_id":"m-1"}\n\n',
@@ -469,13 +469,13 @@ describe('mount integration', () => {
 
     const shadow = host.shadowRoot as ShadowRoot;
     await vi.waitFor(() => {
-      expect(shadow.querySelector('.wc-thumb-up')).toBeTruthy();
+      expect(shadow.querySelector('.wc-star')).toBeTruthy();
     });
     // Compact UX: no comment form inside the feedback control.
     expect(shadow.querySelector('.wc-feedback textarea')).toBeNull();
     expect(shadow.querySelector('.wc-feedback-submit')).toBeNull();
 
-    (shadow.querySelector('.wc-thumb-up') as HTMLButtonElement).click();
+    (shadow.querySelector('.wc-star[data-rating="5"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(fetchImpl).toHaveBeenCalledWith(
         expect.stringContaining('/feedback'),

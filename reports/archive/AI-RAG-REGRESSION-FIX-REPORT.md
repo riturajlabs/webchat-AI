@@ -36,7 +36,7 @@ chunks = await self._vector.list_chunks(tenant_id, website_id, limit=limit)
    (empty embedding, score 0.5) is retained.
 4. Fused results go to `EmbeddingReranker.rerank()` (reranker.py:121):
    ```python
-   if not chunk_emb:        # embedding=[] is falsy
+   if not chunk_emb:  # embedding=[] is falsy
        scored.append((0.0, idx))  # score = 0.0
    ```
 5. `_build_context()` (rag_service.py:991) filters: `if result.score < self._min_score` (0.25).

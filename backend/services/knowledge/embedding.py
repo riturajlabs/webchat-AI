@@ -49,11 +49,7 @@ def ensure_vector_dimensions(
     """
     if not vectors:
         return
-    mismatches = {
-        len(vector)
-        for vector in vectors
-        if len(vector) != expected_dimensions
-    }
+    mismatches = {len(vector) for vector in vectors if len(vector) != expected_dimensions}
     if mismatches:
         raise EmbeddingError(
             f"Embedding dimension mismatch: {provider_name} returned dimensions "

@@ -23,8 +23,8 @@ export type FeedbackCategory = 'helpful' | 'wrong' | 'incomplete' | 'offensive' 
 export interface FeedbackPayload {
   sessionId: string;
   messageId: string;
-  /** 1-5 scale; the widget maps thumbs up → 5 and thumbs down → 1. */
-  rating: 1 | 5;
+  /** 1-5 star scale (the control maps 4-5 → helpful, 3 → other, 1-2 → wrong). */
+  rating: 1 | 2 | 3 | 4 | 5;
   category: FeedbackCategory;
   comment: string;
 }

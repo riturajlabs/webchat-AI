@@ -51,6 +51,10 @@ RUN addgroup -g 1001 -S appgroup && \
 
 EXPOSE 3000
 
+# Default healthcheck (can be overridden): the Next.js standalone server root.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:3000 >/dev/null
+
 USER appuser
 
 CMD ["node", "apps/dashboard/server.js"]

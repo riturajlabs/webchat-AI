@@ -1,0 +1,84 @@
+# WebChat AI - PRODUCTION compose overlay.
+# Merged over docker/compose.yml for real deployments:
+#   docker compose --env-file .env.production \
+#       -f docker/compose.yml -f docker/compose.prod.yml \
+#       up -d api worker dashboard widget
+#
+# What this overlay changes:
+#   - Pins immutable container images (GHCR, tagged by CI with the git SHA).
+#     The base file still builds locally; the overlay's `image:` only wins when
+#     a matching image is already present (deploy flow pre-pulls it).
+#   - Runs api/worker with a read-only root filesystem (state lives in tmpfs
+#     /tmp or external Mongo/Redis).
+#   - Adds init:true (proper PID 1, zombie reaping), bounded json-file logs,
+#     and explicit deployment limits.
+#   - Does NOT start the local mongo/redis/mailpit development services: run
+#     only the four application services (they target managed Mongo/Redis).
+#
+# Interpolation note: this file honors ${VAR-default} semantics like the base
+# file. IMAGE_TAG is set by CI against the real GHCR namespace; override for
+# local production testing (e.g. IMAGE_TAG=latest).
+#
+# Security baseline inherited from docker/compose.yml (not repeated here):
+#   - container_name per service, restart unless-stopped
+#   - no-new-privileges, cap_drop ALL, per-service memory/CPU limits
+#   - per-service healthchecks used for depends_on ordering
+
+name: webchat-ai
+
+x-logging: &log-json
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-api:${IMAGE_TAG:-latest}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      <<: *log-json
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  worker:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-worker:${IMAGE_TAG:-latest}
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    logging:
+      <<: *log-json
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  dashboard:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-dashboard:${IMAGE_TAG:-latest}
+    init: true
+    logging:
+      <<: *log-json
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  widget:
+    image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-widget:${IMAGE_TAG:-latest}
+    init: true
+    logging:
+      <<: *log-json
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"

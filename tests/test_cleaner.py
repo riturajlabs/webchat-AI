@@ -102,7 +102,7 @@ def test_headings_are_marked_for_chunk_metadata() -> None:
     text = clean_html(TABLE_HTML)
     assert "## Pricing" in text
 
-    headed = '<main><h1>Guide</h1><p>Body.</p><h3>Details</h3><p>More.</p></main>'
+    headed = "<main><h1>Guide</h1><p>Body.</p><h3>Details</h3><p>More.</p></main>"
     cleaned = clean_html(headed)
     assert "# Guide" in cleaned
     assert "### Details" in cleaned

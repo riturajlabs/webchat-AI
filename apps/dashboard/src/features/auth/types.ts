@@ -9,6 +9,7 @@ export interface UserOut {
   status: string;
   tenant_id: string;
   created_at: string;
+  avatar_url?: string | null;
 }
 
 export interface AuthResponse {

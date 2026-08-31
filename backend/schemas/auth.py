@@ -125,6 +125,7 @@ class UserOut(BaseModel):
     status: str
     tenant_id: str
     created_at: datetime
+    avatar_url: str | None = None
 
     @classmethod
     def from_user(cls, user: Any, *, role: str) -> "UserOut":
@@ -137,6 +138,7 @@ class UserOut(BaseModel):
             status=user.status,
             tenant_id=user.tenant_id,
             created_at=user.created_at,
+            avatar_url=getattr(user, "avatar_url", None),
         )
 
     @classmethod
@@ -150,7 +152,38 @@ class UserOut(BaseModel):
             status=principal.status,
             tenant_id=principal.tenant_id,
             created_at=principal.created_at,
+            avatar_url=getattr(principal, "avatar_url", None),
         )
+
+
+# Reasonable upper bound for an inline (data-URL) avatar in the user document.
+MAX_AVATAR_BYTES = 5 * 1024 * 1024
+
+
+class UpdateProfileRequest(BaseModel):
+    """Editable profile fields for the signed-in user (PATCH /api/auth/me)."""
+
+    name: str | None = Field(default=None, min_length=2, max_length=100)
+    avatar_url: str | None = Field(default=None, max_length=MAX_AVATAR_BYTES)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Name cannot be empty.")
+        return stripped
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _normalize_avatar(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if value == "":
+            return None
+        return value
 
 
 class AuthResponse(BaseModel):

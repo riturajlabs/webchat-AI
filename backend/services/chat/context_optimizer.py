@@ -19,6 +19,7 @@ from dataclasses import dataclass
 # Similarity
 # ---------------------------------------------------------------------------
 
+
 def _word_set(text: str) -> set[str]:
     """Extract a normalized word set from text."""
     return {w for w in re.split(r"\W+", text.lower()) if len(w) > 2}
@@ -41,6 +42,7 @@ def text_similarity(a: str, b: str) -> float:
 # ---------------------------------------------------------------------------
 # Near-duplicate removal
 # ---------------------------------------------------------------------------
+
 
 def remove_near_duplicates(
     texts: list[str],
@@ -163,6 +165,7 @@ def compress_text(
 # ---------------------------------------------------------------------------
 # Metrics dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class OptimizationMetrics:

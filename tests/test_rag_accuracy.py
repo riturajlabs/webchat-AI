@@ -73,14 +73,22 @@ async def test_hybrid_default_e2e_produces_sources() -> None:
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Pro plan costs $19 per month.",
-        url="https://example.com/pricing", title="Pricing", chunk_index=0,
+        url="https://example.com/pricing",
+        title="Pricing",
+        chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Enterprise includes SSO and audit logs.",
-        url="https://example.com/enterprise", title="Enterprise", chunk_index=1,
+        url="https://example.com/enterprise",
+        title="Enterprise",
+        chunk_index=1,
     )
     events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="pricing plan")
     sources = next(e for e in events if e["event"] == "sources")
@@ -159,12 +167,20 @@ async def test_reranker_reorders_results() -> None:
     reranker = EmbeddingReranker(embedder=fake_embedder, top_k=2)
 
     chunk_a = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
-        chunk_text="chunk_a text", embedding=[0.0] * 4, chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-a",
+        chunk_text="chunk_a text",
+        embedding=[0.0] * 4,
+        chunk_index=0,
     )
     chunk_b = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
-        chunk_text="chunk_b text", embedding=[0.0] * 4, chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-b",
+        chunk_text="chunk_b text",
+        embedding=[0.0] * 4,
+        chunk_index=0,
     )
 
     candidates = [
@@ -188,8 +204,12 @@ async def test_reranker_returns_original_on_embed_failure() -> None:
     reranker = EmbeddingReranker(embedder=FailingEmbedder(), top_k=5)
 
     chunk = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-1",
-        chunk_text="test", embedding=[0.0] * 4, chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-1",
+        chunk_text="test",
+        embedding=[0.0] * 4,
+        chunk_index=0,
     )
     candidates = [VectorSearchResult(chunk=chunk, score=0.9)]
     result, metrics = await reranker.rerank("query", candidates)
@@ -207,15 +227,16 @@ async def test_reranker_top_k_limits_output() -> None:
 
     chunks = [
         KnowledgeChunk.new(
-            tenant_id=TENANT, website_id=WEBSITE, document_id=f"doc-{i}",
-            chunk_text=f"chunk_{i}", embedding=[0.0] * 4, chunk_index=i,
+            tenant_id=TENANT,
+            website_id=WEBSITE,
+            document_id=f"doc-{i}",
+            chunk_text=f"chunk_{i}",
+            embedding=[0.0] * 4,
+            chunk_index=i,
         )
         for i in range(5)
     ]
-    candidates = [
-        VectorSearchResult(chunk=c, score=0.9 - i * 0.01)
-        for i, c in enumerate(chunks)
-    ]
+    candidates = [VectorSearchResult(chunk=c, score=0.9 - i * 0.01) for i, c in enumerate(chunks)]
     result, metrics = await reranker.rerank("query", candidates)
     assert len(result) == 2
     assert metrics.output_count == 2
@@ -249,8 +270,9 @@ def test_faithfulness_config_defaults() -> None:
 
 def test_faithfulness_full_support() -> None:
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="The Pro plan costs $19 per month."),
+        ContextItem(
+            url="https://a.com", title="A", heading=None, text="The Pro plan costs $19 per month."
+        ),
     ]
     score = _check_faithfulness("The Pro plan costs $19 per month.", context)
     assert score == 1.0
@@ -258,8 +280,7 @@ def test_faithfulness_full_support() -> None:
 
 def test_faithfulness_no_support() -> None:
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="The Pro plan costs $19."),
+        ContextItem(url="https://a.com", title="A", heading=None, text="The Pro plan costs $19."),
     ]
     score = _check_faithfulness(
         "Quantum entanglement enables faster-than-light communication.",
@@ -270,8 +291,12 @@ def test_faithfulness_no_support() -> None:
 
 def test_faithfulness_partial_support() -> None:
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="The Pro plan costs $19 per month and includes priority support."),
+        ContextItem(
+            url="https://a.com",
+            title="A",
+            heading=None,
+            text="The Pro plan costs $19 per month and includes priority support.",
+        ),
     ]
     score = _check_faithfulness(
         "The Pro plan costs $19. However, quantum entanglement is not involved.",
@@ -287,8 +312,7 @@ def test_faithfulness_empty_answer() -> None:
 def test_faithfulness_short_sentences_unsupported() -> None:
     """Sentences with no significant words (<=3 chars) are now unsupported."""
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="Some context."),
+        ContextItem(url="https://a.com", title="A", heading=None, text="Some context."),
     ]
     score = _check_faithfulness("Hi. Ok.", context)
     assert score == 0.0
@@ -297,8 +321,9 @@ def test_faithfulness_short_sentences_unsupported() -> None:
 def test_faithfulness_short_sentence_with_long_words_supported() -> None:
     """Short sentences with enough significant words can still be faithful."""
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="The pricing page details plans."),
+        ContextItem(
+            url="https://a.com", title="A", heading=None, text="The pricing page details plans."
+        ),
     ]
     score = _check_faithfulness("The pricing page.", context)
     assert score == 1.0
@@ -306,10 +331,15 @@ def test_faithfulness_short_sentence_with_long_words_supported() -> None:
 
 def test_faithfulness_multiple_context_items() -> None:
     context = [
-        ContextItem(url="https://a.com", title="A", heading=None,
-                    text="The pricing page details plans."),
-        ContextItem(url="https://b.com", title="B", heading=None,
-                    text="Enterprise tier includes SSO and audit."),
+        ContextItem(
+            url="https://a.com", title="A", heading=None, text="The pricing page details plans."
+        ),
+        ContextItem(
+            url="https://b.com",
+            title="B",
+            heading=None,
+            text="Enterprise tier includes SSO and audit.",
+        ),
     ]
     score = _check_faithfulness(
         "The pricing page shows plans. Enterprise includes SSO.",
@@ -392,16 +422,28 @@ async def test_reranker_uses_stored_embeddings_no_embed_call() -> None:
     reranker = EmbeddingReranker(embedder=embedder, top_k=3)
 
     chunk_a = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
-        chunk_text="chunk_a text", embedding=[1.0, 0.0, 0.0, 0.0], chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-a",
+        chunk_text="chunk_a text",
+        embedding=[1.0, 0.0, 0.0, 0.0],
+        chunk_index=0,
     )
     chunk_b = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
-        chunk_text="chunk_b text", embedding=[0.0, 1.0, 0.0, 0.0], chunk_index=1,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-b",
+        chunk_text="chunk_b text",
+        embedding=[0.0, 1.0, 0.0, 0.0],
+        chunk_index=1,
     )
     chunk_c = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-c",
-        chunk_text="chunk_c text", embedding=[0.0, 0.0, 1.0, 0.0], chunk_index=2,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-c",
+        chunk_text="chunk_c text",
+        embedding=[0.0, 0.0, 1.0, 0.0],
+        chunk_index=2,
     )
 
     candidates = [
@@ -428,16 +470,28 @@ async def test_reranker_precomputed_embedding_reorders_correctly() -> None:
     reranker = EmbeddingReranker(embedder=embedder, top_k=3)
 
     chunk_a = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
-        chunk_text="a", embedding=[0.0, 1.0, 0.0, 0.0], chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-a",
+        chunk_text="a",
+        embedding=[0.0, 1.0, 0.0, 0.0],
+        chunk_index=0,
     )
     chunk_b = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
-        chunk_text="b", embedding=[0.9, 0.1, 0.0, 0.0], chunk_index=1,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-b",
+        chunk_text="b",
+        embedding=[0.9, 0.1, 0.0, 0.0],
+        chunk_index=1,
     )
     chunk_c = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-c",
-        chunk_text="c", embedding=[0.0, 0.0, 0.0, 1.0], chunk_index=2,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-c",
+        chunk_text="c",
+        embedding=[0.0, 0.0, 0.0, 1.0],
+        chunk_index=2,
     )
 
     candidates = [
@@ -460,6 +514,7 @@ async def test_reranker_precomputed_embedding_reorders_correctly() -> None:
 
 async def test_reranker_legacy_path_still_works() -> None:
     """Without query_embedding, the reranker falls back to the embed API."""
+
     class LegacyEmbedder:
         def __init__(self) -> None:
             self.call_count = 0
@@ -480,12 +535,20 @@ async def test_reranker_legacy_path_still_works() -> None:
     reranker = EmbeddingReranker(embedder=embedder, top_k=2)
 
     chunk_a = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-a",
-        chunk_text="worst match", embedding=[0.0] * 4, chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-a",
+        chunk_text="worst match",
+        embedding=[0.0] * 4,
+        chunk_index=0,
     )
     chunk_b = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-b",
-        chunk_text="best match", embedding=[0.0] * 4, chunk_index=1,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-b",
+        chunk_text="best match",
+        embedding=[0.0] * 4,
+        chunk_index=1,
     )
 
     candidates = [
@@ -505,12 +568,20 @@ async def test_reranker_empty_chunk_embedding_handled() -> None:
     reranker = EmbeddingReranker(embedder=embedder, top_k=3)
 
     chunk_empty = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-empty",
-        chunk_text="no embedding", embedding=[], chunk_index=0,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-empty",
+        chunk_text="no embedding",
+        embedding=[],
+        chunk_index=0,
     )
     chunk_valid = KnowledgeChunk.new(
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-valid",
-        chunk_text="has embedding", embedding=[1.0, 0.0, 0.0, 0.0], chunk_index=1,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-valid",
+        chunk_text="has embedding",
+        embedding=[1.0, 0.0, 0.0, 0.0],
+        chunk_index=1,
     )
 
     candidates = [
@@ -540,14 +611,22 @@ async def test_reranker_passes_query_embedding_in_rag_flow() -> None:
     env.rag._timing_enabled = True
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Plan A costs $19.",
-        url="https://example.com/a", title="Plan A", chunk_index=0,
+        url="https://example.com/a",
+        title="Plan A",
+        chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=TENANT, website_id=WEBSITE,
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
         text="Plan B costs $49.",
-        url="https://example.com/b", title="Plan B", chunk_index=1,
+        url="https://example.com/b",
+        title="Plan B",
+        chunk_index=1,
     )
 
     events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="pricing")
@@ -677,9 +756,7 @@ async def test_adaptive_e2e_simple_query_uses_smaller_context() -> None:
     """End-to-end: simple query with adaptive enabled uses simple budget."""
     env = build_chat_env()
     rag = _build_rag_with_adaptive(env)
-    await make_website(
-        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=ADAPTIVE_TENANT,
@@ -704,9 +781,7 @@ async def test_adaptive_e2e_complex_query_uses_larger_context() -> None:
     """End-to-end: complex query with adaptive enabled uses complex budget."""
     env = build_chat_env()
     rag = _build_rag_with_adaptive(env)
-    await make_website(
-        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=2
-    )
+    await make_website(env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=2)
     await make_chunk(
         env,
         tenant_id=ADAPTIVE_TENANT,
@@ -742,9 +817,7 @@ async def test_adaptive_e2e_medium_query_uses_default_context() -> None:
     """End-to-end: medium query uses default (non-adaptive) context budget."""
     env = build_chat_env()
     rag = _build_rag_with_adaptive(env)
-    await make_website(
-        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=ADAPTIVE_TENANT,
@@ -770,9 +843,7 @@ async def test_adaptive_disabled_fallback_to_fixed_params() -> None:
     env = build_chat_env()
     env.rag._timing_enabled = True
     assert env.rag._adaptive_enabled is False
-    await make_website(
-        env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=ADAPTIVE_TENANT, website_id=ADAPTIVE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=ADAPTIVE_TENANT,
@@ -912,9 +983,7 @@ async def test_confidence_high_scores_proceed() -> None:
     """High-confidence retrieval (fake scores ~0.9) proceeds to generation."""
     env = build_chat_env()
     rag = _build_rag_with_confidence(env)
-    await make_website(
-        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=CONF_TENANT,
@@ -950,9 +1019,7 @@ async def test_confidence_low_scores_fallback() -> None:
         rag_confidence_threshold=0.95,
         retrieval_strategy=VectorRetrievalStrategy(),
     )
-    await make_website(
-        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=CONF_TENANT,
@@ -1014,9 +1081,7 @@ async def test_confidence_disabled_skips_check() -> None:
         rag_confidence_threshold=0.95,
         retrieval_strategy=VectorRetrievalStrategy(),
     )
-    await make_website(
-        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=CONF_TENANT,
@@ -1040,9 +1105,7 @@ async def test_confidence_timing_field_present_when_disabled() -> None:
     """Timing includes confidence metrics when the guard is enabled."""
     env = build_chat_env()
     env.rag._timing_enabled = True
-    await make_website(
-        env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=CONF_TENANT, website_id=CONF_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=CONF_TENANT,
@@ -1178,25 +1241,30 @@ async def test_optimization_e2e_metrics_present() -> None:
     """When enabled, timing includes optimization metrics."""
     env = build_chat_env()
     rag = _build_rag_with_opt(env)
-    await make_website(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2
-    )
+    await make_website(env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="Cats are independent animals. They like to explore.",
-        url="https://example.com/cats", title="Cats",
+        url="https://example.com/cats",
+        title="Cats",
         chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="Dogs are loyal companions. They love their owners.",
-        url="https://example.com/dogs", title="Dogs",
+        url="https://example.com/dogs",
+        title="Dogs",
         chunk_index=1,
     )
 
     events = await consume(
         rag.stream_answer(
-            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            tenant_id=OPT_TENANT,
+            website_id=OPT_WEB,
             question="Tell me about pets.",
         )
     )
@@ -1213,17 +1281,19 @@ async def test_optimization_disabled_no_metrics() -> None:
     """When disabled, optimization metrics are None in timing."""
     env = build_chat_env()
     env.rag._timing_enabled = True
-    await make_website(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=1)
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
-        text="Hello world.", chunk_index=0,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
+        text="Hello world.",
+        chunk_index=0,
     )
 
     events = await consume(
         env.rag.stream_answer(
-            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            tenant_id=OPT_TENANT,
+            website_id=OPT_WEB,
             question="Hi",
         )
     )
@@ -1238,31 +1308,42 @@ async def test_optimization_removes_near_duplicates() -> None:
     """Near-duplicate chunks are removed when optimization is enabled."""
     env = build_chat_env()
     rag = _build_rag_with_opt(env)
-    await make_website(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=3
-    )
+    await make_website(env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=3)
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="The pricing page shows three plans: Starter, Pro, and Enterprise.",
-        url="https://example.com/pricing", title="Pricing",
-        document_id="doc-pricing-1", chunk_index=0,
+        url="https://example.com/pricing",
+        title="Pricing",
+        document_id="doc-pricing-1",
+        chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="The pricing page shows three plans: Starter, Pro, and Enterprise tiers.",
-        url="https://example.com/pricing-alt", title="Pricing Alt",
-        document_id="doc-pricing-2", chunk_index=1,
+        url="https://example.com/pricing-alt",
+        title="Pricing Alt",
+        document_id="doc-pricing-2",
+        chunk_index=1,
     )
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="Contact our support team for custom enterprise pricing options.",
-        url="https://example.com/contact", title="Contact",
-        document_id="doc-contact", chunk_index=2,
+        url="https://example.com/contact",
+        title="Contact",
+        document_id="doc-contact",
+        chunk_index=2,
     )
 
     events = await consume(
         rag.stream_answer(
-            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            tenant_id=OPT_TENANT,
+            website_id=OPT_WEB,
             question="What are your pricing plans?",
         )
     )
@@ -1276,25 +1357,32 @@ async def test_optimization_preserves_unique_content() -> None:
     """Unique content from different sources is preserved in context."""
     env = build_chat_env()
     rag = _build_rag_with_opt(env)
-    await make_website(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2
-    )
+    await make_website(env, tenant_id=OPT_TENANT, website_id=OPT_WEB, knowledge_chunks=2)
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="We offer 24/7 phone support for all enterprise customers.",
-        url="https://example.com/support", title="Support",
-        document_id="doc-support", chunk_index=0,
+        url="https://example.com/support",
+        title="Support",
+        document_id="doc-support",
+        chunk_index=0,
     )
     await make_chunk(
-        env, tenant_id=OPT_TENANT, website_id=OPT_WEB,
+        env,
+        tenant_id=OPT_TENANT,
+        website_id=OPT_WEB,
         text="Our billing cycle runs monthly with automatic renewals.",
-        url="https://example.com/billing", title="Billing",
-        document_id="doc-billing", chunk_index=1,
+        url="https://example.com/billing",
+        title="Billing",
+        document_id="doc-billing",
+        chunk_index=1,
     )
 
     events = await consume(
         rag.stream_answer(
-            tenant_id=OPT_TENANT, website_id=OPT_WEB,
+            tenant_id=OPT_TENANT,
+            website_id=OPT_WEB,
             question="What support do you offer and how does billing work?",
         )
     )
@@ -1331,27 +1419,35 @@ async def test_keyword_only_chunk_survives_reranker_and_min_score() -> None:
     chunks_data = [
         {
             "text": "Our pricing plans include Starter at $9, Pro at $19, and Enterprise custom.",
-            "url": "https://example.com/pricing", "title": "Pricing",
-            "document_id": "doc-pricing", "chunk_index": 0,
+            "url": "https://example.com/pricing",
+            "title": "Pricing",
+            "document_id": "doc-pricing",
+            "chunk_index": 0,
             "embedding": [0.9, 0.1, 0.0, 0.0],
         },
         {
             "text": "Contact support@example.com for help with your account.",
-            "url": "https://example.com/support", "title": "Support",
-            "document_id": "doc-support", "chunk_index": 1,
+            "url": "https://example.com/support",
+            "title": "Support",
+            "document_id": "doc-support",
+            "chunk_index": 1,
             "embedding": [0.1, 0.9, 0.0, 0.0],
         },
         {
             # Target: found by keyword ("api key") but at a higher index.
             "text": "To create an API key, go to Settings and click Generate.",
-            "url": "https://example.com/apikeys", "title": "API Keys",
-            "document_id": "doc-apikeys", "chunk_index": 2,
+            "url": "https://example.com/apikeys",
+            "title": "API Keys",
+            "document_id": "doc-apikeys",
+            "chunk_index": 2,
             "embedding": [0.0, 0.0, 0.9, 0.1],
         },
         {
             "text": "Our enterprise tier includes SSO, audit logs, and priority support.",
-            "url": "https://example.com/enterprise", "title": "Enterprise",
-            "document_id": "doc-enterprise", "chunk_index": 3,
+            "url": "https://example.com/enterprise",
+            "title": "Enterprise",
+            "document_id": "doc-enterprise",
+            "chunk_index": 3,
             "embedding": [0.0, 0.0, 0.1, 0.9],
         },
     ]
@@ -1364,16 +1460,18 @@ async def test_keyword_only_chunk_survives_reranker_and_min_score() -> None:
             chunk_text=cd["text"],
             embedding=cd["embedding"],
             chunk_index=cd["chunk_index"],
-                embedding_provider=env.embedder.embedding_identity.provider,
-                embedding_model=env.embedder.embedding_identity.model,
-                embedding_dimensions=env.embedder.embedding_identity.dimensions,
-                embedding_version=env.embedder.embedding_identity.version,
+            embedding_provider=env.embedder.embedding_identity.provider,
+            embedding_model=env.embedder.embedding_identity.model,
+            embedding_dimensions=env.embedder.embedding_identity.dimensions,
+            embedding_version=env.embedder.embedding_identity.version,
             metadata={"source_url": cd["url"], "title": cd["title"]},
         )
         await env.vector.insert_chunks([chunk])
 
     events = await _stream(
-        env, tenant_id=REG_TENANT, website_id=REG_WEB,
+        env,
+        tenant_id=REG_TENANT,
+        website_id=REG_WEB,
         question="How do I create an API key?",
     )
     sources = next(e for e in events if e["event"] == "sources")
@@ -1404,9 +1502,12 @@ async def test_stale_retrieval_prevented_after_cache_invalidation() -> None:
 
     await make_chunk(
         env,
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-v1",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-v1",
         text="Version one: the pricing is $9 per month.",
-        url="https://example.com/pricing-v1", title="Pricing V1",
+        url="https://example.com/pricing-v1",
+        title="Pricing V1",
         chunk_index=0,
     )
 
@@ -1420,9 +1521,12 @@ async def test_stale_retrieval_prevented_after_cache_invalidation() -> None:
     # Simulate a crawl: add new content, invalidate the cache.
     await make_chunk(
         env,
-        tenant_id=TENANT, website_id=WEBSITE, document_id="doc-v2",
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        document_id="doc-v2",
         text="Version two: the pricing changed to $19 per month.",
-        url="https://example.com/pricing-v2", title="Pricing V2",
+        url="https://example.com/pricing-v2",
+        title="Pricing V2",
         chunk_index=1,
     )
     deleted = await env.cache.delete_by_prefix("retrieval", f"{TENANT}:{WEBSITE}:")
@@ -1486,9 +1590,7 @@ def test_build_search_query_combines_last_user_turn() -> None:
         ("assistant", "Team includes SSO and audit logs."),
     ]
     combined = build_search_query("what about refunds?", history)
-    assert combined == (
-        "What does the Team plan include? what about refunds?"
-    )
+    assert combined == ("What does the Team plan include? what about refunds?")
 
 
 def test_build_search_query_truncates_long_context() -> None:
@@ -1508,9 +1610,7 @@ def test_build_search_query_without_prior_user_turn() -> None:
 async def test_followup_retrieval_uses_contextualized_query() -> None:
     """A context-dependent follow-up embeds the previous turn + question."""
     env = build_chat_env()
-    await make_website(
-        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=REWRITE_TENANT,
@@ -1539,9 +1639,7 @@ async def test_followup_retrieval_uses_contextualized_query() -> None:
         )
     )
     # The search query must carry the conversation subject.
-    assert _last_embedded_text(env) == (
-        "Tell me about Acme plans. what about refunds?"
-    )
+    assert _last_embedded_text(env) == ("Tell me about Acme plans. what about refunds?")
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["fallback"] is False
 
@@ -1553,9 +1651,7 @@ async def test_followup_retrieval_uses_contextualized_query() -> None:
 async def test_standalone_followup_is_not_rewritten() -> None:
     """Self-contained questions embed exactly as asked."""
     env = build_chat_env()
-    await make_website(
-        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=REWRITE_TENANT,
@@ -1584,9 +1680,7 @@ async def test_rewrite_disabled_uses_raw_question(monkeypatch) -> None:
     monkeypatch.setattr(get_settings(), "enable_conversational_query_rewrite", False)
     env = build_chat_env()
     assert env.rag._query_rewrite_enabled is False
-    await make_website(
-        env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1
-    )
+    await make_website(env, tenant_id=REWRITE_TENANT, website_id=REWRITE_WEB, knowledge_chunks=1)
     await make_chunk(
         env,
         tenant_id=REWRITE_TENANT,
@@ -1661,9 +1755,7 @@ async def test_history_excludes_current_user_turn() -> None:
     await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
 
     first = await consume(
-        env.rag.stream_answer(
-            tenant_id=TENANT, website_id=WEBSITE, question="First question?"
-        )
+        env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="First question?")
     )
     await consume(
         env.rag.stream_answer(
@@ -1737,9 +1829,7 @@ async def test_blank_generation_substitutes_fallback(blank_deltas) -> None:
     done = next(e for e in events if e["event"] == "done")
     assert done["data"]["fallback"] is True
 
-    assistant = [
-        m for m in env.messages.messages if m.role == CHAT_ROLE_ASSISTANT
-    ]
+    assistant = [m for m in env.messages.messages if m.role == CHAT_ROLE_ASSISTANT]
     assert len(assistant) == 1
     assert assistant[0].content == UNKNOWN_ANSWER_FALLBACK
 
@@ -1797,15 +1887,11 @@ async def test_all_chunks_below_min_score_falls_back_without_model_call() -> Non
     ):
         env = build_chat_env(reranker=False)
         await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
-        await make_chunk(
-            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
-        )
+        await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money.")
         env.vector.similarity_search = _constant_score_search(env, 0.3)  # type: ignore[method-assign]
 
         events = await consume(
-            env.rag.stream_answer(
-                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
-            )
+            env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="pricing")
         )
 
     deltas = [e["data"]["delta"] for e in events if e["event"] == "message"]
@@ -1822,15 +1908,11 @@ async def test_some_chunks_above_min_score_still_generate() -> None:
     with patch.object(get_settings(), "chat_context_min_score", 0.5):
         env = build_chat_env(reranker=False)
         await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
-        await make_chunk(
-            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
-        )
+        await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money.")
         env.vector.similarity_search = _constant_score_search(env, 0.6)  # type: ignore[method-assign]
 
         events = await consume(
-            env.rag.stream_answer(
-                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
-            )
+            env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="pricing")
         )
 
     done = next(e for e in events if e["event"] == "done")
@@ -1846,15 +1928,11 @@ async def test_context_empty_guard_reports_confidence_telemetry() -> None:
     ):
         env = build_chat_env(reranker=False)
         await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
-        await make_chunk(
-            env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money."
-        )
+        await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Pro plan costs money.")
         env.vector.similarity_search = _constant_score_search(env, 0.3)  # type: ignore[method-assign]
 
         events = await consume(
-            env.rag.stream_answer(
-                tenant_id=TENANT, website_id=WEBSITE, question="pricing"
-            )
+            env.rag.stream_answer(tenant_id=TENANT, website_id=WEBSITE, question="pricing")
         )
 
     # Scores {0.3}: avg=0.3, hit_ratio=0, peak=0.3 → confidence=0.21 >= 0.2,

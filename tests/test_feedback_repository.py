@@ -73,13 +73,11 @@ class _FakeFeedbackCollection:
     async def insert_one(self, doc: dict) -> None:
         """Enforce the unique (tenant_id, message_id) index like MongoDB."""
         for existing in self._docs:
-            if (
-                existing.get("tenant_id") == doc.get("tenant_id")
-                and existing.get("message_id") == doc.get("message_id")
-            ):
+            if existing.get("tenant_id") == doc.get("tenant_id") and existing.get(
+                "message_id"
+            ) == doc.get("message_id"):
                 raise DuplicateKeyError(
-                    "E11000 duplicate key error collection: feedback index: "
-                    "uniq_tenant_message"
+                    "E11000 duplicate key error collection: feedback index: uniq_tenant_message"
                 )
         self._docs.append(doc)
 

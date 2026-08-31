@@ -43,9 +43,7 @@ context building and generation:
 ```python
 retrieval_scores = [r.score for r in results]
 if self._confidence_check_enabled:
-    confidence_score = calculate_confidence(
-        retrieval_scores, min_score=self._min_score
-    )
+    confidence_score = calculate_confidence(retrieval_scores, min_score=self._min_score)
     if confidence_score < self._confidence_threshold:
         # Return safe fallback — never call the LLM
         yield fallback_response
@@ -55,8 +53,8 @@ if self._confidence_check_enabled:
 ### Feature Flag
 
 ```python
-enable_rag_confidence_check: bool = False     # opt-in, off by default
-rag_confidence_threshold: float = 0.3         # minimum to proceed
+enable_rag_confidence_check: bool = False  # opt-in, off by default
+rag_confidence_threshold: float = 0.3  # minimum to proceed
 ```
 
 **Backward compatible**: disabled by default, zero overhead when off.

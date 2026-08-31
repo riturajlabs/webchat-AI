@@ -1,16 +1,19 @@
 """End-to-end HTTP tests for the /api/auth endpoints using fake repositories."""
 
 import pytest
-from backend.api.deps import get_auth_service, require_role
+from backend.api.deps import get_account_service, get_auth_service, require_role
 from backend.core.config import get_settings
 from backend.core.errors import AppError
 from backend.core.security import create_password_reset_token
 from backend.main import create_app
+from backend.models.audit_log import AUDIT_ACCOUNT_DELETED
+from backend.services.account import AccountService
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import VALID_PASSWORD, build_auth_env, token_from_url
+from tests.fakes import FakeTenantPurgeRepository
 
 
 @pytest.fixture
@@ -20,8 +23,15 @@ def client(monkeypatch):
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
     get_settings.cache_clear()
     env = build_auth_env()
+    purge = FakeTenantPurgeRepository()
+    env.purge = purge
     app = create_app()
     app.dependency_overrides[get_auth_service] = lambda: env.service
+    app.dependency_overrides[get_account_service] = lambda: AccountService(
+        users=env.users,
+        audit=env.audit,
+        purge=purge,
+    )
     with TestClient(app) as test_client:
         yield test_client, env
     get_settings.cache_clear()
@@ -169,6 +179,87 @@ def test_me_requires_bearer_token(client) -> None:
     response = test_client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
     assert response.status_code == 200
     assert response.json()["email"] == "alice@example.com"
+
+
+def test_patch_me_updates_name_and_avatar(client) -> None:
+    test_client, env = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.patch(
+        "/api/auth/me",
+        headers=headers,
+        json={"name": "Alice Cooper", "avatar_url": "data:image/png;base64,AA=="},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Alice Cooper"
+    assert body["avatar_url"] == "data:image/png;base64,AA=="
+
+    me = test_client.get("/api/auth/me", headers=headers).json()
+    assert me["name"] == "Alice Cooper"
+    assert me["avatar_url"] == "data:image/png;base64,AA=="
+
+
+def test_patch_me_trims_and_rejects_empty_name(client) -> None:
+    test_client, _ = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.patch("/api/auth/me", headers=headers, json={"name": "   Bob   "})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Bob"
+
+    empty = test_client.patch("/api/auth/me", headers=headers, json={"name": "   "})
+    assert empty.status_code == 422
+
+
+def test_patch_me_clears_avatar(client) -> None:
+    test_client, _ = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    test_client.patch(
+        "/api/auth/me", headers=headers, json={"avatar_url": "data:image/png;base64,AA=="}
+    )
+    cleared = test_client.patch("/api/auth/me", headers=headers, json={"avatar_url": ""})
+    assert cleared.status_code == 200
+    assert cleared.json()["avatar_url"] is None
+
+
+def test_patch_me_requires_bearer_token(client) -> None:
+    test_client, _ = client
+    assert test_client.patch("/api/auth/me", json={"name": "Nobody"}).status_code == 401
+
+
+def test_delete_me_purges_tenant_and_clears_session(client) -> None:
+    test_client, env = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.delete("/api/auth/me", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["message"]
+    assert env.purge.purged_user_sessions  # sessions were revoked
+    assert env.purge.purged_tenants  # tenant was purged
+    assert env.audit.logs[-1].action == AUDIT_ACCOUNT_DELETED
+
+    # Session cookies (refresh + csrf) are cleared by the delete response.
+    set_cookie = response.headers.get_list("set-cookie")
+    assert any("refresh_token=" in value and "Max-Age=0" in value for value in set_cookie)
+
+
+def test_delete_me_requires_bearer_token(client) -> None:
+    test_client, _ = client
+    assert test_client.delete("/api/auth/me").status_code == 401
 
 
 def test_verify_email_endpoint(client) -> None:

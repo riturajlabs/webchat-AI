@@ -33,6 +33,10 @@ class UserRepository(Protocol):
         self, user_id: str, password_hash: str, pwd_token_version: int, at: datetime
     ) -> None: ...
 
+    async def update_profile(
+        self, user_id: str, *, updates: dict[str, object], at: datetime
+    ) -> None: ...
+
     # Phase 12.5 admin surface (ADR-006).
     async def list_users(
         self,
@@ -103,6 +107,13 @@ class MongoUserRepository:
                 }
             },
         )
+
+    async def update_profile(
+        self, user_id: str, *, updates: dict[str, object], at: datetime
+    ) -> None:
+        update: dict[str, Any] = {"updated_at": at}
+        update.update(updates)
+        await self._collection.update_one({"_id": user_id}, {"$set": update})
 
     async def list_users(
         self,

@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { MobileMenu } from './mobile-menu';
 
 export const MARKETING_NAV_LINKS = [
+  { href: '/', label: 'Home' },
   { href: '/features', label: 'Features' },
   { href: '/how-it-works', label: 'How it works' },
   { href: '/integrations', label: 'Integrations' },

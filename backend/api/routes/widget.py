@@ -19,7 +19,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from backend.api.deps import (
     get_feedback_service,
@@ -118,7 +118,7 @@ async def widget_chat(
     ___: Annotated[None, Depends(widget_claims_origin_guard)],
     ____: Annotated[None, Depends(widget_ip_limiter)],
     _____: Annotated[None, Depends(widget_chat_ip_limiter)],
-) -> StreamingResponse:
+) -> Response:
     """Stream an answer for the visitor's question (SSE).
 
     Requires `Authorization: Bearer <widget_session_token>`. The token's claims

@@ -8,7 +8,7 @@ scoped to that website (00-AI-Development-Rules §7). No new collections are
 created - the dashboard reads the data the chat pipeline already writes.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -22,6 +22,7 @@ from backend.models.chat_message import (
 from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED
 from backend.models.website import WEBSITE_STATUS_DELETED
 from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK
+from backend.utils.analytics_stats import response_time_statistics
 
 # Feedback sentiment buckets for the analytics feedback endpoint. Ratings of
 # 4-5 stars count as positive, 3 as neutral, and 1-2 as negative (the star
@@ -68,14 +69,24 @@ class TopWebsiteRow:
 class ResponseMetricsRow:
     """Assistant response statistics for a window (Phase 12.6).
 
+    `avg_response_time`, `median_response_time` and `p95_response_time` are
+    the response-time statistics in seconds (median/P95 via nearest-rank).
+    `distribution` maps the latency histogram buckets (`<1s`, `1-2s`, `2-5s`,
+    `5-10s`, `10s+`) to their counts so the performance section can render a
+    response-time distribution without extra queries. The fastest/slowest
+    pair is retained for compatibility but is no longer the headline metric.
     `avg_embedding_ms` / `avg_retrieval_ms` / `avg_generation_ms` are the
-    per-stage latency averages persisted on assistant messages, letting the
-    performance dashboard break the response time down into where it went.
+    per-stage latency averages persisted on assistant messages. Every field
+    collapses to `None` / an empty histogram when the window has no measurable
+    responses.
     """
 
     avg_response_time: float | None
     fastest_response_time: float | None
     slowest_response_time: float | None
+    median_response_time: float | None = None
+    p95_response_time: float | None = None
+    distribution: dict[str, int] | None = None
     avg_embedding_ms: float | None = None
     avg_retrieval_ms: float | None = None
     avg_generation_ms: float | None = None
@@ -109,6 +120,15 @@ class QuestionCountRow:
 
 
 @dataclass(frozen=True)
+class RatingTrendPoint:
+    """One day's satisfaction: average rating and rating count for the trend."""
+
+    date: str
+    average_rating: float | None
+    ratings: int
+
+
+@dataclass(frozen=True)
 class FeedbackAnalyticsRow:
     """Sentiment + star distribution behind the /analytics/feedback endpoint."""
 
@@ -118,10 +138,16 @@ class FeedbackAnalyticsRow:
     neutral: int
     average_rating: float | None
     distribution: dict[int, int]
+    trend: list[RatingTrendPoint] = field(default_factory=list)
 
 
 class AnalyticsRepository(Protocol):
-    """Read-only analytics queries (all tenant-scoped, ADR-005 §5.5)."""
+    """Read-only analytics queries (all tenant-scoped, ADR-005 §5.5).
+
+    `since` is the inclusive window start; `until` is the exclusive window end
+    (``None`` = unbounded, used by the default N-day windows which end at the
+    present). Custom calendar ranges and previous-period comparisons pass both.
+    """
 
     async def summary(
         self,
@@ -129,6 +155,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> AnalyticsSummaryRow: ...
 
     async def timeseries(
@@ -137,6 +164,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> list[TimeseriesRow]: ...
 
     async def top_websites(
@@ -144,6 +172,7 @@ class AnalyticsRepository(Protocol):
         tenant_id: str,
         *,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[TopWebsiteRow]: ...
 
@@ -153,6 +182,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> ResponseMetricsRow: ...
 
     async def overview(
@@ -161,6 +191,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> OverviewRow: ...
 
     async def top_questions(
@@ -169,6 +200,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[QuestionCountRow]: ...
 
@@ -178,6 +210,7 @@ class AnalyticsRepository(Protocol):
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> FeedbackAnalyticsRow: ...
 
 
@@ -208,9 +241,10 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> AnalyticsSummaryRow:
         total_conversations = await self._count_conversations(
-            tenant_id, website_id=website_id, since=since
+            tenant_id, website_id=website_id, since=since, until=until
         )
 
         messages_match: dict[str, Any] = {
@@ -218,6 +252,8 @@ class MongoAnalyticsRepository:
             "role": CHAT_ROLE_ASSISTANT,
             "created_at": {"$gte": since},
         }
+        if until is not None:
+            messages_match["created_at"]["$lt"] = until
         if website_id is not None:
             messages_match["website_id"] = website_id
         response_doc = await self._first(
@@ -241,6 +277,8 @@ class MongoAnalyticsRepository:
             "tenant_id": tenant_id,
             "date": {"$gte": since.date().isoformat()},
         }
+        if until is not None:
+            usage_match["date"]["$lt"] = until.date().isoformat()
         if website_id is not None:
             usage_match["website_id"] = website_id
         usage_doc = await self._first(
@@ -273,11 +311,14 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> list[TimeseriesRow]:
         match: dict[str, Any] = {
             "tenant_id": tenant_id,
             "date": {"$gte": since.date().isoformat()},
         }
+        if until is not None:
+            match["date"]["$lt"] = until.date().isoformat()
         if website_id is not None:
             match["website_id"] = website_id
         cursor = self._usage.aggregate(
@@ -317,11 +358,18 @@ class MongoAnalyticsRepository:
         tenant_id: str,
         *,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[TopWebsiteRow]:
+        match: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "date": {"$gte": since.date().isoformat()},
+        }
+        if until is not None:
+            match["date"]["$lt"] = until.date().isoformat()
         cursor = self._usage.aggregate(
             [
-                {"$match": {"tenant_id": tenant_id, "date": {"$gte": since.date().isoformat()}}},
+                {"$match": match},
                 {
                     "$group": {
                         "_id": "$website_id",
@@ -362,25 +410,42 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> ResponseMetricsRow:
+        """Response-time statistics for a window.
+
+        Median / P95 / histogram are computed from the per-message
+        `response_time` values via `backend.utils.analytics_stats` (nearest-rank
+        percentiles + latency buckets); only the single scalar column is read,
+        never full messages. The per-stage latency averages are produced by
+        one `$group` pass. An empty window collapses every metric to `None`
+        (and an empty histogram) so the API never fabricates values.
+        """
         match: dict[str, Any] = {
             "tenant_id": tenant_id,
             "role": CHAT_ROLE_ASSISTANT,
             "response_time": {"$ne": None},
             "created_at": {"$gte": since},
         }
+        if until is not None:
+            match["created_at"]["$lt"] = until
         if website_id is not None:
             match["website_id"] = website_id
-        doc = await self._first(
+
+        values: list[float] = []
+        async for doc in self._messages.find(match, {"response_time": 1}):
+            value = doc.get("response_time")
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        stats = response_time_statistics(values)
+
+        stage_doc = await self._first(
             self._messages.aggregate(
                 [
                     {"$match": match},
                     {
                         "$group": {
                             "_id": None,
-                            "avg_response_time": {"$avg": "$response_time"},
-                            "fastest_response_time": {"$min": "$response_time"},
-                            "slowest_response_time": {"$max": "$response_time"},
                             "avg_embedding_ms": {"$avg": "$latency_embedding_ms"},
                             "avg_retrieval_ms": {"$avg": "$latency_retrieval_ms"},
                             "avg_generation_ms": {"$avg": "$latency_generation_ms"},
@@ -389,15 +454,22 @@ class MongoAnalyticsRepository:
                 ]
             )
         )
-        if doc is None:
-            return ResponseMetricsRow(None, None, None)
         return ResponseMetricsRow(
-            avg_response_time=float(doc["avg_response_time"]),
-            fastest_response_time=float(doc["fastest_response_time"]),
-            slowest_response_time=float(doc["slowest_response_time"]),
-            avg_embedding_ms=_optional_float(doc.get("avg_embedding_ms")),
-            avg_retrieval_ms=_optional_float(doc.get("avg_retrieval_ms")),
-            avg_generation_ms=_optional_float(doc.get("avg_generation_ms")),
+            avg_response_time=stats.avg,
+            fastest_response_time=stats.fastest,
+            slowest_response_time=stats.slowest,
+            median_response_time=stats.median,
+            p95_response_time=stats.p95,
+            distribution=stats.distribution,
+            avg_embedding_ms=(
+                _optional_float(stage_doc.get("avg_embedding_ms")) if stage_doc else None
+            ),
+            avg_retrieval_ms=(
+                _optional_float(stage_doc.get("avg_retrieval_ms")) if stage_doc else None
+            ),
+            avg_generation_ms=(
+                _optional_float(stage_doc.get("avg_generation_ms")) if stage_doc else None
+            ),
         )
 
     async def overview(
@@ -406,6 +478,7 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> OverviewRow:
         """Conversation / question / response resolution aggregates.
 
@@ -415,13 +488,15 @@ class MongoAnalyticsRepository:
         same sources as `summary`.
         """
         total_conversations = await self._count_conversations(
-            tenant_id, website_id=website_id, since=since
+            tenant_id, website_id=website_id, since=since, until=until
         )
         messages_match: dict[str, Any] = {
             "tenant_id": tenant_id,
             "role": {"$in": [CHAT_ROLE_USER, CHAT_ROLE_ASSISTANT]},
             "created_at": {"$gte": since},
         }
+        if until is not None:
+            messages_match["created_at"]["$lt"] = until
         if website_id is not None:
             messages_match["website_id"] = website_id
         facet_doc = await self._first(
@@ -465,6 +540,8 @@ class MongoAnalyticsRepository:
             "tenant_id": tenant_id,
             "date": {"$gte": since.date().isoformat()},
         }
+        if until is not None:
+            usage_match["date"]["$lt"] = until.date().isoformat()
         if website_id is not None:
             usage_match["website_id"] = website_id
         usage_doc = await self._first(
@@ -496,6 +573,7 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
         limit: int,
     ) -> list[QuestionCountRow]:
         """Rank the most frequently asked user questions in the window.
@@ -509,6 +587,8 @@ class MongoAnalyticsRepository:
             "role": CHAT_ROLE_USER,
             "created_at": {"$gte": since},
         }
+        if until is not None:
+            match["created_at"]["$lt"] = until
         if website_id is not None:
             match["website_id"] = website_id
         cursor = self._messages.aggregate(
@@ -530,32 +610,60 @@ class MongoAnalyticsRepository:
         *,
         website_id: str | None = None,
         since: datetime,
+        until: datetime | None = None,
     ) -> FeedbackAnalyticsRow:
-        """Sentiment + star distribution over the `feedback` collection.
+        """Sentiment + star distribution + per-day rating trend.
 
-        One `$group` pass buckets by rating; positive/neutral/negative buckets
-        and the average are derived here (ratings 4-5 positive, 3 neutral,
-        1-2 negative — see `FEEDBACK_POSITIVE_RATING`).
+        One `$facet` pass over the `feedback` collection buckets by rating (for
+        the distribution) and by day (`$dateToString`, UTC) for the trend so a
+        second round-trip is avoided. Positive = ratings >=
+        `FEEDBACK_POSITIVE_RATING`, negative = <= `FEEDBACK_NEGATIVE_RATING`,
+        the rest neutral. An empty window yields zeros and an empty trend —
+        never fabricated values.
         """
-        match: dict[str, Any] = {"tenant_id": tenant_id}
+        match: dict[str, Any] = {"tenant_id": tenant_id, "created_at": {"$gte": since}}
         if website_id is not None:
             match["website_id"] = website_id
-        if since is not None:
-            match["created_at"] = {"$gte": since}
-        cursor = self._feedback.aggregate(
-            [
-                {"$match": match},
-                {"$group": {"_id": "$rating", "count": {"$sum": 1}}},
-            ]
+        if until is not None:
+            match["created_at"]["$lt"] = until
+        doc = await self._first(
+            self._feedback.aggregate(
+                [
+                    {"$match": match},
+                    {
+                        "$facet": {
+                            "rating_buckets": [
+                                {"$group": {"_id": "$rating", "count": {"$sum": 1}}}
+                            ],
+                            "by_day": [
+                                {
+                                    "$group": {
+                                        "_id": {
+                                            "$dateToString": {
+                                                "format": "%Y-%m-%d",
+                                                "date": "$created_at",
+                                                "timezone": "UTC",
+                                            }
+                                        },
+                                        "count": {"$sum": 1},
+                                        "sum": {"$sum": "$rating"},
+                                    }
+                                },
+                                {"$sort": {"_id": 1}},
+                            ],
+                        }
+                    },
+                ]
+            )
         )
         distribution: dict[int, int] = {}
         total = 0
         weighted = 0
-        async for doc in cursor:
-            rating = int(doc["_id"])
+        for row in (doc or {}).get("rating_buckets") or []:
+            rating = int(row["_id"])
             if not 1 <= rating <= 5:
                 continue
-            count = int(doc.get("count", 0))
+            count = int(row.get("count", 0))
             distribution[rating] = count
             total += count
             weighted += rating * count
@@ -570,6 +678,17 @@ class MongoAnalyticsRepository:
             for rating, count in distribution.items()
             if FEEDBACK_NEGATIVE_RATING < rating < FEEDBACK_POSITIVE_RATING
         )
+        trend: list[RatingTrendPoint] = []
+        for row in (doc or {}).get("by_day") or []:
+            day_count = int(row.get("count", 0))
+            day_sum = float(row.get("sum") or 0.0)
+            trend.append(
+                RatingTrendPoint(
+                    date=str(row["_id"]),
+                    average_rating=round(day_sum / day_count, 2) if day_count else None,
+                    ratings=day_count,
+                )
+            )
         return FeedbackAnalyticsRow(
             total=total,
             positive=positive,
@@ -577,6 +696,7 @@ class MongoAnalyticsRepository:
             neutral=neutral,
             average_rating=round(weighted / total, 2) if total else None,
             distribution=distribution,
+            trend=trend,
         )
 
     # ------------------------------------------------------------- internals
@@ -587,13 +707,20 @@ class MongoAnalyticsRepository:
         return int(rows[0]["count"]) if rows else 0
 
     async def _count_conversations(
-        self, tenant_id: str, *, website_id: str | None, since: datetime
+        self,
+        tenant_id: str,
+        *,
+        website_id: str | None,
+        since: datetime,
+        until: datetime | None,
     ) -> int:
         match: dict[str, Any] = {
             "tenant_id": tenant_id,
             "started_at": {"$gte": since},
             "status": {"$ne": CHAT_SESSION_STATUS_DELETED},
         }
+        if until is not None:
+            match["started_at"]["$lt"] = until
         if website_id is not None:
             match["website_id"] = website_id
         return await self._sessions.count_documents(match)

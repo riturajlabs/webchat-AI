@@ -22,7 +22,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from backend.api.deps import (
     chat_limiter,
@@ -62,7 +62,7 @@ async def stream_chat(
     quota: Annotated[LLMQuotaService, Depends(get_llm_quota_service)],
     _: Annotated[None, Depends(chat_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-) -> StreamingResponse:
+) -> Response:
     """Stream an answer for `question` from the tenant's knowledge base.
 
     The `messages_sent` plan limit is enforced before the pipeline runs; when

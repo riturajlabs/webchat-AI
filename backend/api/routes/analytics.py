@@ -13,11 +13,17 @@ tenant's analytics (00-AI-Development-Rules §7).
     GET /api/analytics/overview        resolution metrics (Phase 12.5)
     GET /api/analytics/questions       most-asked user questions
     GET /api/analytics/feedback        feedback sentiment + star distribution
+
+Every endpoint accepts either `days` (1-90, default 7) or an explicit custom
+calendar range via `start` + `end` (`YYYY-MM-DD`, inclusive, span <= 90 days).
+Both date params must be supplied together or a 422 is returned; invalid date
+strings are rejected by FastAPI's type parsing before the handler runs.
 """
 
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from backend.api.deps import (
     analytics_limiter,
@@ -37,6 +43,7 @@ from backend.schemas.analytics import (
     AnalyticsSummary,
     FeedbackAnalytics,
     QuestionCount,
+    RatingTrendPoint,
     ResponseMetrics,
     TimeseriesPoint,
     TopWebsite,
@@ -58,10 +65,15 @@ async def get_analytics_summary(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> AnalyticsSummary:
-    item = await service.get_summary(principal.tenant_id, days=days, website_id=website_id)
+    days, start, end = _resolve_window(days, start, end)
+    item = await service.get_summary(
+        principal.tenant_id, days=days, start=start, end=end, website_id=website_id
+    )
     return AnalyticsSummary(
         total_conversations=item.total_conversations,
         total_messages=item.total_messages,
@@ -71,6 +83,10 @@ async def get_analytics_summary(
         total_output_tokens=item.total_output_tokens,
         estimated_cost=item.estimated_cost,
         avg_response_time=item.avg_response_time,
+        previous_conversations=item.previous_conversations,
+        previous_messages=item.previous_messages,
+        previous_tokens=item.previous_tokens,
+        previous_avg_response_time=item.previous_avg_response_time,
     )
 
 
@@ -80,10 +96,15 @@ async def get_analytics_timeseries(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> list[TimeseriesPoint]:
-    rows = await service.get_timeseries(principal.tenant_id, days=days, website_id=website_id)
+    days, start, end = _resolve_window(days, start, end)
+    rows = await service.get_timeseries(
+        principal.tenant_id, days=days, start=start, end=end, website_id=website_id
+    )
     return [
         TimeseriesPoint(
             date=row.date,
@@ -103,10 +124,15 @@ async def get_top_websites(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_TOP_WEBSITES_LIMIT)] = DEFAULT_TOP_WEBSITES_LIMIT,
 ) -> list[TopWebsite]:
-    rows = await service.get_top_websites(principal.tenant_id, days=days, limit=limit)
+    days, start, end = _resolve_window(days, start, end)
+    rows = await service.get_top_websites(
+        principal.tenant_id, days=days, start=start, end=end, limit=limit
+    )
     return [
         TopWebsite(
             website_id=row.website_id,
@@ -124,14 +150,22 @@ async def get_response_metrics(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> ResponseMetrics:
-    row = await service.get_response_metrics(principal.tenant_id, days=days, website_id=website_id)
+    days, start, end = _resolve_window(days, start, end)
+    row = await service.get_response_metrics(
+        principal.tenant_id, days=days, start=start, end=end, website_id=website_id
+    )
     return ResponseMetrics(
         avg_response_time=row.avg_response_time,
         fastest_response_time=row.fastest_response_time,
         slowest_response_time=row.slowest_response_time,
+        median_response_time=row.median_response_time,
+        p95_response_time=row.p95_response_time,
+        distribution=row.distribution or {},
         avg_embedding_ms=row.avg_embedding_ms,
         avg_retrieval_ms=row.avg_retrieval_ms,
         avg_generation_ms=row.avg_generation_ms,
@@ -144,10 +178,15 @@ async def get_analytics_overview(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> AnalyticsOverview:
-    item = await service.get_overview(principal.tenant_id, days=days, website_id=website_id)
+    days, start, end = _resolve_window(days, start, end)
+    item = await service.get_overview(
+        principal.tenant_id, days=days, start=start, end=end, website_id=website_id
+    )
     return AnalyticsOverview(
         total_conversations=item.total_conversations,
         total_messages=item.total_messages,
@@ -167,12 +206,20 @@ async def get_analytics_questions(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_TOP_QUESTIONS_LIMIT)] = DEFAULT_TOP_QUESTIONS_LIMIT,
 ) -> list[QuestionCount]:
+    days, start, end = _resolve_window(days, start, end)
     rows = await service.get_top_questions(
-        principal.tenant_id, days=days, website_id=website_id, limit=limit
+        principal.tenant_id,
+        days=days,
+        start=start,
+        end=end,
+        website_id=website_id,
+        limit=limit,
     )
     return [QuestionCount(question=row.question, count=row.count) for row in rows]
 
@@ -183,11 +230,14 @@ async def get_analytics_feedback(
     service: Annotated[AnalyticsService, Depends(get_analytics_service)],
     _: Annotated[None, Depends(analytics_limiter)],
     __: Annotated[None, Depends(enforce_api_key_rate_limit)],
-    days: Annotated[int, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    days: Annotated[int | None, Query(ge=1, le=MAX_ANALYTICS_DAYS)] = DEFAULT_ANALYTICS_DAYS,
+    start: Annotated[date | None, Query(description="Custom range start (YYYY-MM-DD)")] = None,
+    end: Annotated[date | None, Query(description="Custom range end (YYYY-MM-DD)")] = None,
     website_id: Annotated[str | None, Query(description="Filter by website")] = None,
 ) -> FeedbackAnalytics:
+    days, start, end = _resolve_window(days, start, end)
     row = await service.get_feedback_analytics(
-        principal.tenant_id, days=days, website_id=website_id
+        principal.tenant_id, days=days, start=start, end=end, website_id=website_id
     )
     return FeedbackAnalytics(
         total=row.total,
@@ -198,7 +248,41 @@ async def get_analytics_feedback(
         negative_percentage=_percent(row.negative, row.total),
         average_rating=row.average_rating,
         distribution=row.distribution,
+        trend=[
+            RatingTrendPoint(
+                date=point.date, average_rating=point.average_rating, ratings=point.ratings
+            )
+            for point in row.trend
+        ],
     )
+
+
+def _resolve_window(
+    days: int | None, start: date | None, end: date | None
+) -> tuple[int | None, date | None, date | None]:
+    """Validate the custom-range contract (both params, sane span, <= 90 days).
+
+    Falls back to the `days` window untouched when no range is supplied.
+    """
+    if start is None and end is None:
+        return days, None, None
+    if start is None or end is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="`start` and `end` must be provided together to use a custom date range",
+        )
+    if start > end:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="`start` must not be after `end`",
+        )
+    span = (end - start).days + 1
+    if span > MAX_ANALYTICS_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"custom range spans {span} days; the maximum is {MAX_ANALYTICS_DAYS}",
+        )
+    return None, start, end
 
 
 def _percent(part: int, total: int) -> float:

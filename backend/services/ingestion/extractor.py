@@ -6,6 +6,7 @@ links out of a rendered page.
 """
 
 from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -64,3 +65,27 @@ def extract_page(html: str, url: str) -> ExtractedPage:
         paragraphs=paragraphs,
         links=links,
     )
+
+
+def pick_preview_image(meta: dict[str, str], page_url: str) -> str | None:
+    """Choose a website preview image from page metadata, if any.
+
+    Preference order: `og:image`, then `twitter:image`, then the page's own
+    `/favicon.ico`. All candidates are Open Graph / meta URLs (never fetched
+    here), so no new crawl/SSRF surface is introduced — we only surface a URL
+    the page already advertises, or a same-origin favicon for a page we already
+    crawled. Relative URLs are normalized against the page's own origin, and
+    only http(s) URLs are accepted (data:/javascript:/etc. are skipped as
+    non-images).
+    """
+    candidate = meta.get("og:image") or meta.get("twitter:image")
+    if candidate:
+        absolute = urljoin(page_url, candidate.strip())
+        parsed = urlparse(absolute)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            return None
+        return absolute
+    base = urlparse(page_url)
+    if base.scheme not in ("http", "https") or not base.netloc:
+        return None
+    return f"{base.scheme}://{base.netloc}/favicon.ico"

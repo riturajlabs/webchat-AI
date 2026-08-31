@@ -62,6 +62,8 @@ class ChatSessionRepository(Protocol):
 
     async def delete(self, tenant_id: str, session_id: str) -> bool: ...
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
 
 class MongoChatSessionRepository:
     """MongoDB-backed chat session repository."""
@@ -162,6 +164,13 @@ class MongoChatSessionRepository:
             {"$set": {"status": CHAT_SESSION_STATUS_DELETED}},
         )
         return result.modified_count > 0
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        """Hard-delete all sessions for a website (cascade on website deletion)."""
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return result.deleted_count
 
 
 __all__ = ["ChatSessionRepository", "MongoChatSessionRepository"]

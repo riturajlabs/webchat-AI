@@ -122,9 +122,7 @@ class ProviderHealthStore:
 
     # ── Write ───────────────────────────────────────────────────────────
 
-    async def record_success(
-        self, provider_name: str, latency_ms: float
-    ) -> None:
+    async def record_success(self, provider_name: str, latency_ms: float) -> None:
         """Record a successful request: update latency EMA, clear failures."""
         try:
             health = await self.get_health(provider_name)

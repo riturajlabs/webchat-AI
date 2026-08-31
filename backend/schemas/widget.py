@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from backend.models.widget import (
     WIDGET_FONT_SIZES,
     WIDGET_POSITIONS,
-    WIDGET_THEME_PRESETS,
     WIDGET_THEMES,
 )
 from backend.utils.origin import normalize_allowed_domains
@@ -155,8 +154,9 @@ class WidgetConfigUpdate(BaseModel):
         if not cleaned:
             # An empty string means "clear the preset" (back to classic).
             return ""
-        if cleaned not in WIDGET_THEME_PRESETS:
-            raise ValueError("unknown theme preset")
+        # Any registered preset id is accepted (the canonical list lives in
+        # `@webchat/themes`); unregistered ids are stored verbatim and the
+        # widget safely falls back to the classic palette at render time.
         return cleaned
 
     @field_validator("width", "height", "border_radius", "launcher_size")

@@ -125,22 +125,24 @@ async def text_search(self, tenant_id, website_id, query, *, top_k=5):
                 "text": {
                     "query": query,
                     "path": "chunk_text",
-                    "score": {"embedded": {"boost": {"path": "embedding"}}}
+                    "score": {"embedded": {"boost": {"path": "embedding"}}},
                 },
                 "compound": {
                     "must": [
                         {"equals": {"path": "tenant_id", "value": tenant_id}},
                         {"equals": {"path": "website_id", "value": website_id}},
                     ]
-                }
+                },
             }
         },
         {"$addFields": {"score": {"$meta": "searchScore"}}},
         {"$limit": top_k},
     ]
     cursor = self._collection.aggregate(pipeline)
-    return [VectorSearchResult(chunk=KnowledgeChunk.from_doc(doc), score=doc["score"])
-            async for doc in cursor]
+    return [
+        VectorSearchResult(chunk=KnowledgeChunk.from_doc(doc), score=doc["score"])
+        async for doc in cursor
+    ]
 ```
 
 ### Required Infrastructure

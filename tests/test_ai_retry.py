@@ -61,9 +61,7 @@ class TestGeminiRetryTransientFailure:
             yield "recovered"
 
         with patch.object(client, "_stream_generate_once", _fake_once):
-            deltas = await _collect(
-                client.stream_generate(system="sys", messages=[("user", "q")])
-            )
+            deltas = await _collect(client.stream_generate(system="sys", messages=[("user", "q")]))
 
         assert deltas == ["recovered"]
         assert call_count == 2
@@ -87,9 +85,7 @@ class TestGeminiRetryTransientFailure:
             patch.object(client, "_stream_generate_once", _fake_once),
             patch("backend.ai.gemini.asyncio.sleep", _fake_sleep),
         ):
-            deltas = await _collect(
-                client.stream_generate(system="sys", messages=[("user", "q")])
-            )
+            deltas = await _collect(client.stream_generate(system="sys", messages=[("user", "q")]))
 
         assert deltas == ["ok"]
         assert call_count == 3
@@ -112,9 +108,7 @@ class TestGeminiRetryExhaustion:
 
         with patch.object(client, "_stream_generate_once", _fake_once):
             with pytest.raises(GenerationError, match="attempt 3 failed"):
-                async for _ in client.stream_generate(
-                    system="sys", messages=[("user", "q")]
-                ):
+                async for _ in client.stream_generate(system="sys", messages=[("user", "q")]):
                     pass
 
         # max_retries=2 → 1 initial + 2 retries = 3 total
@@ -142,9 +136,7 @@ class TestGeminiMidStreamNoRetry:
         with patch.object(client, "_stream_generate_once", _fake_once):
             collected: list[str] = []
             with pytest.raises(GenerationError, match="stalled mid-stream"):
-                async for delta in client.stream_generate(
-                    system="sys", messages=[("user", "q")]
-                ):
+                async for delta in client.stream_generate(system="sys", messages=[("user", "q")]):
                     collected.append(delta)
 
         # Only the partial prefix must be consumed; the failure surfaces as an
@@ -175,9 +167,7 @@ class TestGeminiMidStreamNoRetry:
         ):
             collected: list[str] = []
             with pytest.raises(GenerationError, match="stalled after output"):
-                async for delta in client.stream_generate(
-                    system="sys", messages=[("user", "q")]
-                ):
+                async for delta in client.stream_generate(system="sys", messages=[("user", "q")]):
                     collected.append(delta)
 
         assert collected == ["final"]
@@ -202,9 +192,7 @@ class TestGeminiMidStreamNoRetry:
             settings.llm_max_retries = 0
             settings.llm_retry_base_delay = 1.0
             with pytest.raises(GenerationError, match="always fails"):
-                async for _ in client.stream_generate(
-                    system="sys", messages=[("user", "q")]
-                ):
+                async for _ in client.stream_generate(system="sys", messages=[("user", "q")]):
                     pass
 
         # 0 retries → only 1 attempt
@@ -227,9 +215,7 @@ class TestGeminiFirstTokenTimeoutNoRetry:
 
         with patch.object(client, "_stream_generate_once", _fake_once):
             with pytest.raises(GenerationUnavailableError, match="first token timeout"):
-                async for _ in client.stream_generate(
-                    system="sys", messages=[("user", "q")]
-                ):
+                async for _ in client.stream_generate(system="sys", messages=[("user", "q")]):
                     pass
 
         # GenerationUnavailableError should NOT be retried

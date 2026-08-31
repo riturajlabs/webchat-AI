@@ -130,7 +130,7 @@ if [ "$LEAK_FOUND" -eq 0 ]; then
     # Search tracked files for password-like patterns
     LEAK_HITS=$(git grep -n -E '(MONGO_PASSWORD|REDIS_PASSWORD)=' -- ':!.env.example' ':!.env.*.example' ':!docker/compose.yml' 2>/dev/null | grep -v '=${' | grep -v '=$' | grep -v '^\(.*\.env\.\(production\|development\):.*#.*\)' || true)
     # Filter out comment-only lines and variable-interpolation lines
-    LEAK_HITS=$(echo "$LEAK_HITS" | grep -v '^\s*#' | grep -v '=.*\${' || true)
+    LEAK_HITS=$(echo "$LEAK_HITS" | grep -v '^\s*#' | grep -v '=.*\${' | grep -v '=$(' || true)
     if [ -n "$LEAK_HITS" ]; then
         echo "      [FAIL] password value found in tracked files:"
         echo "$LEAK_HITS" | while IFS= read -r hit; do echo "             $hit"; done

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WidgetEditor } from './components/widget-editor';
 import { useUpdateWidgetConfig } from './hooks';
+import { THEME_PRESETS } from '@webchat/themes';
 import type { WidgetConfig, WidgetResponse } from './types';
 
 vi.mock('./hooks', () => ({
@@ -211,8 +212,38 @@ describe('WidgetEditor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(mutation).toHaveBeenCalledWith({
       websiteId: 'site-1',
-      changes: { theme_preset: 'ocean-blue' },
+      changes: {
+        theme_preset: 'ocean-blue',
+        // Selecting a preset clears any stale bespoke overrides so the
+        // preset's palette (including send/close/launcher) actually renders.
+        primary_color: '#10A37F',
+        accent_color: '#25D366',
+      },
     });
+  });
+
+  it('selecting WhatsApp Classic drops legacy blue/purple overrides so the theme shows', () => {
+    setup();
+
+    const send = screen.getByLabelText('Send');
+    // Fixture ships blue/purple bespoke colors (legacy brand defaults).
+    expect(send.getAttribute('style')).toContain('#2563eb');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Select WhatsApp Classic preset' }));
+
+    // The send button must now follow the WhatsApp palette (green #199347),
+    // not the legacy blue primary.
+    const sendAfter = screen.getByLabelText('Send');
+    expect(sendAfter.getAttribute('style')).toContain('#199347');
+    expect(sendAfter.getAttribute('style')).not.toContain('#2563eb');
+
+    // The header must be WhatsApp teal, not blue/purple.
+    const header = screen.getByLabelText('Close preview').closest('div');
+    expect(header?.getAttribute('style')).toContain('rgb(7, 94, 84)');
+
+    // Bespoke overrides were reset to platform defaults.
+    expect(screen.getByLabelText('Primary color color swatch')).toHaveValue('#10a37f');
+    expect(screen.getByLabelText('Accent color color swatch')).toHaveValue('#25d366');
   });
 
   it('switches back to the Classic preset when selected', () => {
@@ -238,8 +269,65 @@ describe('WidgetEditor', () => {
     setup();
 
     expect(screen.queryByText(/override this preset/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Show more/i }));
     fireEvent.click(screen.getByRole('radio', { name: 'Select Purple AI preset' }));
     expect(screen.getByText(/override this preset/)).toBeInTheDocument();
+  });
+
+  it('shows 6 preset cards initially and reveals the rest via Show more', () => {
+    setup();
+
+    const presetRadios = () =>
+      screen
+        .getAllByRole('radio')
+        .filter(
+          (radio) =>
+            radio.getAttribute('aria-label')?.startsWith('Select ') &&
+            radio.getAttribute('aria-label') !== 'Select Classic preset',
+        );
+    expect(presetRadios()).toHaveLength(6);
+
+    expect(
+      screen.queryByRole('radio', { name: 'Select Purple AI preset' }),
+    ).not.toBeInTheDocument();
+
+    const showMore = screen.getByRole('button', { name: /Show more/i });
+    fireEvent.click(showMore);
+
+    expect(screen.getByRole('radio', { name: 'Select Purple AI preset' })).toBeInTheDocument();
+    expect(presetRadios()).toHaveLength(10);
+    expect(screen.getByRole('button', { name: /Show less/i })).toBeInTheDocument();
+  });
+
+  it('auto-registers every theme in the canonical registry (dynamic theme registration)', () => {
+    setup();
+
+    const first = THEME_PRESETS[0]?.name;
+    const firstCard = screen.getByRole('radio', { name: `Select ${first} preset` });
+    expect(firstCard).toBeInTheDocument();
+
+    const presetRadios = () =>
+      screen
+        .getAllByRole('radio')
+        .filter(
+          (radio) =>
+            radio.getAttribute('aria-label')?.startsWith('Select ') &&
+            radio.getAttribute('aria-label') !== 'Select Classic preset',
+        );
+
+    // Adding a theme to `@webchat/themes` (THEME_PRESETS) must surface it in
+    // the dashboard without any per-theme wiring here.
+    expect(presetRadios()).toHaveLength(Math.min(6, THEME_PRESETS.length));
+
+    if (THEME_PRESETS.length > 6) {
+      fireEvent.click(screen.getByRole('button', { name: /Show more/i }));
+      expect(presetRadios()).toHaveLength(THEME_PRESETS.length);
+      for (const preset of THEME_PRESETS) {
+        expect(
+          screen.getByRole('radio', { name: `Select ${preset.name} preset` }),
+        ).toBeInTheDocument();
+      }
+    }
   });
 
   it('saves only the changed fields when clicking save', async () => {

@@ -27,9 +27,7 @@ class StubProvider:
     def usage(self) -> GenerationUsage:
         return self._usage
 
-    async def stream_generate(
-        self, *, system: str, messages: list[tuple[str, str]]
-    ):
+    async def stream_generate(self, *, system: str, messages: list[tuple[str, str]]):
         self.calls += 1
         yield "ok"
 

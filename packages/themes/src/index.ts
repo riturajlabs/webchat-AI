@@ -32,6 +32,19 @@ export interface ThemeTokens {
   inputBg: string;
   scrollbarThumb: string;
   scrollbarTrack: string;
+  /**
+   * Optional per-theme semantic overrides. When present they win; otherwise the
+   * centralized resolver derives them from the canonical tokens via documented
+   * fallbacks, so every theme still renders a fully-specified palette without
+   * the renderers knowing which theme is active. A new theme may set these to
+   * give, e.g., the Send/Officialify button a genuinely distinct look purely
+   * through data — no renderer change required.
+   */
+  sendButton?: string;
+  launcher?: string;
+  onlineIndicator?: string;
+  suggestionBg?: string;
+  focusRing?: string;
 }
 
 export interface ThemePreset {
@@ -60,6 +73,31 @@ export interface ThemeConfig {
 export interface ResolvedTheme extends ThemeTokens {
   secondary: string;
   userBubble: string;
+  // Conceptual aliases so renderers can consume intent-named tokens rather
+  // than inventing their own color logic. All are derived centrally here.
+  primaryForeground: string;
+  messageUserForeground: string;
+  messageAssistantForeground: string;
+  headerForeground: string;
+  /** Send-button background (explicit theme token → primary→secondary gradient). */
+  sendButtonBackground: string;
+  /** Send-button foreground (readable on `sendButtonBackground`/primary). */
+  sendButtonForeground: string;
+  /** Launcher-button background (explicit theme token → primary→accent gradient). */
+  launcherBackground: string;
+  /** Launcher-button foreground (readable on primary). */
+  launcherForeground: string;
+  /** Close-button background (transparent — sits on the header). */
+  closeButtonBackground: string;
+  /** Close-button foreground (header foreground). */
+  closeButtonForeground: string;
+  suggestionBackground: string;
+  suggestionForeground: string;
+  suggestionBorder: string;
+  inputBackground: string;
+  inputBorder: string;
+  focusRing: string;
+  onlineIndicator: string;
 }
 
 function preset(
@@ -477,23 +515,45 @@ export function getThemePreset(id: string): ThemePreset | undefined {
 
 /** Classic (no preset) tokens. */
 export function defaultTokens(dark: boolean): ResolvedTheme {
+  const primary = DEFAULT_PRIMARY_COLOR;
+  const accent = DEFAULT_ACCENT_COLOR;
+  const secondary = accent;
+  const header = `linear-gradient(135deg, ${primary}, ${accent})`;
+  const headerText = '#ffffff';
   return {
-    primary: DEFAULT_PRIMARY_COLOR,
-    accent: DEFAULT_ACCENT_COLOR,
-    secondary: DEFAULT_ACCENT_COLOR,
-    header: `linear-gradient(135deg, ${DEFAULT_PRIMARY_COLOR}, ${DEFAULT_ACCENT_COLOR})`,
-    headerText: '#ffffff',
+    primary,
+    accent,
+    secondary,
+    header,
+    headerText,
     surface: dark ? '#0f172a' : '#ffffff',
     surfaceElevated: dark ? '#1e293b' : '#f8fafc',
     text: dark ? '#f1f5f9' : '#0f172a',
     muted: dark ? '#94a3b8' : '#64748b',
     border: dark ? '#334155' : '#e2e8f0',
     assistantBubble: dark ? '#1e293b' : '#f1f5f9',
-    userBubble: DEFAULT_PRIMARY_COLOR,
+    userBubble: primary,
     userText: '#ffffff',
     inputBg: dark ? '#1e293b' : '#ffffff',
     scrollbarThumb: dark ? 'rgba(148, 163, 184, 0.35)' : 'rgba(100, 116, 139, 0.35)',
     scrollbarTrack: dark ? '#0f172a' : '#eef2f7',
+    primaryForeground: readableText(primary),
+    messageUserForeground: '#ffffff',
+    messageAssistantForeground: dark ? '#f1f5f9' : '#0f172a',
+    headerForeground: headerText,
+    sendButtonBackground: `linear-gradient(135deg, ${primary}, ${secondary})`,
+    sendButtonForeground: readableText(primary),
+    launcherBackground: `linear-gradient(135deg, ${primary}, ${accent})`,
+    launcherForeground: readableText(primary),
+    closeButtonBackground: 'transparent',
+    closeButtonForeground: headerText,
+    suggestionBackground: dark ? '#1e293b' : '#f8fafc',
+    suggestionForeground: dark ? '#f1f5f9' : '#0f172a',
+    suggestionBorder: dark ? '#334155' : '#e2e8f0',
+    inputBackground: dark ? '#1e293b' : '#ffffff',
+    inputBorder: dark ? '#334155' : '#e2e8f0',
+    focusRing: accent,
+    onlineIndicator: '#4ade80',
   };
 }
 
@@ -561,22 +621,54 @@ export function resolveTheme(config: ThemeConfig, dark: boolean): ResolvedTheme 
     headerText = '#ffffff';
   }
 
-  return {
+  const baseBg = config.background_color ?? base.surface;
+  const baseText = config.text_color ?? base.text;
+  const inputBg = base.inputBg;
+  const border = base.border;
+  const primaryForeground = readableText(primary);
+
+  const resolved: ResolvedTheme = {
     primary,
     accent,
     secondary,
     header,
     headerText,
-    surface: config.background_color ?? base.surface,
+    surface: baseBg,
     surfaceElevated: config.background_color ?? base.surfaceElevated,
-    text: config.text_color ?? base.text,
+    text: baseText,
     muted: base.muted,
-    border: base.border,
+    border,
     assistantBubble: base.assistantBubble,
     userBubble: preset ? base.userBubble : primary,
     userText: base.userText,
-    inputBg: base.inputBg,
+    inputBg,
     scrollbarThumb: base.scrollbarThumb,
     scrollbarTrack: base.scrollbarTrack,
+    // Conceptual aliases / derived semantic tokens (centralized here so the
+    // dashboard preview, the widget SDK and tests all read ONE resolved value).
+    primaryForeground,
+    messageUserForeground: base.userText,
+    messageAssistantForeground: baseText,
+    headerForeground: headerText,
+    // Send button: explicit preset token → primary→secondary gradient.
+    sendButtonBackground:
+      (preset && base.sendButton) || `linear-gradient(135deg, ${primary}, ${secondary})`,
+    sendButtonForeground:
+      preset && base.sendButton ? readableText(base.sendButton) : primaryForeground,
+    // Launcher: explicit preset token → primary→accent gradient.
+    launcherBackground:
+      (preset && base.launcher) || `linear-gradient(135deg, ${primary}, ${accent})`,
+    launcherForeground: primaryForeground,
+    // Close button: transparent on the header, foreground follows header text.
+    closeButtonBackground: 'transparent',
+    closeButtonForeground: headerText,
+    suggestionBackground: base.surfaceElevated,
+    suggestionForeground: baseText,
+    suggestionBorder: border,
+    inputBackground: inputBg,
+    inputBorder: border,
+    focusRing: (preset && base.focusRing) || accent,
+    onlineIndicator: (preset && base.onlineIndicator) || '#4ade80',
   };
+  return resolved;
 }

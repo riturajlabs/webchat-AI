@@ -91,6 +91,7 @@ def test_css_length_accepts_percent() -> None:
 def test_css_length_rejects_vh() -> None:
     """vh units are rejected (Phase 11: fixed dimensions only)."""
     import pytest
+
     with pytest.raises(ValueError, match="CSS length"):
         WidgetConfigUpdate(width="50vh")
 
@@ -98,6 +99,7 @@ def test_css_length_rejects_vh() -> None:
 def test_css_length_rejects_vw() -> None:
     """vw units are rejected (Phase 11: fixed dimensions only)."""
     import pytest
+
     with pytest.raises(ValueError, match="CSS length"):
         WidgetConfigUpdate(width="50vw")
 
@@ -105,6 +107,7 @@ def test_css_length_rejects_vw() -> None:
 def test_css_length_rejects_invalid_format() -> None:
     """Arbitrary strings are rejected."""
     import pytest
+
     with pytest.raises(ValueError, match="CSS length"):
         WidgetConfigUpdate(width="calc(100% - 20px)")
 
@@ -112,5 +115,6 @@ def test_css_length_rejects_invalid_format() -> None:
 def test_css_length_rejects_negative() -> None:
     """Negative values are rejected."""
     import pytest
+
     with pytest.raises(ValueError, match="CSS length"):
         WidgetConfigUpdate(width="-20px")

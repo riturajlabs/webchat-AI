@@ -26,7 +26,12 @@ from backend.models.website import WEBSITE_STATUS_PENDING, Website
 from backend.models.widget import Widget
 from backend.repositories import (
     AuditLogRepository,
+    ChatMessageRepository,
+    ChatSessionRepository,
+    CrawlJobRepository,
     DocumentRepository,
+    FeedbackRepository,
+    UsageRecordRepository,
     WebsiteRepository,
     WebsiteSortField,
     WebsiteSortOrder,
@@ -68,6 +73,11 @@ class WebsiteService:
         usage: UsageService | None = None,
         documents: DocumentRepository | None = None,
         vector: VectorRepository | None = None,
+        chat_sessions: ChatSessionRepository | None = None,
+        chat_messages: ChatMessageRepository | None = None,
+        feedback: FeedbackRepository | None = None,
+        crawl_jobs: CrawlJobRepository | None = None,
+        usage_records: UsageRecordRepository | None = None,
     ) -> None:
         self._websites = websites
         self._widgets = widgets
@@ -81,6 +91,13 @@ class WebsiteService:
         # embedded chunks. Optional so pre-existing call sites keep working.
         self._documents = documents
         self._vector = vector
+        # Cascade deletion to tenant-owned conversation/message/feedback/crawl/
+        # usage data on website deletion. Optional for backward compatibility.
+        self._chat_sessions = chat_sessions
+        self._chat_messages = chat_messages
+        self._feedback = feedback
+        self._crawl_jobs = crawl_jobs
+        self._usage_records = usage_records
 
     # ------------------------------------------------------------------ flows
 
@@ -250,6 +267,18 @@ class WebsiteService:
             await self._documents.delete_by_website(principal.tenant_id, website_id)
         if self._vector is not None:
             await self._vector.delete_by_website(principal.tenant_id, website_id)
+        # Cascade deletion to tenant-owned conversation/feedback/crawl/usage
+        # data so no content or rollups outlive the website (retention/compliance).
+        if self._chat_sessions is not None:
+            await self._chat_sessions.delete_by_website(principal.tenant_id, website_id)
+        if self._chat_messages is not None:
+            await self._chat_messages.delete_by_website(principal.tenant_id, website_id)
+        if self._feedback is not None:
+            await self._feedback.delete_by_website(principal.tenant_id, website_id)
+        if self._crawl_jobs is not None:
+            await self._crawl_jobs.delete_by_website(principal.tenant_id, website_id)
+        if self._usage_records is not None:
+            await self._usage_records.delete_by_website(principal.tenant_id, website_id)
         await self._websites.delete(principal.tenant_id, website_id)
         await self._audit.create(
             AuditLog.new(

@@ -49,6 +49,17 @@ export function applyTheme(host: HTMLElement, config: WidgetPublicConfig): void 
   // gradient. Computed so near-white primaries (e.g. minimal-white dark) stay
   // readable instead of forcing white-on-white.
   setProp(host, `${PREFIX}-on-primary`, readableText(theme.primary));
+  setProp(host, `${PREFIX}-send-button`, theme.sendButtonBackground);
+  setProp(host, `${PREFIX}-send-button-foreground`, theme.sendButtonForeground);
+  setProp(host, `${PREFIX}-launcher-bg`, theme.launcherBackground);
+  setProp(host, `${PREFIX}-launcher-fg`, theme.launcherForeground);
+  setProp(host, `${PREFIX}-close-button-fg`, theme.closeButtonForeground);
+  setProp(host, `${PREFIX}-suggestion-bg`, theme.suggestionBackground);
+  setProp(host, `${PREFIX}-suggestion-fg`, theme.suggestionForeground);
+  setProp(host, `${PREFIX}-suggestion-border`, theme.suggestionBorder);
+  setProp(host, `${PREFIX}-input-border`, theme.inputBorder);
+  setProp(host, `${PREFIX}-focus-ring`, theme.focusRing);
+  setProp(host, `${PREFIX}-online-indicator`, theme.onlineIndicator);
   setProp(host, `${PREFIX}-scrollbar-thumb`, theme.scrollbarThumb);
   setProp(host, `${PREFIX}-scrollbar-track`, theme.scrollbarTrack);
 

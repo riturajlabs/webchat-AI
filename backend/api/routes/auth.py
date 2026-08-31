@@ -16,6 +16,7 @@ from backend.api.deps import (
     client_ip,
     current_user,
     forgot_password_limiter,
+    get_account_service,
     get_auth_service,
     login_limiter,
     refresh_limiter,
@@ -37,9 +38,11 @@ from backend.schemas.auth import (
     RegisterRequest,
     ResendVerificationRequest,
     ResetPasswordRequest,
+    UpdateProfileRequest,
     UserOut,
     VerifyEmailRequest,
 )
+from backend.services.account import AccountService
 from backend.services.auth import AuthResult, AuthService, Principal
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -245,3 +248,42 @@ async def reset_password(
 @router.get("/me", response_model=UserOut)
 async def me(principal: Annotated[Principal, Depends(current_user)]) -> UserOut:
     return UserOut.from_principal(principal)
+
+
+@router.patch("/me", response_model=UserOut)
+async def update_me(
+    body: UpdateProfileRequest,
+    principal: Annotated[Principal, Depends(current_user)],
+    auth: Annotated[AuthService, Depends(get_auth_service)],
+) -> UserOut:
+    """Update editable profile fields (name, avatar_url) for the signed-in user."""
+    fields: dict[str, str | None] = {}
+    if "name" in body.model_fields_set and body.name is not None:
+        fields["name"] = body.name
+    if "avatar_url" in body.model_fields_set:
+        # Explicit null/"" clears the avatar.
+        fields["avatar_url"] = body.avatar_url
+    updated = await auth.update_profile(user_id=principal.user_id, **fields)
+    return UserOut.from_user(updated, role=principal.role)
+
+
+@router.delete("/me", response_model=MessageResponse)
+async def delete_me(
+    request: Request,
+    response: Response,
+    principal: Annotated[Principal, Depends(current_user)],
+    account: Annotated[AccountService, Depends(get_account_service)],
+) -> MessageResponse:
+    """Irreversibly delete the signed-in user's account and its data.
+
+    The deletion is always scoped to the authenticated user's own private
+    tenant (resolved from the verified principal, never from request input).
+    The session cookies are cleared once the purge completes.
+    """
+    await account.delete_account(
+        principal=principal,
+        ip_address=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    _clear_session_cookies(response)
+    return MessageResponse(message="Your account has been deleted.")

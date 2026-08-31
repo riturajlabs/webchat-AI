@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Bot, LogOut } from 'lucide-react';
 import { useState } from 'react';
 
@@ -9,12 +8,12 @@ import { useAuth } from '@/features/auth/auth-context';
 import { VerificationReminder } from '@/features/auth/verification-reminder';
 import { Button } from '@/components/ui/button';
 import { CrawlStatusBanner } from '@/components/layout/crawl-status-banner';
+import { AccountDropdown } from '@/components/layout/account-dropdown';
 import { MobileNav } from '@/components/layout/mobile-nav';
 import { NavLinks } from '@/components/layout/nav-links';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const { user, logout } = useAuth();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
@@ -25,7 +24,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     setIsLoggingOut(true);
     try {
       await logout();
-      router.push('/login');
     } finally {
       setIsLoggingOut(false);
     }
@@ -33,16 +31,24 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-muted/30">
-      <aside className="hidden w-60 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
+      <aside className="hidden w-60 shrink-0 flex-col border-r bg-background md:flex">
         <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Bot className="size-4" aria-hidden="true" />
           </span>
           WebChat AI
         </Link>
-        <nav className="flex-1 px-3 pb-4" aria-label="Main navigation">
+        <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Main navigation">
           <NavLinks role={user?.role} />
         </nav>
+        <div className="shrink-0 border-t p-2">
+          <AccountDropdown
+            user={user}
+            logout={handleLogout}
+            isLoggingOut={isLoggingOut}
+            setIsLoggingOut={setIsLoggingOut}
+          />
+        </div>
       </aside>
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <header className="sticky top-0 z-10 flex shrink-0 items-center justify-between gap-4 border-b bg-background px-4 py-3 md:px-10">
@@ -58,6 +64,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <Button
               variant="outline"
               size="sm"
+              className="md:hidden"
               onClick={() => void handleLogout()}
               disabled={isLoggingOut}
             >

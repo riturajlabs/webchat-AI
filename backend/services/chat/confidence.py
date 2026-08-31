@@ -51,11 +51,7 @@ def assess_confidence(
     peak = max(normalized)
     average = sum(normalized) / len(normalized)
     rejected = sum(1 for score in normalized if score < min_score) if min_score > 0 else 0
-    hit_ratio = (
-        (len(normalized) - rejected) / len(normalized)
-        if min_score > 0
-        else average
-    )
+    hit_ratio = (len(normalized) - rejected) / len(normalized) if min_score > 0 else average
     confidence = 0.50 * average + 0.30 * hit_ratio + 0.20 * peak
     # Clamp to [0, 1]: defensive only after input normalization, kept so a
     # caller-supplied out-of-range min_score cannot push the ratio negative.
@@ -66,6 +62,7 @@ def assess_confidence(
         average_score=round(average, 4),
         rejected_chunks_count=rejected,
     )
+
 
 def calculate_confidence(
     scores: list[float],

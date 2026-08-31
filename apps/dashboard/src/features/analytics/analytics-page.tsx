@@ -10,6 +10,7 @@ import {
   Gauge,
   MessagesSquare,
   Minus,
+  RefreshCw,
   Star,
   Timer,
   TrendingDown,
@@ -22,13 +23,17 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 
 import { useWebsites } from '@/features/websites/hooks';
 
 import {
   RANGE_OPTIONS,
+  changePercent,
+  formatChange,
   formatCompact,
   formatCost,
+  formatDayLong,
   formatNumber,
   formatPercent,
   formatRating,
@@ -44,110 +49,48 @@ import {
   useAnalyticsTopWebsites,
   useFeedbackSummary,
 } from './hooks';
-import type { AnalyticsRange } from './types';
+import { isValidRange } from './types';
+import type {
+  AnalyticsDateRange,
+  FeedbackAnalytics,
+  FeedbackSummary,
+  ResponseMetrics,
+} from './types';
 
-/**
- * Chart modules live in `./analytics-chart` so recharts is code-split out of
- * the analytics page bundle. They load lazily on the client with a skeleton
- * placeholder so the page shell (metrics, filters) paints immediately.
- */
-const ActivityChart = dynamic(() => import('./analytics-chart').then((m) => m.ActivityChart), {
+const UsageTrendChart = dynamic(() => import('./analytics-chart').then((m) => m.UsageTrendChart), {
   ssr: false,
   loading: () => <ChartPlaceholder />,
 });
 
 const TokenChart = dynamic(() => import('./analytics-chart').then((m) => m.TokenChart), {
   ssr: false,
-  loading: () => <ChartPlaceholder />,
+  loading: () => <ChartPlaceholder height={288} />,
 });
 
 const TopWebsitesChart = dynamic(
   () => import('./analytics-chart').then((m) => m.TopWebsitesChart),
-  { ssr: false, loading: () => <ChartPlaceholder height={320} /> },
+  { ssr: false, loading: () => <ChartPlaceholder height={256} /> },
 );
 
 const PopularQuestionsChart = dynamic(
   () => import('./analytics-chart').then((m) => m.PopularQuestionsChart),
-  { ssr: false, loading: () => <ChartPlaceholder height={320} /> },
+  { ssr: false, loading: () => <ChartPlaceholder height={288} /> },
 );
 
 const FeedbackDistributionChart = dynamic(
   () => import('./analytics-chart').then((m) => m.FeedbackDistributionChart),
-  { ssr: false, loading: () => <ChartPlaceholder height={220} /> },
+  { ssr: false, loading: () => <ChartPlaceholder height={224} /> },
 );
 
-function StatCard({
-  label,
-  value,
-  hint,
-  icon: Icon,
-  emphasis = false,
-  accent = false,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: typeof Timer;
-  /** Primary KPIs render larger values so the page reads top-down. */
-  emphasis?: boolean;
-  /** Blue accent reserved for primary metrics (design tokens §5). */
-  accent?: boolean;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-        <CardDescription>{label}</CardDescription>
-        <Icon
-          className={accent ? 'size-4 text-blue-600' : 'size-4 text-muted-foreground'}
-          aria-hidden="true"
-        />
-      </CardHeader>
-      <CardContent>
-        <p
-          className={
-            emphasis
-              ? 'font-sans text-3xl font-bold tabular-nums tracking-tight'
-              : 'font-sans text-xl font-semibold tabular-nums tracking-tight'
-          }
-        >
-          {value}
-        </p>
-        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
-      </CardContent>
-    </Card>
-  );
-}
+const ResponseHistogramChart = dynamic(
+  () => import('./analytics-chart').then((m) => m.ResponseHistogramChart),
+  { ssr: false, loading: () => <ChartPlaceholder height={240} /> },
+);
 
-function StatGridSkeleton() {
-  return (
-    <div role="status" aria-label="Loading analytics" className="flex flex-col gap-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {[0, 1, 2, 3].map((index) => (
-          <Card key={index}>
-            <CardHeader>
-              <Skeleton className="h-4 w-24" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-9 w-16" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {[0, 1, 2, 3, 4].map((index) => (
-          <Card key={index}>
-            <CardHeader>
-              <Skeleton className="h-4 w-24" />
-            </CardHeader>
-            <CardContent>
-              <Skeleton className="h-6 w-14" />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
+const RatingTrendChart = dynamic(
+  () => import('./analytics-chart').then((m) => m.RatingTrendChart),
+  { ssr: false, loading: () => <ChartPlaceholder height={224} /> },
+);
 
 function SectionHeading({ id, children }: { id: string; children: React.ReactNode }) {
   return (
@@ -157,10 +100,6 @@ function SectionHeading({ id, children }: { id: string; children: React.ReactNod
   );
 }
 
-/**
- * Card wrapper for every chart: title + description double as the chart's
- * accessible name/description via aria-labelledby/aria-describedby.
- */
 function ChartShell({
   title,
   description,
@@ -196,9 +135,331 @@ function ChartPlaceholder({ height = 300 }: { height?: number }) {
   );
 }
 
+function DeltaChip({
+  change,
+  invert = false,
+  note,
+}: {
+  change: number | null;
+  invert?: boolean;
+  note?: string;
+}) {
+  if (change === null || !Number.isFinite(change)) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground">
+        <Minus className="size-3.5" aria-hidden="true" />
+        New
+      </span>
+    );
+  }
+  const improved = invert ? change < 0 : change > 0;
+  const flat = change === 0;
+  const Icon = flat ? Minus : improved ? TrendingUp : TrendingDown;
+  const className = cn(
+    'inline-flex items-center gap-1 text-xs font-medium tabular-nums',
+    flat
+      ? 'text-muted-foreground'
+      : improved
+        ? 'text-emerald-600 dark:text-emerald-500'
+        : 'text-rose-600 dark:text-rose-500',
+  );
+  return (
+    <span className={className} title={note ?? 'vs the previous period'}>
+      <Icon className="size-3.5" aria-hidden="true" />
+      {formatChange(change)}
+    </span>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  delta,
+  deltaInvert = false,
+  hint,
+  icon: Icon,
+  emphasis = false,
+  accent = false,
+}: {
+  label: string;
+  value: string;
+  delta?: number | null;
+  deltaInvert?: boolean;
+  hint?: string;
+  icon: typeof Timer;
+  emphasis?: boolean;
+  accent?: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+        <CardDescription>{label}</CardDescription>
+        <Icon
+          className={accent ? 'size-4 text-blue-600' : 'size-4 text-muted-foreground'}
+          aria-hidden="true"
+        />
+      </CardHeader>
+      <CardContent>
+        <p
+          className={
+            emphasis
+              ? 'font-sans text-3xl font-bold tabular-nums tracking-tight'
+              : 'font-sans text-xl font-semibold tabular-nums tracking-tight'
+          }
+        >
+          {value}
+        </p>
+        {delta !== undefined ? (
+          <div className="mt-1.5">
+            <DeltaChip change={delta} invert={deltaInvert} />
+          </div>
+        ) : null}
+        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatGridSkeleton() {
+  return (
+    <div role="status" aria-label="Loading analytics" className="flex flex-col gap-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((index) => (
+          <Card key={index}>
+            <CardHeader>
+              <Skeleton className="h-4 w-24" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-9 w-16" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {[0, 1, 2, 3].map((index) => (
+          <Card key={index}>
+            <CardHeader>
+              <Skeleton className="h-4 w-24" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-6 w-14" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InlineLegend({ items }: { items: { label: string; className: string }[] }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+      {items.map((item) => (
+        <span
+          key={item.label}
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          <span className={cn('size-2 rounded-full', item.className)} aria-hidden="true" />
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PerformanceStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-3 text-center">
+      <p className="font-sans text-xl font-bold tabular-nums tracking-tight">{value}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{label}</p>
+      {hint ? <p className="text-[11px] text-muted-foreground/70">{hint}</p> : null}
+    </div>
+  );
+}
+
+function PerformanceCard({
+  performance,
+  pending,
+  hasData,
+  mounted,
+}: {
+  performance: ResponseMetrics | undefined;
+  pending: boolean;
+  hasData: boolean;
+  mounted: boolean;
+}) {
+  return (
+    <Card aria-labelledby="performance-title" aria-describedby="performance-description">
+      <CardHeader>
+        <CardTitle id="performance-title">Response time</CardTitle>
+        <CardDescription id="performance-description">
+          Assistant latency across the selected period.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {pending && !performance ? (
+          <ChartPlaceholder height={300} />
+        ) : !hasData ? (
+          <EmptyState
+            icon={Timer}
+            title="No response time data yet"
+            description="Latency statistics appear once your assistant starts answering questions."
+          />
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="grid grid-cols-3 gap-4">
+              <PerformanceStat
+                label="Average"
+                value={formatSeconds(performance?.avg_response_time ?? null)}
+              />
+              <PerformanceStat
+                label="Median"
+                value={formatSeconds(performance?.median_response_time ?? null)}
+              />
+              <PerformanceStat
+                label="P95"
+                value={formatSeconds(performance?.p95_response_time ?? null)}
+              />
+            </div>
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Fastest {formatSeconds(performance?.fastest_response_time ?? null)}</span>
+              <span>Slowest {formatSeconds(performance?.slowest_response_time ?? null)}</span>
+            </div>
+            <ResponseHistogramChart
+              distribution={performance?.distribution ?? {}}
+              mounted={mounted}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SatisfactionCard({
+  feedbackAnalytics,
+  feedback,
+  pending,
+  hasRatings,
+  mounted,
+}: {
+  feedbackAnalytics: FeedbackAnalytics | undefined;
+  feedback: FeedbackSummary | undefined;
+  pending: boolean;
+  hasRatings: boolean;
+  mounted: boolean;
+}) {
+  const average = feedbackAnalytics?.average_rating ?? feedback?.average_rating ?? null;
+  const total = feedbackAnalytics?.total ?? feedback?.total ?? 0;
+  return (
+    <Card aria-labelledby="satisfaction-title" aria-describedby="satisfaction-description">
+      <CardHeader>
+        <CardTitle id="satisfaction-title">User satisfaction</CardTitle>
+        <CardDescription id="satisfaction-description">
+          How visitors rated the assistant.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {pending && !feedbackAnalytics ? (
+          <ChartPlaceholder height={300} />
+        ) : !hasRatings ? (
+          <EmptyState
+            icon={Star}
+            title="Awaiting first rating"
+            description="Once visitors rate answers, the 1-5 star breakdown shows up here."
+          />
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="font-sans text-3xl font-bold tabular-nums tracking-tight">
+                  {formatRating(average)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {formatNumber(total)} rating{total === 1 ? '' : 's'} in the selected period
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="font-sans text-lg font-bold tracking-tight text-emerald-600 dark:text-emerald-500">
+                    {formatPercent(feedbackAnalytics?.positive_percentage ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Positive ({formatNumber(feedbackAnalytics?.positive ?? 0)})
+                  </p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="font-sans text-lg font-bold tracking-tight text-rose-600 dark:text-rose-500">
+                    {formatPercent(feedbackAnalytics?.negative_percentage ?? 0)}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Negative ({formatNumber(feedbackAnalytics?.negative ?? 0)})
+                  </p>
+                </div>
+              </div>
+            </div>
+            <FeedbackDistributionChart
+              data={[5, 4, 3, 2, 1].map((stars) => ({
+                stars,
+                count: feedbackAnalytics?.distribution[String(stars)] ?? 0,
+              }))}
+              mounted={mounted}
+            />
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function InsightsGrid({
+  insights,
+}: {
+  insights: { label: string; detail: string; icon: typeof Timer }[];
+}) {
+  if (insights.length === 0) {
+    return (
+      <EmptyState
+        icon={BarChart3}
+        title="Not enough data for insights yet"
+        description="Once visitors chat with your assistants, this section will highlight the trends worth knowing."
+      />
+    );
+  }
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {insights.map((insight) => (
+        <div key={insight.label} className="rounded-lg border border-border bg-card p-4 shadow-sm">
+          <div className="flex items-center gap-2">
+            <insight.icon className="size-4 text-blue-600" aria-hidden="true" />
+            <p className="text-sm font-medium">{insight.label}</p>
+          </div>
+          <p className="mt-1.5 text-sm text-muted-foreground">{insight.detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Header() {
+  return (
+    <PageHeader
+      title="Analytics overview"
+      description="Chat, token, and assistant-performance usage statistics."
+    />
+  );
+}
+
+function rangeWindowLabel(range: AnalyticsDateRange): string {
+  if (range.preset === 'custom') {
+    return 'selected period';
+  }
+  return `${range.preset} days`;
+}
+
 export function AnalyticsPage() {
   const router = useRouter();
-  const [days, setDays] = useState<AnalyticsRange>(7);
+  const [range, setRange] = useState<AnalyticsDateRange>({ preset: 7 });
   const [websiteId, setWebsiteId] = useState('');
   const [mounted, setMounted] = useState(false);
 
@@ -215,18 +476,24 @@ export function AnalyticsPage() {
     isError,
     error,
     refetch,
-  } = useAnalyticsSummary(days, websiteId);
+  } = useAnalyticsSummary(range, websiteId);
   const { data: timeseries, isPending: timeseriesPending } = useAnalyticsTimeseries(
-    days,
+    range,
     websiteId,
   );
-  const { data: topWebsites, isPending: topWebsitesPending } = useAnalyticsTopWebsites(days);
-  const { data: performance } = useAnalyticsPerformance(days, websiteId);
-  const { data: feedback } = useFeedbackSummary(days, websiteId);
-  const { data: overview } = useAnalyticsOverview(days, websiteId);
-  const { data: questions, isPending: questionsPending } = useAnalyticsQuestions(days, websiteId);
+  const { data: topWebsites, isPending: topWebsitesPending } = useAnalyticsTopWebsites(range);
+  const { data: performance, isPending: performancePending } = useAnalyticsPerformance(
+    range,
+    websiteId,
+  );
+  const { data: feedback, isPending: feedbackSummaryPending } = useFeedbackSummary(
+    range,
+    websiteId,
+  );
+  const { data: overview } = useAnalyticsOverview(range, websiteId);
+  const { data: questions, isPending: questionsPending } = useAnalyticsQuestions(range, websiteId);
   const { data: feedbackAnalytics, isPending: feedbackPending } = useAnalyticsFeedback(
-    days,
+    range,
     websiteId,
   );
 
@@ -250,38 +517,81 @@ export function AnalyticsPage() {
     [timeseries],
   );
 
-  const feedbackDistribution = useMemo(
-    () =>
-      [5, 4, 3, 2, 1].map((stars) => ({
-        stars,
-        count: feedback?.distribution[String(stars)] ?? 0,
-      })),
-    [feedback],
-  );
-
-  const usageTrend = useMemo(() => {
-    const series = timeseries ?? [];
-    if (series.length < 2) {
-      return null;
-    }
-    const half = Math.floor(series.length / 2);
-    const firstHalf = series.slice(0, half).reduce((sum, point) => sum + point.messages, 0);
-    const secondHalf = series.slice(half).reduce((sum, point) => sum + point.messages, 0);
-    if (firstHalf === 0) {
-      return secondHalf > 0 ? { direction: 'up' as const, label: 'New' } : null;
-    }
-    const change = Math.round(((secondHalf - firstHalf) / firstHalf) * 100);
-    return {
-      direction: change >= 0 ? ('up' as const) : ('down' as const),
-      label: `${change >= 0 ? '+' : ''}${change}%`,
-    };
-  }, [timeseries]);
-
   const hasActivity = activityData.some((point) => point.messages > 0 || point.conversations > 0);
   const hasTokens = tokenData.some((point) => point.input_tokens > 0 || point.output_tokens > 0);
   const hasTopWebsites = (topWebsites ?? []).some((item) => item.conversations > 0);
+  const hasQuestions = (questions?.length ?? 0) > 0;
 
-  const rangeLabel = RANGE_OPTIONS.find((option) => option.value === days)?.label.toLowerCase();
+  const hasPerformance = Boolean(
+    performance &&
+    (performance.avg_response_time != null ||
+      performance.median_response_time != null ||
+      performance.p95_response_time != null ||
+      Object.values(performance.distribution).some((count) => count > 0)),
+  );
+
+  const hasRatings = (feedbackAnalytics?.total ?? feedback?.total ?? 0) > 0;
+
+  const ratingTrend = useMemo(
+    () => (feedbackAnalytics?.trend ?? []).filter((point) => point.ratings > 0),
+    [feedbackAnalytics],
+  );
+
+  const insights = useMemo(() => {
+    const items: { label: string; detail: string; icon: typeof Timer }[] = [];
+    const busy = (timeseries ?? []).reduce<{ date: string; messages: number } | null>(
+      (best, point) => (point.messages > (best?.messages ?? 0) ? point : best),
+      null,
+    );
+    if (busy && busy.messages > 0) {
+      items.push({
+        label: 'Busiest day',
+        detail: `${formatDayLong(busy.date)} with ${formatNumber(busy.messages)} messages`,
+        icon: TrendingUp,
+      });
+    }
+    if (hasRatings) {
+      const distribution = feedbackAnalytics?.distribution ?? {};
+      const top = [5, 4, 3, 2, 1].reduce<number | null>((best, stars) => {
+        const bestCount = best === null ? -1 : (distribution[String(best)] ?? 0);
+        return (distribution[String(stars)] ?? 0) > bestCount ? stars : best;
+      }, null);
+      if (top !== null && (distribution[String(top)] ?? 0) > 0) {
+        items.push({
+          label: 'Most common rating',
+          detail: `${top}★`,
+          icon: Star,
+        });
+      }
+    }
+    if (overview && overview.total_ai_responses > 0) {
+      items.push({
+        label: 'Fallback usage',
+        detail:
+          overview.fallback_percentage > 0
+            ? `${formatPercent(overview.fallback_percentage)} of answers used the no-context fallback`
+            : 'No answers fell back to the no-context response',
+        icon: Gauge,
+      });
+    }
+    if (summary && summary.avg_response_time != null) {
+      const latencyChange = changePercent(
+        summary.avg_response_time,
+        summary.previous_avg_response_time,
+      );
+      if (latencyChange !== null && latencyChange !== 0) {
+        items.push({
+          label: 'Latency trend',
+          detail:
+            latencyChange < 0
+              ? `Average response time improved ${formatChange(latencyChange)} vs the previous period`
+              : `Average response time increased ${formatChange(latencyChange)} vs the previous period`,
+          icon: Timer,
+        });
+      }
+    }
+    return items.slice(0, 4);
+  }, [timeseries, hasRatings, feedbackAnalytics, overview, summary]);
 
   if (websites.length === 0) {
     return (
@@ -298,41 +608,93 @@ export function AnalyticsPage() {
     );
   }
 
+  const rangeInvalid = !isValidRange(range) && !summaryPending && !isError;
+
   return (
     <div className="flex flex-col gap-6">
       <Header />
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div role="group" aria-label="Time range" className="flex gap-1">
-          {RANGE_OPTIONS.map((option) => (
-            <Button
-              key={option.value}
-              type="button"
-              variant={days === option.value ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setDays(option.value)}
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
-        <div className="sm:w-64">
-          <label htmlFor="analytics-website-filter" className="sr-only">
-            Filter by website
-          </label>
-          <select
-            id="analytics-website-filter"
-            value={websiteId}
-            onChange={(event) => setWebsiteId(event.target.value)}
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="">All websites</option>
-            {websites.map((website) => (
-              <option key={website.id} value={website.id}>
-                {website.name}
-              </option>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-3">
+          <div role="group" aria-label="Time range" className="flex gap-1">
+            {RANGE_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                variant={range.preset === option.value ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  setRange((previous) =>
+                    option.value === 'custom'
+                      ? { preset: 'custom', start: previous.start, end: previous.end }
+                      : { preset: option.value },
+                  );
+                }}
+              >
+                {option.label}
+              </Button>
             ))}
-          </select>
+          </div>
+          {range.preset === 'custom' ? (
+            <div className="flex items-center gap-2">
+              <label htmlFor="analytics-start" className="sr-only">
+                Start date
+              </label>
+              <input
+                id="analytics-start"
+                type="date"
+                value={range.start ?? ''}
+                onChange={(event) =>
+                  setRange({ preset: 'custom', start: event.target.value, end: range.end })
+                }
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+              <span aria-hidden="true" className="text-sm text-muted-foreground">
+                →
+              </span>
+              <label htmlFor="analytics-end" className="sr-only">
+                End date
+              </label>
+              <input
+                id="analytics-end"
+                type="date"
+                value={range.end ?? ''}
+                onChange={(event) =>
+                  setRange({ preset: 'custom', start: range.start, end: event.target.value })
+                }
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-full sm:w-64">
+            <label htmlFor="analytics-website-filter" className="sr-only">
+              Filter by website
+            </label>
+            <select
+              id="analytics-website-filter"
+              value={websiteId}
+              onChange={(event) => setWebsiteId(event.target.value)}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="">All websites</option>
+              {websites.map((website) => (
+                <option key={website.id} value={website.id}>
+                  {website.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label="Refresh analytics"
+            onClick={() => void refetch()}
+          >
+            <RefreshCw className="size-4" aria-hidden="true" />
+          </Button>
         </div>
       </div>
 
@@ -345,7 +707,15 @@ export function AnalyticsPage() {
         />
       ) : null}
 
-      {!summaryPending && !isError && summary ? (
+      {rangeInvalid ? (
+        <EmptyState
+          icon={Timer}
+          title="Pick a date range"
+          description="Select a start and end date above to see analytics for that period."
+        />
+      ) : null}
+
+      {!summaryPending && !isError && summary && !rangeInvalid ? (
         <>
           <section aria-labelledby="kpi-heading" className="flex flex-col gap-4">
             <SectionHeading id="kpi-heading">Key metrics</SectionHeading>
@@ -353,7 +723,8 @@ export function AnalyticsPage() {
               <StatCard
                 label="Conversations"
                 value={formatNumber(summary.total_conversations)}
-                hint={`Last ${rangeLabel}`}
+                delta={changePercent(summary.total_conversations, summary.previous_conversations)}
+                hint={`vs previous ${rangeWindowLabel(range)}`}
                 icon={MessagesSquare}
                 emphasis
                 accent
@@ -361,13 +732,53 @@ export function AnalyticsPage() {
               <StatCard
                 label="Messages"
                 value={formatNumber(summary.total_messages)}
-                hint={`Last ${rangeLabel}`}
+                delta={changePercent(summary.total_messages, summary.previous_messages)}
+                hint={`vs previous ${rangeWindowLabel(range)}`}
                 icon={BarChart3}
                 emphasis
                 accent
               />
               <StatCard
-                label="Resolution Rate"
+                label="Tokens"
+                value={formatCompact(summary.total_tokens)}
+                delta={changePercent(summary.total_tokens, summary.previous_tokens)}
+                hint={`vs previous ${rangeWindowLabel(range)}`}
+                icon={Gauge}
+                emphasis
+                accent
+              />
+              <StatCard
+                label="Avg response time"
+                value={formatSeconds(
+                  summary.avg_response_time ??
+                    performance?.avg_response_time ??
+                    overview?.avg_response_time ??
+                    null,
+                )}
+                delta={changePercent(
+                  summary.avg_response_time ??
+                    performance?.avg_response_time ??
+                    overview?.avg_response_time ??
+                    null,
+                  summary.previous_avg_response_time,
+                )}
+                deltaInvert
+                hint="Lower is better"
+                icon={Timer}
+                emphasis
+                accent
+              />
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard
+                label="Estimated cost"
+                value={formatCost(summary.estimated_cost)}
+                hint="At list prices"
+                icon={CircleDollarSign}
+              />
+              <StatCard
+                label="Resolution rate"
                 value={formatPercent(overview?.resolution_rate ?? 0)}
                 hint={
                   overview
@@ -377,31 +788,6 @@ export function AnalyticsPage() {
                     : 'Assistant answers'
                 }
                 icon={Gauge}
-                emphasis
-                accent
-              />
-              <StatCard
-                label="Usage trend"
-                value={usageTrend ? usageTrend.label : '—'}
-                hint={
-                  usageTrend
-                    ? 'Messages vs earlier in the period'
-                    : 'Not enough data for a trend yet'
-                }
-                icon={
-                  usageTrend ? (usageTrend.direction === 'up' ? TrendingUp : TrendingDown) : Minus
-                }
-                emphasis
-                accent
-              />
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-              <StatCard
-                label="Avg response time"
-                value={formatSeconds(overview?.avg_response_time ?? summary.avg_response_time)}
-                hint="Assistant latency"
-                icon={Timer}
               />
               <StatCard
                 label="Fallback rate"
@@ -416,25 +802,15 @@ export function AnalyticsPage() {
                 icon={Gauge}
               />
               <StatCard
-                label="Tokens"
-                value={formatCompact(summary.total_tokens)}
-                hint={`${formatNumber(summary.total_input_tokens)} in / ${formatNumber(
-                  summary.total_output_tokens,
-                )} out`}
-                icon={Gauge}
-              />
-              <StatCard
-                label="Estimated cost"
-                value={formatCost(summary.estimated_cost)}
-                hint="At list prices"
-                icon={CircleDollarSign}
-              />
-              <StatCard
                 label="User satisfaction"
-                value={formatRating(feedback?.average_rating ?? null)}
+                value={formatRating(
+                  feedbackAnalytics?.average_rating ?? feedback?.average_rating ?? null,
+                )}
                 hint={
-                  feedback && feedback.total > 0
-                    ? `${formatNumber(feedback.total)} rating${feedback.total === 1 ? '' : 's'}`
+                  hasRatings
+                    ? `${formatNumber(
+                        feedbackAnalytics?.total ?? feedback?.total ?? 0,
+                      )} rating${(feedbackAnalytics?.total ?? feedback?.total ?? 0) === 1 ? '' : 's'} received`
                     : 'No ratings yet'
                 }
                 icon={Star}
@@ -442,21 +818,29 @@ export function AnalyticsPage() {
             </div>
           </section>
 
-          <section aria-labelledby="engagement-heading" className="flex flex-col gap-3">
-            <SectionHeading id="engagement-heading">Activity &amp; engagement</SectionHeading>
+          <section aria-labelledby="engage-heading" className="flex flex-col gap-3">
+            <SectionHeading id="engage-heading">Usage &amp; engagement</SectionHeading>
             <p className="text-sm text-muted-foreground">
-              How visitors find your assistants and what they ask.
+              How visitors find your assistants, chat, and consume tokens.
             </p>
             <div className="grid gap-4 lg:grid-cols-3">
-              <div className="flex flex-col gap-4 lg:col-span-2">
+              <div className="lg:col-span-2">
                 <ChartShell
-                  title="Activity over time"
-                  description="Messages and conversations per day."
+                  title="Usage over time"
+                  description="Messages and conversations per day (conversations in blue)."
                 >
-                  {timeseriesPending ? (
+                  {timeseriesPending && !activityData.length ? (
                     <ChartPlaceholder />
                   ) : hasActivity ? (
-                    <ActivityChart data={activityData} mounted={mounted} />
+                    <>
+                      <InlineLegend
+                        items={[
+                          { label: 'Daily messages', className: 'bg-[var(--chart-2)]' },
+                          { label: 'Daily conversations', className: 'bg-[var(--chart-1)]' },
+                        ]}
+                      />
+                      <UsageTrendChart data={activityData} mounted={mounted} />
+                    </>
                   ) : (
                     <EmptyState
                       icon={MessagesSquare}
@@ -467,60 +851,90 @@ export function AnalyticsPage() {
                     />
                   )}
                 </ChartShell>
-                <ChartShell
-                  title="Popular questions"
-                  description="Most-asked questions in the selected period."
-                >
-                  {questionsPending ? (
-                    <ChartPlaceholder height={320} />
-                  ) : questions && questions.length > 0 ? (
-                    <PopularQuestionsChart data={questions} mounted={mounted} />
-                  ) : (
-                    <EmptyState
-                      icon={BarChart3}
-                      title="No questions yet"
-                      description="Once visitors ask the assistant, the most common questions show up here."
-                    />
-                  )}
-                </ChartShell>
-                <ChartShell title="Token usage" description="Input and output tokens per day.">
-                  {timeseriesPending ? (
-                    <ChartPlaceholder />
-                  ) : hasTokens ? (
+              </div>
+              <ChartShell
+                title="Token usage"
+                description="Daily token consumption and the period totals."
+              >
+                {timeseriesPending && !tokenData.length ? (
+                  <ChartPlaceholder height={288} />
+                ) : hasTokens ? (
+                  <>
+                    <div className="mb-3 grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-border bg-muted/30 p-2 text-center">
+                        <p className="font-sans text-base font-bold tabular-nums tracking-tight">
+                          {formatCompact(summary.total_tokens)}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Total</p>
+                      </div>
+                      <div className="rounded-lg border border-border bg-muted/30 p-2 text-center">
+                        <p className="font-sans text-base font-bold tabular-nums tracking-tight">
+                          {formatCompact(summary.total_input_tokens)}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Input</p>
+                      </div>
+                      <div className="rounded-lg border border-border bg-muted/30 p-2 text-center">
+                        <p className="font-sans text-base font-bold tabular-nums tracking-tight">
+                          {formatCompact(summary.total_output_tokens)}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">Output</p>
+                      </div>
+                    </div>
                     <TokenChart data={tokenData} mounted={mounted} />
-                  ) : (
-                    <EmptyState
-                      icon={Gauge}
-                      title="No token usage yet"
-                      description="Token consumption appears once your assistant starts answering questions."
-                    />
-                  )}
-                </ChartShell>
-              </div>
-              <div className="flex flex-col gap-4">
-                <ChartShell
-                  title="Top websites"
-                  description="Most active assistants by conversations."
-                >
-                  {topWebsitesPending ? (
-                    <ChartPlaceholder height={320} />
-                  ) : hasTopWebsites ? (
-                    <TopWebsitesChart
-                      data={(topWebsites ?? []).map((item) => ({
-                        website_name: item.website_name,
-                        conversations: item.conversations,
-                      }))}
-                      mounted={mounted}
-                    />
-                  ) : (
-                    <EmptyState
-                      icon={MessagesSquare}
-                      title="No conversations yet"
-                      description="Once visitors chat with your assistants, the most active websites appear here."
-                    />
-                  )}
-                </ChartShell>
-              </div>
+                  </>
+                ) : (
+                  <EmptyState
+                    icon={Gauge}
+                    title="No token usage yet"
+                    description="Token consumption appears once your assistant starts answering questions."
+                  />
+                )}
+              </ChartShell>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ChartShell
+                title="Top websites"
+                description={
+                  websiteId
+                    ? 'Most active assistants across all websites.'
+                    : 'Most active assistants by conversations.'
+                }
+              >
+                {topWebsitesPending && !hasTopWebsites ? (
+                  <ChartPlaceholder height={256} />
+                ) : hasTopWebsites ? (
+                  <TopWebsitesChart
+                    data={(topWebsites ?? []).map((item) => ({
+                      website_name: item.website_name,
+                      conversations: item.conversations,
+                    }))}
+                    mounted={mounted}
+                  />
+                ) : (
+                  <EmptyState
+                    icon={MessagesSquare}
+                    title="No conversations yet"
+                    description="Once visitors chat with your assistants, the most active websites appear here."
+                  />
+                )}
+              </ChartShell>
+              <ChartShell
+                title="Popular questions"
+                description="Most-asked questions in the selected period."
+              >
+                {questionsPending && !hasQuestions ? (
+                  <ChartPlaceholder height={288} />
+                ) : hasQuestions ? (
+                  <PopularQuestionsChart data={questions ?? []} mounted={mounted} />
+                ) : (
+                  <EmptyState
+                    icon={BarChart3}
+                    title="No questions yet"
+                    description="Once visitors ask the assistant, the most common questions show up here."
+                  />
+                )}
+              </ChartShell>
             </div>
           </section>
 
@@ -531,89 +945,38 @@ export function AnalyticsPage() {
             </p>
             <div className="grid gap-4 lg:grid-cols-2">
               <PerformanceCard
-                avg={performance?.avg_response_time ?? null}
-                fastest={performance?.fastest_response_time ?? null}
-                slowest={performance?.slowest_response_time ?? null}
+                performance={performance}
+                pending={performancePending}
+                hasData={hasPerformance}
+                mounted={mounted}
               />
-              <ChartShell title="User satisfaction" description="How visitors rated the assistant.">
-                {feedbackPending ? (
-                  <ChartPlaceholder height={220} />
-                ) : feedbackAnalytics && feedbackAnalytics.total > 0 ? (
-                  <div className="flex flex-col gap-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="rounded-lg border border-border bg-muted/30 p-3">
-                        <p className="font-sans text-lg font-bold tracking-tight text-emerald-600">
-                          {formatPercent(feedbackAnalytics.positive_percentage)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Positive ({formatNumber(feedbackAnalytics.positive)})
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border bg-muted/30 p-3">
-                        <p className="font-sans text-lg font-bold tracking-tight text-rose-600">
-                          {formatPercent(feedbackAnalytics.negative_percentage)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Negative ({formatNumber(feedbackAnalytics.negative)})
-                        </p>
-                      </div>
-                    </div>
-                    <FeedbackDistributionChart data={feedbackDistribution} mounted={mounted} />
-                  </div>
-                ) : (
-                  <EmptyState
-                    icon={Star}
-                    title="Awaiting first rating"
-                    description="Once visitors rate answers, the 1-5 star breakdown shows up here."
-                  />
-                )}
-              </ChartShell>
+              <SatisfactionCard
+                feedbackAnalytics={feedbackAnalytics}
+                feedback={feedback}
+                pending={feedbackPending || feedbackSummaryPending}
+                hasRatings={hasRatings}
+                mounted={mounted}
+              />
             </div>
+            {hasRatings && ratingTrend.length >= 2 ? (
+              <ChartShell
+                title="Rating over time"
+                description="Average visitor rating per day on a 1-5 star scale."
+              >
+                <RatingTrendChart data={ratingTrend} mounted={mounted} />
+              </ChartShell>
+            ) : null}
+          </section>
+
+          <section aria-labelledby="insights-heading" className="flex flex-col gap-3">
+            <SectionHeading id="insights-heading">Quality insights</SectionHeading>
+            <p className="text-sm text-muted-foreground">
+              Highlights worth knowing, derived from your real data.
+            </p>
+            <InsightsGrid insights={insights} />
           </section>
         </>
       ) : null}
     </div>
-  );
-}
-
-function PerformanceCard({
-  avg,
-  fastest,
-  slowest,
-}: {
-  avg: number | null;
-  fastest: number | null;
-  slowest: number | null;
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Response time</CardTitle>
-        <CardDescription>Assistant latency across the selected period.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid grid-cols-3 gap-4 text-center">
-        <div>
-          <p className="font-sans text-xl font-bold tracking-tight">{formatSeconds(avg)}</p>
-          <p className="text-xs text-muted-foreground">Average</p>
-        </div>
-        <div>
-          <p className="font-sans text-xl font-bold tracking-tight">{formatSeconds(fastest)}</p>
-          <p className="text-xs text-muted-foreground">Fastest</p>
-        </div>
-        <div>
-          <p className="font-sans text-xl font-bold tracking-tight">{formatSeconds(slowest)}</p>
-          <p className="text-xs text-muted-foreground">Slowest</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function Header() {
-  return (
-    <PageHeader
-      title="Analytics overview"
-      description="Chat, token, and assistant-performance usage statistics."
-    />
   );
 }

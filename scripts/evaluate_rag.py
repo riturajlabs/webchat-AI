@@ -48,42 +48,42 @@ WEBSITE = "eval-web"
 KNOWLEDGE_BASE: list[dict[str, str]] = [
     {
         "text": "The Pro plan costs $19 per month and includes priority support, "
-                "advanced analytics, and up to 10 team members.",
+        "advanced analytics, and up to 10 team members.",
         "url": "https://example.com/pricing",
         "title": "Pricing",
         "document_id": "doc-pricing",
     },
     {
         "text": "To create an API key, navigate to Settings > API Keys, click "
-                "'Generate New Key', and copy the key. API keys start with wc_.",
+        "'Generate New Key', and copy the key. API keys start with wc_.",
         "url": "https://example.com/apikeys",
         "title": "API Keys",
         "document_id": "doc-apikeys",
     },
     {
         "text": "Enterprise plan includes SSO authentication, audit logs, "
-                "dedicated support, custom integrations, and SLA guarantees.",
+        "dedicated support, custom integrations, and SLA guarantees.",
         "url": "https://example.com/enterprise",
         "title": "Enterprise",
         "document_id": "doc-enterprise",
     },
     {
         "text": "Refund policy: full refund within 30 days of purchase. "
-                "No questions asked. Contact support@example.com.",
+        "No questions asked. Contact support@example.com.",
         "url": "https://example.com/refunds",
         "title": "Refunds",
         "document_id": "doc-refunds",
     },
     {
         "text": "SSO is supported via SAML 2.0 and OpenID Connect. "
-                "Configure in Admin > Authentication > SSO.",
+        "Configure in Admin > Authentication > SSO.",
         "url": "https://example.com/sso",
         "title": "SSO Setup",
         "document_id": "doc-sso",
     },
     {
         "text": "The free tier includes 100 API calls per month, 1 website, "
-                "and basic analytics. No credit card required.",
+        "and basic analytics. No credit card required.",
         "url": "https://example.com/free-tier",
         "title": "Free Tier",
         "document_id": "doc-free",
@@ -260,27 +260,27 @@ async def run_evaluation() -> list[EvalResult]:
         expected_found = False
         reciprocal_rank = 0.0
         if q.expected_doc_ids:
-            returned_doc_ids = [
-                _URL_TO_DOC[url] for url in source_urls if url in _URL_TO_DOC
-            ]
+            returned_doc_ids = [_URL_TO_DOC[url] for url in source_urls if url in _URL_TO_DOC]
             for rank, doc_id in enumerate(returned_doc_ids, 1):
                 if doc_id in q.expected_doc_ids:
                     expected_found = True
                     reciprocal_rank = 1.0 / rank
                     break
 
-        results.append(EvalResult(
-            question=q.question,
-            category=q.category,
-            description=q.description,
-            latency_ms=latency_ms,
-            fallback=fallback,
-            confidence=confidence,
-            source_count=len(source_urls),
-            source_urls=source_urls,
-            expected_found=expected_found,
-            reciprocal_rank=reciprocal_rank,
-        ))
+        results.append(
+            EvalResult(
+                question=q.question,
+                category=q.category,
+                description=q.description,
+                latency_ms=latency_ms,
+                fallback=fallback,
+                confidence=confidence,
+                source_count=len(source_urls),
+                source_urls=source_urls,
+                expected_found=expected_found,
+                reciprocal_rank=reciprocal_rank,
+            )
+        )
 
     return results
 
@@ -294,24 +294,16 @@ def compute_metrics(results: list[EvalResult]) -> dict[str, object]:
     all_latencies = [r.latency_ms for r in results]
     all_confidences = [r.confidence for r in results if r.confidence is not None]
 
-    recall_at_1 = (
-        sum(1 for r in positive if r.expected_found) / len(positive)
-        if positive else 0.0
-    )
+    recall_at_1 = sum(1 for r in positive if r.expected_found) / len(positive) if positive else 0.0
 
-    mrr = (
-        sum(r.reciprocal_rank for r in positive) / len(positive)
-        if positive else 0.0
-    )
+    mrr = sum(r.reciprocal_rank for r in positive) / len(positive) if positive else 0.0
 
     fallback_rate = sum(1 for r in results if r.fallback) / total if total else 0.0
     negative_fallback_rate = (
-        sum(1 for r in negative if r.fallback) / len(negative)
-        if negative else 0.0
+        sum(1 for r in negative if r.fallback) / len(negative) if negative else 0.0
     )
     adversarial_fallback_rate = (
-        sum(1 for r in adversarial if r.fallback) / len(adversarial)
-        if adversarial else 0.0
+        sum(1 for r in adversarial if r.fallback) / len(adversarial) if adversarial else 0.0
     )
 
     return {
@@ -324,8 +316,7 @@ def compute_metrics(results: list[EvalResult]) -> dict[str, object]:
         "avg_latency_ms": statistics.mean(all_latencies) if all_latencies else 0.0,
         "p50_latency_ms": statistics.median(all_latencies) if all_latencies else 0.0,
         "p95_latency_ms": (
-            sorted(all_latencies)[int(len(all_latencies) * 0.95)]
-            if all_latencies else 0.0
+            sorted(all_latencies)[int(len(all_latencies) * 0.95)] if all_latencies else 0.0
         ),
         "fallback_rate": fallback_rate,
         "negative_fallback_rate": negative_fallback_rate,
@@ -374,9 +365,9 @@ def print_report(results: list[EvalResult], metrics: dict[str, object]) -> None:
 
     print("PER-QUESTION RESULTS")
     print(
-    f"  {'Category':<14} {'Fallback':<10} "
-    f"{'Sources':<9} {'Latency':<10} "
-    f"{'Confidence':<12} {'Question'}"
+        f"  {'Category':<14} {'Fallback':<10} "
+        f"{'Sources':<9} {'Latency':<10} "
+        f"{'Confidence':<12} {'Question'}"
     )
     print("  " + "-" * 90)
     for r in results:

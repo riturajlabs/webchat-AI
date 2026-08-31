@@ -73,16 +73,18 @@ def _distribution(collection: pymongo.collection.Collection, scope: dict) -> lis
     rows = collection.aggregate(
         [
             {"$match": scope},
-            {"$group": {
-                "_id": {
-                    "provider": "$embedding_provider",
-                    "model": "$embedding_model",
-                    "dimensions": "$embedding_dimensions",
-                    "version": "$embedding_version",
-                },
-                "count": {"$sum": 1},
-                "documents": {"$addToSet": "$document_id"},
-            }},
+            {
+                "$group": {
+                    "_id": {
+                        "provider": "$embedding_provider",
+                        "model": "$embedding_model",
+                        "dimensions": "$embedding_dimensions",
+                        "version": "$embedding_version",
+                    },
+                    "count": {"$sum": 1},
+                    "documents": {"$addToSet": "$document_id"},
+                }
+            },
             {"$sort": {"count": -1}},
         ]
     )
@@ -133,9 +135,7 @@ def _backup(db: pymongo.database.Database, scope: dict, website_id: str, reason:
     return backup_name
 
 
-def _drain_status(
-    db: pymongo.database.Database, scope: dict
-) -> tuple[int, int]:
+def _drain_status(db: pymongo.database.Database, scope: dict) -> tuple[int, int]:
     """Return (documents still processing, total documents in scope)."""
     documents = db["documents"]
     processing = documents.count_documents({**scope, "knowledge_status": "processing"})
@@ -179,9 +179,7 @@ def reindex(
     # ---- 1. Backup count + distribution -----------------------------------
     chunk_count = db["knowledge_chunks"].count_documents(scope)
     dist_before = _distribution(db["knowledge_chunks"], scope)
-    identities = {
-        (r["provider"], r["model"], r["dimensions"], r["version"]) for r in dist_before
-    }
+    identities = {(r["provider"], r["model"], r["dimensions"], r["version"]) for r in dist_before}
     print(f"\naffected chunk count: {chunk_count}")
     print("distribution BEFORE:")
     _print_distribution(dist_before)
@@ -271,9 +269,7 @@ def reindex(
     }
     print("\ndistribution AFTER:")
     _print_distribution(dist_after)
-    failed = db["documents"].count_documents(
-        {**scope, "knowledge_status": "failed"}
-    )
+    failed = db["documents"].count_documents({**scope, "knowledge_status": "failed"})
     if failed:
         print(f"WARNING: {failed} document(s) ended in knowledge_status=failed.")
     if len(identities_after) == 1:
@@ -291,7 +287,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--website-id", required=True, help="website to re-index (required)")
     parser.add_argument("--execute", action="store_true", help="apply changes (default: dry-run)")
-    parser.add_argument("--uri", default=None, help="defaults to $MONGODB_URI or mongodb://localhost:27017")
+    parser.add_argument(
+        "--uri", default=None, help="defaults to $MONGODB_URI or mongodb://localhost:27017"
+    )
     parser.add_argument("--db", default=None, help="defaults to $MONGODB_DB or webchat_ai")
     parser.add_argument(
         "--env-file",

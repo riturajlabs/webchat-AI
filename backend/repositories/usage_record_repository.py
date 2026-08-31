@@ -81,9 +81,9 @@ class UsageRecordRepository(Protocol):
     async def sum_by_tenant(self, tenant_id: str) -> TenantUsageSummary: ...
 
     # Phase 1 cost tracking: per-website spend aggregation.
-    async def sum_by_website(
-        self, tenant_id: str, website_id: str
-    ) -> TenantUsageSummary: ...
+    async def sum_by_website(self, tenant_id: str, website_id: str) -> TenantUsageSummary: ...
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
 
 class MongoUsageRecordRepository:
@@ -132,9 +132,7 @@ class MongoUsageRecordRepository:
         )
         return _summary_from_doc(doc)
 
-    async def sum_by_website(
-        self, tenant_id: str, website_id: str
-    ) -> TenantUsageSummary:
+    async def sum_by_website(self, tenant_id: str, website_id: str) -> TenantUsageSummary:
         doc = await self._first(
             self._collection.aggregate(
                 [
@@ -149,6 +147,12 @@ class MongoUsageRecordRepository:
             )
         )
         return _summary_from_doc(doc)
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return result.deleted_count
 
     @staticmethod
     async def _first(cursor: Any) -> dict[str, Any] | None:

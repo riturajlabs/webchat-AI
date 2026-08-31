@@ -62,6 +62,8 @@ class FeedbackRepository(Protocol):
         since: datetime | None = None,
     ) -> FeedbackSummary: ...
 
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int: ...
+
 
 class MongoFeedbackRepository:
     """MongoDB-backed feedback repository."""
@@ -156,6 +158,12 @@ class MongoFeedbackRepository:
             average_rating=None,
             distribution=distribution,
         )
+
+    async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
+        result = await self._collection.delete_many(
+            {"tenant_id": tenant_id, "website_id": website_id}
+        )
+        return result.deleted_count
 
     @staticmethod
     def _query(
