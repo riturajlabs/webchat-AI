@@ -45,13 +45,25 @@ jobs:
     outputs:
       image_tag: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - name: Require NEXT_PUBLIC_API_URL (production build)
+        # The dashboard bundle inlines NEXT_PUBLIC_API_URL into the client at
+        # build time from the GitHub repository variable (same canonical source
+        # and value CI uses). Fail fast and loudly if missing — never silently
+        # ship a bundle with a loopback/empty origin.
+        if: ${{ vars.NEXT_PUBLIC_API_URL == '' }}
+        run: |
+          echo "::error::CD publish requires the repository variable NEXT_PUBLIC_API_URL set to the public HTTPS API origin (e.g. https://api.your-domain.com). Settings > Secrets and variables > Actions > Variables -> NEXT_PUBLIC_API_URL, then re-run."
+          exit 1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        # v4 → Node 24 runtime (v3 targeted Node 20, deprecated).
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        # v4 → Node 24 runtime (v3 targeted Node 20, deprecated).
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -75,7 +87,8 @@ jobs:
           echo "widget_tags=${TAGS//api/widget}" >> "$GITHUB_OUTPUT"
 
       - name: Build & push API image
-        uses: docker/build-push-action@v6
+        # v7 → Node 24 runtime (v6 targeted Node 20, deprecated).
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/Dockerfile.api
@@ -85,7 +98,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=webchat-api
 
       - name: Build & push Worker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/Dockerfile.worker
@@ -95,7 +108,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=webchat-worker
 
       - name: Build & push Dashboard image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/Dockerfile.dashboard
@@ -108,7 +121,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=webchat-dashboard
 
       - name: Build & push Widget image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: docker/Dockerfile.widget
@@ -128,13 +141,14 @@ jobs:
       packages: read
       security-events: write
     steps:
-      # Same immutable-SHA pin as ci.yml: trivy-action v0.35.0 (the one clean
-      # release tag after the CVE-2026-33634 compromise force-pushed the
+      # Same immutable-SHA pin as ci.yml: trivy-action v0.36.0 (the first safe
+      # release after the CVE-2026-33634 compromise force-pushed the
       # 0.0.1..0.34.2 tags to malware). SHA pinning prevents a poisoned/moved
       # tag from injecting code into the deploy pipeline.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        # v4 → Node 24 runtime (v3 targeted Node 20, deprecated).
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -144,7 +158,9 @@ jobs:
         run: echo "IMAGE_NAMESPACE=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Scan API image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        id: trivy-api
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-api:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -154,7 +170,9 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Worker image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        id: trivy-worker
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-worker:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -164,7 +182,9 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Dashboard image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        id: trivy-dashboard
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-dashboard:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -174,7 +194,9 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Widget image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        id: trivy-widget
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-widget:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -184,11 +206,44 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        # always() so findings still get uploaded after a scan reports
+        # HIGH/CRITICAL (continue-on-error on the scans); hashFiles gates on
+        # actual SARIF output existing at runtime. If publishing failed before
+        # scans ran (no SARIF files), this is skipped cleanly — no misleading
+        # secondary failure. The Trivy gate step below still fails the job on
+        # any real HIGH/CRITICAL finding.
+        if: always() && hashFiles('trivy-*.sarif') != ''
+        # Pinned to the immutable SHA of github/codeql-action v4 (the current
+        # maintained major; v3 is deprecated Dec 2026). SHA-pinned to match the
+        # repo's supply-chain policy for security-sensitive actions.
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9 (commit SHA)
         with:
           sarif_file: .
           category: trivy
+
+      - name: Trivy gate (fail on HIGH/CRITICAL)
+        # Only enforce the gate when scans actually ran (SARIF was produced —
+        # trivy writes SARIF even when it finds HIGH/CRITICAL with a fix, then
+        # exits 1). If no SARIF exists publishing failed before scans ran; that
+        # earlier publish failure already fails the job, so we skip without a
+        # misleading secondary failure.
+        if: always()
+        run: |
+          if ls trivy-*.sarif 1>/dev/null 2>&1; then
+            for result in \
+              "${{ steps.trivy-api.outcome }}" \
+              "${{ steps.trivy-worker.outcome }}" \
+              "${{ steps.trivy-dashboard.outcome }}" \
+              "${{ steps.trivy-widget.outcome }}"; do
+              if [ "$result" = "failure" ]; then
+                echo "::error::Trivy detected HIGH/CRITICAL vulnerabilities with a fix available. Review the SARIF upload in the Security tab."
+                exit 1
+              fi
+            done
+            echo "All Trivy scans passed (no HIGH/CRITICAL with fix available)."
+          else
+            echo "No SARIF output produced (scans did not run; publish failed earlier). Skipping Trivy gate — job already failed on the publish step."
+          fi
 
   deploy:
     name: Deploy production Docker-Compose stack
@@ -202,7 +257,7 @@ jobs:
       DEPLOY_KEY: ${{ secrets.SSH_KEY }}
       IMAGE_TAG: sha-${{ needs.publish.outputs.image_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Compute canonical image namespace
         run: echo "IMAGE_NAMESPACE=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"

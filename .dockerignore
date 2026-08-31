@@ -15,7 +15,9 @@ reports
 .env
 .env.*
 *.env
-!.env.example
+# Keep .env.example available as a reference; exclude all other .env.* files
+# (including .env.production.example which contains placeholder domains that
+# check-production-env.mjs rightfully rejects).
 tls
 docs
 tests
