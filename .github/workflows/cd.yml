@@ -128,6 +128,10 @@ jobs:
       packages: read
       security-events: write
     steps:
+      # Same immutable-SHA pin as ci.yml: trivy-action v0.35.0 (the one clean
+      # release tag after the CVE-2026-33634 compromise force-pushed the
+      # 0.0.1..0.34.2 tags to malware). SHA pinning prevents a poisoned/moved
+      # tag from injecting code into the deploy pipeline.
       - uses: actions/checkout@v4
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -140,7 +144,7 @@ jobs:
         run: echo "IMAGE_NAMESPACE=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Scan API image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-api:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -150,7 +154,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Worker image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-worker:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -160,7 +164,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Dashboard image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-dashboard:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif
@@ -170,7 +174,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Widget image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: ghcr.io/${{ env.IMAGE_NAMESPACE }}/webchat-ai-widget:sha-${{ needs.publish.outputs.image_tag }}
           format: sarif

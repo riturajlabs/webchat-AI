@@ -10,9 +10,10 @@ brute-force work is representative.
 Run against the native perf MongoDB:
     uv run python scripts/perf/seed.py --reset
 
-Known account (password hashed with the app's Argon2id):
+Known account (password hashed with the app's Argon2id). Synthetic local
+benchmark-only credential — never a production account/password:
     email:    perf@example.com
-    password: perf-password-123
+    password: perf-test-password-123
 
 The script only ever touches the collections it seeds and, with `--reset`,
 drops them first - it never touches other application data.
@@ -46,7 +47,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 logger = logging.getLogger("seed")
 
 EMAIL = "perf@example.com"
-PASSWORD = "perf-password-123"
+# Synthetic local-benchmark-only password (see docstring). Clearly NOT a
+# production credential; never load this constant into any real environment.
+PERF_TEST_PASSWORD = "perf-test-password-123"
 
 SEED_COLLECTIONS = [
     "tenants",
@@ -112,7 +115,7 @@ async def seed(
         tenant_id=tenant.id,
         name="Performance Owner",
         email=EMAIL,
-        password_hash=hash_password(PASSWORD),
+        password_hash=hash_password(PERF_TEST_PASSWORD),
     )
     user.email_verified = True
     member = Member.new(tenant_id=tenant.id, user_id=user.id, role="owner")
@@ -254,7 +257,7 @@ async def seed(
 
     print("\nSeeded performance dataset:")
     print(f"  tenant:      {tenant.id}")
-    print(f"  login:       {EMAIL} / {PASSWORD}")
+    print(f"  login:       {EMAIL} / {PERF_TEST_PASSWORD}")
     print(f"  websites:    {len(website_ids)}  (ids: {', '.join(website_ids)})")
     print(f"  widgets:     {len(widget_ids)}  (widget_id[0]: {widget_ids[0]})")
     print(f"  chunks:      {total_chunks}  (dims {embedding_dimensions})")

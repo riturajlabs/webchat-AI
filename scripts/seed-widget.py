@@ -32,7 +32,9 @@ MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 WIDGET_SCRIPT_URL = os.environ.get(
     "WIDGET_SCRIPT_URL", "http://localhost:8080/webchat-widget.iife.min.js"
 )
-DEFAULT_PASSWORD = "SeedPass!2026"
+# Synthetic local-dev seed credential only (spins up a throwaway tenant in a
+# local compose stack). Never a real/production account or password.
+SEED_DUMMY_PASSWORD = "seed-dummy-pass-2026"
 
 _VERIFY_TOKEN_RE = re.compile(r"[?&]token=([^&\s]+)")
 
@@ -85,7 +87,7 @@ def seed(email: str, site_name: str, site_url: str, allowed_domains: list[str]) 
 
     created = client.post(
         "/api/auth/register",
-        json={"name": f"Seed {short}", "email": email, "password": DEFAULT_PASSWORD},
+        json={"name": f"Seed {short}", "email": email, "password": SEED_DUMMY_PASSWORD},
     )
     if created.status_code == 201:
         # Fresh account: verify through the real Mailpit email path.
@@ -99,7 +101,7 @@ def seed(email: str, site_name: str, site_url: str, allowed_domains: list[str]) 
         _expect(created, "POST /api/auth/register", 201)
 
     login = _expect(
-        client.post("/api/auth/login", json={"email": email, "password": DEFAULT_PASSWORD}),
+        client.post("/api/auth/login", json={"email": email, "password": SEED_DUMMY_PASSWORD}),
         "POST /api/auth/login",
         200,
     )
@@ -153,7 +155,7 @@ def main() -> int:
     print(f"widget_id : {result.widget_id}")
     print(f"website_id: {result.website_id}")
     print(f"email     : {result.email}")
-    print(f"password  : {DEFAULT_PASSWORD}")
+    print(f"password  : {SEED_DUMMY_PASSWORD}")
     print(f"crawl     : POST {API_BASE_URL}/api/websites/{result.website_id}/crawl (Bearer token)")
     print("embed     :", embed)
     return 0

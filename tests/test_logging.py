@@ -38,7 +38,7 @@ class TestSensitiveDataFilter:
             level=logging.INFO,
             pathname="",
             lineno=0,
-            msg="authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test.signature",
+            msg="authorization: Bearer FAKE.JWT.FOR.REDACTION.TEST.this.is.not.a.real.token",
             args=(),
             exc_info=None,
         )

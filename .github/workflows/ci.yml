@@ -180,8 +180,13 @@ jobs:
       # fix available (--ignore-unfixed) to avoid false failures from base-image
       # backports that the distro has not yet shipped. SARIF is uploaded so
       # findings surface in the GitHub Security tab.
+      #
+      # The action is pinned to the immutable SHA of trivy-action v0.35.0 (the
+      # only release tag left untouched by the CVE-2026-33634 supply-chain
+      # compromise that force-pushed the 0.0.1..0.34.2 tags to malware). SHA
+      # pinning is required so a moved/poisoned tag can never inject code into CI.
       - name: Scan API image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: webchat-api:ci
           format: sarif
@@ -191,7 +196,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Worker image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: webchat-worker:ci
           format: sarif
@@ -201,7 +206,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Dashboard image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: webchat-dashboard:ci
           format: sarif
@@ -211,7 +216,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Scan Widget image (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
         with:
           image-ref: webchat-widget:ci
           format: sarif

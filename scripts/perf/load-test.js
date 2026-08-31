@@ -16,7 +16,7 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 
 const API_BASE = __ENV.PERF_API || 'http://127.0.0.1:8001';
 const EMAIL = __ENV.PERF_EMAIL || 'perf@example.com';
-const PASSWORD = __ENV.PERF_PASSWORD || 'perf-password-123';
+const PASSWORD = __ENV.PERF_PASSWORD || 'perf-test-password-123';
 const WEBSITE = __ENV.PERF_WEBSITE || '5705a2ac-124e-472d-b747-ce8783acaff1';
 
 function uniqueId(prefix) {
