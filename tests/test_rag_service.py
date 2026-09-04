@@ -10,6 +10,7 @@ import logging
 from backend.core.config import get_settings
 from backend.core.errors import EmbeddingUnavailableError, GenerationError
 from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER
+from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.prompts.rag import RAG_PROMPT_VERSION, UNKNOWN_ANSWER_FALLBACK
 from backend.services.chat.rag_service import RagService
 
@@ -573,6 +574,155 @@ async def test_hybrid_retrieval_uses_repository_list_chunks(monkeypatch) -> None
 
     assert _done_event(events)["data"]["fallback"] is False
     assert "priority support" in env.generation.calls[0]["messages"][0][1]
+
+
+async def test_hybrid_keyword_corpus_uses_embedding_light_path_cache_miss(
+    monkeypatch,
+) -> None:
+    """The hybrid keyword corpus is loaded embedding-free (list_chunks_light),
+    not via the embedding-carrying list_chunks, on a retrieval cache miss."""
+    monkeypatch.setattr(backend_settings(), "enable_hybrid_search", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=2)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Pro plans include priority support.",
+    )
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Team plans include onboarding.",
+        chunk_index=1,
+    )
+
+    called_fulls: list = []
+    called_lights: list = []
+    original_light = env.vector.list_chunks_light
+
+    def _spy_full(tid, wid, *, limit=0):
+        called_fulls.append((tid, wid, limit))
+        return []
+
+    def _spy_light(tid, wid, *, limit=0):
+        called_lights.append((tid, wid, limit))
+        return original_light(tid, wid, limit=limit)
+
+    monkeypatch.setattr(env.vector, "list_chunks", _spy_full)
+    monkeypatch.setattr(env.vector, "list_chunks_light", _spy_light)
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What support comes with Pro plans?",
+    )
+
+    assert _done_event(events)["data"]["fallback"] is False
+    assert called_fulls == [], "keyword corpus must NOT request embedding-carrying list_chunks"
+    assert len(called_lights) == 1, "keyword corpus must use the embedding-free light path"
+    assert called_lights[0][0] == TENANT_A and called_lights[0][1] == WEB_1
+
+
+async def test_hybrid_keyword_corpus_uses_embedding_light_path_cache_hit(
+    monkeypatch,
+) -> None:
+    """Hybrid keyword corpus cache avoids another DB light load on a hit."""
+    monkeypatch.setattr(backend_settings(), "enable_hybrid_search", True)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="Pro plans include priority support.",
+    )
+
+    question = "What support comes with Pro plans?"
+    # First call: cold retrieval cache (miss) -> true embedding+search path.
+    first = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
+    assert _done_event(first)["data"]["fallback"] is False
+
+    # Second call: identical question+website inside TTL -> both retrieval and
+    # lexical-corpus caches hit, so no embedding-carrying or light DB read runs.
+    called_fulls: list = []
+    called_lights: list = []
+    original_light = env.vector.list_chunks_light
+
+    def _spy_full(tid, wid, *, limit=0):
+        called_fulls.append((tid, wid, limit))
+        return []
+
+    def _spy_light(tid, wid, *, limit=0):
+        called_lights.append((tid, wid, limit))
+        return original_light(tid, wid, limit=limit)
+
+    monkeypatch.setattr(env.vector, "list_chunks", _spy_full)
+    monkeypatch.setattr(env.vector, "list_chunks_light", _spy_light)
+
+    second = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question=question)
+
+    assert _done_event(second)["data"]["fallback"] is False
+    assert called_fulls == [], "keyword corpus must NOT request embedding-carrying list_chunks"
+    assert called_lights == [], "lexical corpus cache hit must avoid a second DB read"
+
+
+async def test_reranker_hydrates_embeddings_for_keyword_only_candidates(
+    monkeypatch,
+) -> None:
+    """Keyword-only candidates recovered from the embedding-free corpus are
+    re-hydrated with their embeddings (via get_chunks_by_ids) before the
+    embedded-cosine reranker runs, preserving reranker + min_score behavior."""
+    monkeypatch.setattr(get_settings(), "enable_hybrid_search", True)
+    env = build_chat_env(reranker=True)
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    # A chunk stored WITH a real embedding (as in Mongo).
+    stored = await make_chunk(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        text="To create an API key, open Settings and click Generate.",
+        url="https://example.com/apikeys",
+    )
+    assert stored.embedding  # the stored copy carries an embedding
+
+    # The keyword corpus returns the SAME chunk but embedding-free (light path).
+    light_chunk = KnowledgeChunk(
+        id=stored.id,
+        tenant_id=stored.tenant_id,
+        website_id=stored.website_id,
+        document_id=stored.document_id,
+        chunk_text=stored.chunk_text,
+        chunk_index=stored.chunk_index,
+        metadata=stored.metadata,
+        created_at=stored.created_at,
+        schema_version=stored.schema_version,
+    )
+    assert light_chunk.embedding == []
+
+    # A keyword-only result from the light corpus has no embedding.
+    from backend.repositories.vector.base import VectorSearchResult
+
+    keyword_only = VectorSearchResult(chunk=light_chunk, score=0.6, lexical_score=0.05)
+
+    hydration_ids: list = []
+    original = env.vector.get_chunks_by_ids
+
+    async def spy(tenant_id, website_id, ids):
+        hydration_ids.append(ids)
+        return await original(tenant_id, website_id, ids)
+
+    monkeypatch.setattr(env.vector, "get_chunks_by_ids", spy)
+
+    hydrated = await env.rag._hydrate_rerank_candidates(TENANT_A, WEB_1, [keyword_only])
+
+    assert hydration_ids == [[stored.id]], "helper must fetch embeddings by chunk id"
+    assert len(hydrated) == 1
+    assert hydrated[0].chunk.embedding == stored.embedding
+    assert hydrated[0].score == 0.6
+    assert hydrated[0].lexical_score == 0.05
 
 
 async def test_debug_logs_raw_mongodb_vector_results(caplog, monkeypatch) -> None:

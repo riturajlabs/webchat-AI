@@ -15,6 +15,7 @@ from backend.models.knowledge_chunk import (
     KNOWLEDGE_STATUS_NONE,
     KNOWLEDGE_STATUS_PENDING,
     KNOWLEDGE_STATUS_PROCESSING,
+    KNOWLEDGE_STATUS_RATE_LIMITED,
     KNOWLEDGE_STATUS_READY,
 )
 
@@ -106,4 +107,6 @@ class Document(BaseModel):
             return "processing"
         if self.knowledge_status == KNOWLEDGE_STATUS_READY:
             return "completed"
+        if self.knowledge_status == KNOWLEDGE_STATUS_RATE_LIMITED:
+            return "rate_limited"
         return "failed"

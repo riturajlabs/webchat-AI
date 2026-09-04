@@ -220,7 +220,7 @@ class Settings(BaseSettings):
 
     # Fallback generation providers (OpenAI-compatible chat completions API).
     groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "openai/gpt-oss-20b"
     openrouter_api_key: str | None = None
     openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
 
@@ -289,6 +289,12 @@ class Settings(BaseSettings):
     embedding_retry_base_delay_ms: int = 300
     # Fail a document's embedding pass when a single batch error exceeds this.
     embedding_request_timeout_seconds: float = 10.0
+    # ING-02: cap on how many embedding batches a single worker process may have
+    # in flight at once. ARQ runs up to `max_jobs` documents concurrently; the
+    # shared process-wide pacer bounds that fan-out so it cannot saturate the
+    # provider's embedding quota. 2 is conservative (matches the crawl
+    # Playwright concurrency) and keeps memory flat.
+    embedding_max_concurrent_batches: int = 2
     # Document-level embedding retries (production hardening): a temporary
     # embedding outage must not permanently fail every queued document in one
     # crawl fan-out. A failed attempt re-enqueues the document with a growing
@@ -402,9 +408,13 @@ class Settings(BaseSettings):
     enable_hybrid_search: bool = True
     # RRF constant for hybrid fusion (higher reduces top-rank impact).
     hybrid_rrf_k: int = 60
-    # Maximum candidate chunks loaded for keyword scoring in hybrid search.
-    # Bounded loading prevents O(n) memory/CPU growth with large knowledge bases.
-    # Set 0 to disable the limit (loads all chunks — legacy behavior).
+    # Number of top hybrid candidates fed onward: it caps (1) the keyword-search
+    # output and (2) the RRF candidate pool size. It does NOT limit corpus
+    # loading - the full tenant/website chunk corpus is always loaded for
+    # keyword scoring (see RagService._load_all_chunks / list_chunks_light) so
+    # keyword recall is never cut off by this setting. Set 0 to disable the
+    # candidate caps (forward every scored keyword result and every fused RRF
+    # candidate).
     hybrid_search_candidate_limit: int = 50
 
     # Adaptive retrieval (opt-in, off by default). When enabled, retrieval
@@ -432,6 +442,14 @@ class Settings(BaseSettings):
     # chat_top_k.  When 0, reranking is effectively disabled even if the flag
     # is on.
     rerank_top_k: int = 5
+    # Maximum chunks allowed from a single source URL in the reranker input
+    # pool (source diversification).  The RRF pool can be monopolized by many
+    # chunks of one highly-similar source (e.g. several chunks of a single
+    # course page) which then crowd out other genuinely relevant sources from
+    # the final top-k.  Capping per-source chunks keeps top-k breadth diverse.
+    # Strong lexical/protected candidates are always exempt from the cap.  Set
+    # to 0 to disable source diversification (reranker input unchanged).
+    rerank_max_chunks_per_source: int = 2
 
     # Answer faithfulness (post-generation). When enabled, each answer is
     # checked for unsupported claims by verifying that every sentence in the

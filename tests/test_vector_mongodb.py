@@ -81,6 +81,7 @@ class FakeCollection:
         self.probe_error: Exception | None = None
         self.search_indexes = search_indexes or []
         self.aggregations: list[list] = []
+        self.find_projections: list[dict | None] = []
         self.name = "knowledge_chunks"
 
     def aggregate(self, pipeline: list) -> object:
@@ -102,16 +103,32 @@ class FakeCollection:
         yield  # pragma: no cover
 
     def find(self, query: dict, projection: dict | None = None) -> object:
-        matched = []
-        for doc in self._docs:
-            if doc["tenant_id"] == query.get("tenant_id") and doc["website_id"] == query.get(
-                "website_id"
-            ):
-                if projection and any(v == 0 for v in projection.values()):
-                    exclude_fields = [k for k, v in projection.items() if v == 0]
-                    matched.append({k: v for k, v in doc.items() if k not in exclude_fields})
-                else:
+        self.find_projections.append(projection)
+        _id_filter = query.get("_id")
+        if isinstance(_id_filter, dict) and "$in" in _id_filter:
+            wanted = set(_id_filter["$in"])
+            matched = [
+                doc
+                for doc in self._docs
+                if doc.get("_id") in wanted
+                # Defense-in-depth mirrors the real Mongo query: an `_id` $in
+                # fetch is additionally scoped by tenant_id/website_id when the
+                # caller supplies them (see get_chunks_by_ids).
+                and (query.get("tenant_id") is None or doc["tenant_id"] == query.get("tenant_id"))
+                and (
+                    query.get("website_id") is None or doc["website_id"] == query.get("website_id")
+                )
+            ]
+        else:
+            matched = []
+            for doc in self._docs:
+                if doc["tenant_id"] == query.get("tenant_id") and doc["website_id"] == query.get(
+                    "website_id"
+                ):
                     matched.append(doc)
+        if projection and any(v == 0 for v in projection.values()):
+            exclude_fields = [k for k, v in projection.items() if v == 0]
+            matched = [{k: v for k, v in doc.items() if k not in exclude_fields} for doc in matched]
 
         class _Cursor:
             def __init__(self, items: list[dict]) -> None:
@@ -120,6 +137,11 @@ class FakeCollection:
 
             def limit(self, n: int) -> _Cursor:
                 self._limit_val = n
+                return self
+
+            def sort(self, field: str, direction: int) -> _Cursor:
+                assert field == "_id"
+                self._items.sort(key=lambda item: str(item.get("_id", "")), reverse=direction < 0)
                 return self
 
             def __aiter__(self) -> _Cursor:
@@ -470,9 +492,9 @@ async def test_list_chunks_light_excludes_embedding() -> None:
     chunks = await repo.list_chunks_light("tenant-a", "site-a")
 
     assert len(chunks) == 2
-    assert chunks[0].chunk_text == "hello world"
-    assert chunks[0].embedding == []
-    assert chunks[1].chunk_text == "second chunk"
+    assert [chunk.id for chunk in chunks] == sorted(chunk.id for chunk in chunks)
+    assert {chunk.chunk_text for chunk in chunks} == {"hello world", "second chunk"}
+    assert all(chunk.embedding == [] for chunk in chunks)
     assert chunks[1].embedding == []
 
 
@@ -544,7 +566,7 @@ async def test_list_chunks_light_preserves_metadata_and_ids() -> None:
 
 @pytest.mark.asyncio
 async def test_list_chunks_light_same_results_as_list_chunks_minus_embedding() -> None:
-    """list_chunks_light returns the same chunks as list_chunks, just without embeddings."""
+    """list_chunks_light returns the same IDs as list_chunks, sans embeddings."""
     docs = [
         _chunk("alpha", [1.0, 0.0], index=0),
         _chunk("beta", [0.0, 1.0], index=1),
@@ -555,8 +577,180 @@ async def test_list_chunks_light_same_results_as_list_chunks_minus_embedding() -
     light = await repo.list_chunks_light("tenant-a", "site-a")
 
     assert len(full) == len(light)
-    for full_chunk, light_chunk in zip(full, light, strict=True):
-        assert full_chunk.id == light_chunk.id
-        assert full_chunk.chunk_text == light_chunk.chunk_text
-        assert full_chunk.embedding != []  # full has embeddings
-        assert light_chunk.embedding == []  # light does not
+    assert {chunk.id for chunk in full} == {chunk.id for chunk in light}
+    assert all(chunk.embedding != [] for chunk in full)  # full has embeddings
+    assert all(chunk.embedding == [] for chunk in light)  # light does not
+
+
+# ---------------------------------------------------------------------------
+# get_chunks_by_ids (rerank-pool embedding hydration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_ids_returns_full_chunks_with_embeddings() -> None:
+    """get_chunks_by_ids returns full documents (with embeddings) for the ids.
+
+    This is the targeted fetch that re-hydrates embeddings onto the small
+    reranker candidate pool, so it must NOT exclude the embedding field.
+    """
+    docs = [
+        _chunk("alpha", [1.0, 0.0, 0.5], index=0),
+        _chunk("beta", [0.0, 1.0, 0.3], index=1),
+        _chunk("gamma", [0.2, 0.4, 0.6], index=2),
+    ]
+    repo = MongoVectorRepository(_FakeDb(FakeCollection(docs)))
+    ids = [docs[0]["_id"], docs[2]["_id"]]
+
+    chunks = await repo.get_chunks_by_ids("tenant-a", "site-a", ids)
+
+    assert {c.chunk_text for c in chunks} == {"alpha", "gamma"}
+    for c in chunks:
+        assert c.embedding != [], "hydrated chunks must carry embeddings"
+    assert "embedding" not in (repo._collection.find_projections[-1] or {})
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_ids_empty_ids_is_noop() -> None:
+    docs = [_chunk("alpha", [1.0, 0.0], index=0)]
+    repo = MongoVectorRepository(_FakeDb(FakeCollection(docs)))
+
+    chunks = await repo.get_chunks_by_ids("tenant-a", "site-a", [])
+
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_get_chunks_by_ids_is_scoped_to_tenant_and_website() -> None:
+    """A raw ``_id`` from another tenant/website must NOT be hydratable.
+
+    Defense-in-depth regression for D1: even though the rerank pool is already
+    tenant/website-scoped upstream, the repository query itself must enforce the
+    scope so a stale or out-of-context ``_id`` can never leak another tenant's
+    or website's embeddings into the rerank pool.
+    """
+    docs = [
+        _chunk("same tenant and website", [1.0, 0.0], index=0),
+        _chunk("same tenant other website", [1.0, 0.0], index=1, website_id="site-b"),
+        _chunk("other tenant", [1.0, 0.0], index=2, tenant_id="tenant-b"),
+    ]
+    repo = MongoVectorRepository(_FakeDb(FakeCollection(docs)))
+    # Request the ids of ALL three docs, but scoped to tenant-a / site-a.
+    chunks = await repo.get_chunks_by_ids("tenant-a", "site-a", [d["_id"] for d in docs])
+
+    assert [c.chunk_text for c in chunks] == ["same tenant and website"]
+
+
+@pytest.mark.asyncio
+async def test_list_chunks_light_projection_excludes_embedding() -> None:
+    """The keyword-corpus light load requests the embedding-free projection."""
+    docs = [_chunk("alpha", [1.0, 0.0, 0.5], index=0)]
+    fake = FakeCollection(docs)
+    repo = MongoVectorRepository(_FakeDb(fake))
+
+    await repo.list_chunks_light("tenant-a", "site-a")
+
+    assert fake.find_projections[-1] == {"embedding": 0}, (
+        "keyword corpus load must project out the embedding/vector field"
+    )
+
+
+class _ReplaceFakeCollection:
+    """Minimal collection fake supporting the Mongo `replace_by_document` ops."""
+
+    def __init__(self, docs: list[dict]) -> None:
+        self._docs = docs
+        self.name = "knowledge_chunks"
+
+    async def update_one(self, query: dict, update: dict, upsert: bool = False) -> object:
+        set_payload = update.get("$set", {})
+        for doc in self._docs:
+            if all(doc.get(k) == v for k, v in query.items()):
+                doc.update(set_payload)
+                return _UpdateResult(matched_count=1)
+        if upsert:
+            self._docs.append({**query, **set_payload})
+        return _UpdateResult(matched_count=0)
+
+    async def insert_one(self, doc: dict) -> object:
+        self._docs.append(doc)
+        return None
+
+    async def delete_many(self, query: dict) -> object:
+        before = len(self._docs)
+        self._docs = [
+            doc
+            for doc in self._docs
+            if not (
+                doc["tenant_id"] == query.get("tenant_id")
+                and doc["document_id"] == query.get("document_id")
+                and (
+                    not query.get("chunk_index")
+                    or doc.get("chunk_index") not in query["chunk_index"]["$nin"]
+                )
+            )
+        ]
+        return _DeleteResult(before - len(self._docs))
+
+    @property
+    def docs(self) -> list[dict]:
+        return self._docs
+
+
+class _UpdateResult:
+    def __init__(self, matched_count: int) -> None:
+        self.matched_count = matched_count
+
+
+class _DeleteResult:
+    def __init__(self, deleted_count: int) -> None:
+        self.deleted_count = deleted_count
+
+
+class _ReplaceFakeDb:
+    def __init__(self, collection: _ReplaceFakeCollection) -> None:
+        self._collection = collection
+
+    def __getitem__(self, _name: str) -> _ReplaceFakeCollection:
+        return self._collection
+
+
+@pytest.mark.asyncio
+async def test_replace_by_document_inserts_first_then_deletes_stale() -> None:
+    """Mongo `replace_by_document` upserts new chunks then removes stale ones.
+
+    Old chunks of `doc-a` at indexes 0..2 are replaced by new chunks at indexes
+    0..1 plus a new index 5. Only the stale indexes (2) are removed; the new
+    indexes land first so a mid-replacement failure can never leave zero chunks.
+    """
+    old = [
+        _chunk("old zero", [1.0], index=0),
+        _chunk("old one", [1.0], index=1),
+        _chunk("old two", [1.0], index=2),
+    ]
+    fake = _ReplaceFakeCollection(old)
+    repo = MongoVectorRepository(_ReplaceFakeDb(fake))  # type: ignore[arg-type]
+
+    new_chunks = [
+        KnowledgeChunk.new(
+            tenant_id="tenant-a",
+            website_id="site-a",
+            document_id="doc-a",
+            chunk_text=text,
+            embedding=[1.0],
+            chunk_index=index,
+        )
+        for index, text in [(0, "new zero"), (1, "new one"), (5, "new five")]
+    ]
+
+    inserted = await repo.replace_by_document("tenant-a", "doc-a", new_chunks)
+
+    # Only the genuinely-new index (5) is an insert; indexes 0 and 1 are in
+    # place replacement via the unique upsert key.
+    assert inserted == 1
+    indexes = {doc.get("chunk_index") for doc in fake.docs}
+    assert indexes == {0, 1, 5}
+    # Old stale index 2 was removed; new text at index 0 replaced the old text.
+    text_by_index = {doc.get("chunk_index"): doc.get("chunk_text") for doc in fake.docs}
+    assert text_by_index[0] == "new zero"
+    assert text_by_index[5] == "new five"

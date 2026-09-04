@@ -6,10 +6,12 @@ registers and verifies in one call and returns bearer headers, so feature tests
 stay focused on their endpoint rather than the verification flow.
 """
 
+from backend.api import deps as deps_module
 from backend.core.security import create_email_verification_token
 from fastapi.testclient import TestClient
 
 from tests.auth_helpers import VALID_PASSWORD
+from tests.test_rate_limit import FakeRateLimitStore
 
 
 def register_verified_account(
@@ -26,18 +28,28 @@ def register_verified_account(
     mail transport while still exercising the real `/verify-email` endpoint.
     The returned body is the `/register` response (`access_token`, `csrf_token`,
     `user` with `id`/`tenant_id`, `role`).
+
+    Registration and verification are credential endpoints, which stay
+    rate-limited even when `RATE_LIMIT_ENABLED=false` (SEC-14).  A fake Redis
+    store is injected around these calls so the helper works without a running
+    Redis in test environments.
     """
-    response = test_client.post(
-        "/api/auth/register",
-        json={"name": name, "email": email, "password": password},
-    )
-    assert response.status_code == 201, response.text
-    body = response.json()
-    user_id = body["user"]["id"]
-    token = create_email_verification_token(user_id)
-    verify = test_client.post("/api/auth/verify-email", json={"token": token})
-    assert verify.status_code == 200, verify.text
-    return body
+    original_get_redis = deps_module.get_redis
+    deps_module.get_redis = lambda: FakeRateLimitStore()
+    try:
+        response = test_client.post(
+            "/api/auth/register",
+            json={"name": name, "email": email, "password": password},
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        user_id = body["user"]["id"]
+        token = create_email_verification_token(user_id)
+        verify = test_client.post("/api/auth/verify-email", json={"token": token})
+        assert verify.status_code == 200, verify.text
+        return body
+    finally:
+        deps_module.get_redis = original_get_redis
 
 
 def register_verified(

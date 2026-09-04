@@ -29,6 +29,17 @@ STATUS_COOLDOWN = "cooldown"
 _KEY_PREFIX = "ai_provider_health"
 
 
+def provider_health_name(role: str, provider_name: str) -> str:
+    """Return the collision-free circuit key for one provider capability.
+
+    An embedding quota event must never open the generation circuit for the
+    same vendor, and vice versa.  Callers pass this value to every store API.
+    """
+    if role not in {"embedding", "generation"}:
+        raise ValueError(f"Unsupported provider health role: {role!r}")
+    return f"{role}:{provider_name}"
+
+
 def _health_key(provider_name: str) -> str:
     return f"{_KEY_PREFIX}:{provider_name}"
 
@@ -217,4 +228,5 @@ __all__ = [
     "ProviderHealthStore",
     "STATUS_COOLDOWN",
     "STATUS_HEALTHY",
+    "provider_health_name",
 ]

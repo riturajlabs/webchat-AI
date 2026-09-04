@@ -1,16 +1,17 @@
-"""Token-based chunking for the knowledge base (Phase 5, docs/02-TRD.md §6).
+"""HTML cleaning and token-based chunking for the knowledge base.
 
 Splits cleaned page text into overlapping chunks sized by an approximate
-tokenizer (words + punctuation runs). Chunk sizing is deterministic and
-dependency-free: ~1 token per word or punctuation cluster, which tracks the
-dense-embedding behavior of `gemini-embedding-001` closely enough for chunk
-boundaries. Defaults follow the TRD: 500-800 tokens per chunk with a 100-token
+tokenizer (words + punctuation runs). HTML is cleaned before tokenization so
+navigation, boilerplate, and executable content cannot become retrievable
+knowledge. Defaults follow the TRD: 500-800 tokens per chunk with a 100-token
 overlap (ADR-008, Phase 5).
 """
 
 import bisect
 import re
 from dataclasses import dataclass
+
+from bs4 import BeautifulSoup
 
 from backend.core.config import get_settings
 
@@ -29,6 +30,48 @@ _CLOSING_PUNCT_RE = re.compile(r"\s+([.,!?;:)%\"'\]}])")
 # Markdown-style heading line emitted by the HTML cleaner (audit R-08):
 # `#`..`######` followed by the heading text.
 _HEADING_LINE_RE = re.compile(r"^ {0,3}(#{1,6})\s+(\S.*?)\s*#*\s*$")
+
+# A trailing chunk shorter than this many tokens is a fragment (typically the
+# overlap tail of a section repeated as a near-duplicate sliver); merge it into
+# the previous chunk instead of emitting a low-value standalone embedding.
+MIN_CHUNK_TOKENS = 40
+
+_HTML_TAG_RE = re.compile(r"<\s*/?\s*[A-Za-z][^>]*>")
+_BOILERPLATE_TAGS = (
+    "nav",
+    "footer",
+    "aside",
+    "header",
+    "script",
+    "style",
+    "noscript",
+    "template",
+    "form",
+)
+
+
+def clean_html(html: str) -> str:
+    """Return semantic text from HTML while preserving heading boundaries.
+
+    Plain text and Markdown are returned unchanged. For HTML, boilerplate
+    elements are removed and ``main``/``article`` is preferred when present;
+    otherwise the remaining body is used. Headings are converted to Markdown
+    markers so the existing heading metadata and boundary logic remain active.
+    """
+    if not html or _HTML_TAG_RE.search(html) is None:
+        return html
+
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup.find_all(_BOILERPLATE_TAGS):
+        element.decompose()
+
+    root = soup.find("main") or soup.find("article") or soup.body or soup
+    for heading in root.find_all(re.compile(r"^h[1-6]$")):
+        level = int(heading.name[1])
+        heading_text = heading.get_text(" ", strip=True)
+        heading.replace_with(f"\n{'#' * level} {heading_text}\n")
+
+    return root.get_text("\n", strip=True)
 
 
 def _join_tokens(tokens: list[str]) -> str:
@@ -129,16 +172,35 @@ def chunk_text(
     *,
     chunk_size: int | None = None,
     overlap: int | None = None,
+    min_chunk_tokens: int | None = None,
 ) -> list[TextChunk]:
     """Split `text` into overlapping token-bounded chunks.
 
-    `chunk_size` and `overlap` are token counts; both default from settings
-    (`KNOWLEDGE_CHUNK_SIZE_TOKENS=700`, `KNOWLEDGE_CHUNK_OVERLAP_TOKENS=100`).
-    Overlap is clipped to chunk_size - 1 so the window always advances.
+    `chunk_size`, `overlap` and `min_chunk_tokens` are token counts; the first
+    two default from settings (`KNOWLEDGE_CHUNK_SIZE_TOKENS=700`,
+    `KNOWLEDGE_CHUNK_OVERLAP_TOKENS=100`), and `min_chunk_tokens` defaults to
+    :data:`MIN_CHUNK_TOKENS`.  Overlap is clipped to chunk_size - 1 so the
+    window always advances.
+
+    Section headings force fresh chunk boundaries: a heading-marker cut does
+    NOT pull the next window back by the overlap, so a short section cannot be
+    re-emitted as a run of near-identical overlap slivers (which otherwise
+    blow the corpus up with >80%-Jaccard duplicates and 100+-token fragments).
+    Trailing chunks shorter than `min_chunk_tokens` are merged into the
+    previous chunk rather than stored as low-value standalone embeddings.
     """
     settings = get_settings()
+    text = clean_html(text)
     size = chunk_size if chunk_size is not None else settings.knowledge_chunk_size_tokens
     step_overlap = overlap if overlap is not None else settings.knowledge_chunk_overlap_tokens
+    if min_chunk_tokens is not None:
+        min_tokens = max(1, min_chunk_tokens)
+    else:
+        # Scale with the target chunk size so the floor never exceeds a
+        # meaningful fraction of the configured window (it must stay below the
+        # chunk size in small-window tests), while capping at the absolute
+        # default for production windows.
+        min_tokens = min(MIN_CHUNK_TOKENS, max(1, size // 10))
     if size < 1:
         raise ValueError("chunk_size must be >= 1 token")
     if step_overlap < 0:
@@ -160,7 +222,11 @@ def chunk_text(
     while start < len(tokens):
         end = min(start + size, len(tokens))
         # Prefer a sentence/paragraph boundary inside the window as the cut.
-        preferred = _iter_boundaries(tokens, start, end)
+        # A boundary that sits within the overlap distance of `start` was
+        # already covered by the previous chunk's overlap tail, so cutting
+        # there again would re-emit that overlap (the 1-token stall chain):
+        # only a boundary strictly beyond the overlap region is a real cut.
+        preferred = [p for p in _iter_boundaries(tokens, start, end) if p - start > step_overlap]
         # The final window consumes everything: a boundary cut there would
         # strand tiny fragments behind it (and can stall the window).
         if end == len(tokens):
@@ -188,9 +254,33 @@ def chunk_text(
             break
         # Advance by the overlap-adjusted stride; always move forward so the
         # window can never stall when a boundary cut sits close to `start`.
-        start = max(start + 1, cut - step_overlap)
+        # When the cut fell on a section heading, start the next chunk at that
+        # heading (fresh section) instead of overlapping into the previous one
+        # — overlapping across a heading re-emits near-identical slivers of the
+        # short section it preceded (the 1-token near-duplicate chain).
+        if marker_cuts:
+            start = cut
+        else:
+            start = max(start + 1, cut - step_overlap)
+
+    # Coalesce trailing fragments: merge any chunk below min_token into the
+    # previous one so a short section tail is not stored as noise embeddings.
+    if min_tokens > 1 and len(chunks) > 1:
+        merged: list[TextChunk] = []
+        for candidate in chunks:
+            if merged and candidate.tokens < min_tokens:
+                previous = merged[-1]
+                merged[-1] = TextChunk(
+                    index=previous.index,
+                    text=(previous.text + " " + candidate.text).strip(),
+                    tokens=previous.tokens + candidate.tokens,
+                    heading=previous.heading,
+                )
+            else:
+                merged.append(candidate)
+        chunks = merged
 
     return chunks
 
 
-__all__ = ["TextChunk", "chunk_text", "count_tokens"]
+__all__ = ["TextChunk", "chunk_text", "clean_html", "count_tokens"]

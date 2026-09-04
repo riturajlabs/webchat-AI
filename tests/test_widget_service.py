@@ -7,6 +7,7 @@ store, mirroring the API-test pattern in tests/chat_helpers.py.
 import pytest
 from backend.core.errors import (
     MessageLimitReachedError,
+    ServiceUnavailableError,
     SessionNotFoundError,
     WebsiteNotReadyError,
     WidgetDisabledError,
@@ -337,6 +338,78 @@ async def test_session_access_rejects_foreign_visitor() -> None:
             visitor_id="visitor-b",
             session_id="session-1",
         )
+
+
+# ------------------------------------------------------------ P0-1 fail-closed
+
+
+class _RedisBoomStore:
+    """WidgetStore whose `setex` raises like a Redis outage/timeout."""
+
+    def __init__(self, *, exc: Exception) -> None:
+        self._exc = exc
+
+    async def get(self, key: str) -> str | None:
+        return None
+
+    async def setex(self, key: str, seconds: int, value: str) -> None:
+        raise self._exc
+
+    async def incr(self, key: str) -> int:
+        raise self._exc
+
+    async def expire(self, key: str, seconds: int) -> None:
+        raise self._exc
+
+    async def delete(self, key: str) -> None:
+        raise self._exc
+
+
+async def test_create_session_fails_closed_on_redis_connection_error() -> None:
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    service._store = _RedisBoomStore(exc=ConnectionError("redis unavailable"))
+
+    with pytest.raises(ServiceUnavailableError):
+        await service.create_session(widget_id="widget-1", visitor_id="visitor-9")
+
+
+async def test_create_session_fails_closed_on_redis_timeout() -> None:
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    service._store = _RedisBoomStore(exc=TimeoutError("redis timed out"))
+
+    with pytest.raises(ServiceUnavailableError):
+        await service.create_session(widget_id="widget-1", visitor_id="visitor-9")
+
+
+async def test_create_session_fails_closed_on_unexpected_redis_exception() -> None:
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    service._store = _RedisBoomStore(exc=RuntimeError("some unexpected failure"))
+
+    with pytest.raises(ServiceUnavailableError):
+        await service.create_session(widget_id="widget-1", visitor_id="visitor-9")
+
+
+async def test_create_session_redis_failure_does_not_leak_internals(
+    caplog,
+) -> None:
+    # The raised error must carry a generic message only -- no Redis
+    # exception detail that could hint at the failure internals.
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    service._store = _RedisBoomStore(exc=ConnectionError("redis unavailable"))
+
+    try:
+        await service.create_session(widget_id="widget-1", visitor_id="visitor-9")
+    except ServiceUnavailableError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - guard against a regression that mints anyway
+        raise AssertionError("expected ServiceUnavailableError")
+
+    assert "redis" not in message.lower()
+    assert "unavailable" in message.lower() or "try again" in message.lower()
 
 
 async def test_session_access_rejects_unknown_and_cross_website() -> None:

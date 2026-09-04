@@ -39,7 +39,7 @@ def _usage(prompt: int, completion: int) -> dict:
 
 def _provider(client: httpx.AsyncClient, *, api_key: str = "test-key") -> GroqGenerationClient:
     return GroqGenerationClient(
-        model="llama-3.3-70b-versatile", api_key=api_key, timeout_seconds=5, http_client=client
+        model="openai/gpt-oss-20b", api_key=api_key, timeout_seconds=5, http_client=client
     )
 
 
@@ -79,7 +79,7 @@ async def test_builds_openai_compatible_payload() -> None:
             pass
 
     payload = captured[0]
-    assert payload["model"] == "llama-3.3-70b-versatile"
+    assert payload["model"] == "openai/gpt-oss-20b"
     assert payload["stream"] is True
     assert payload["stream_options"] == {"include_usage": True}
     assert payload["messages"] == [

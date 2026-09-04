@@ -556,7 +556,7 @@ Both capabilities keep the exact Protocol surfaces already used by the RAG servi
 | Capability | Provider   | Client                                                              | Default model                       | API key              |
 | ---------- | ---------- | ------------------------------------------------------------------- | ----------------------------------- | -------------------- |
 | Generation | Gemini     | `GoogleGeminiClient` (`backend/ai/gemini.py`)                       | `gemini-2.5-flash`                  | `GEMINI_API_KEY`     |
-| Generation | Groq       | `GroqGenerationClient` (`backend/ai/providers/groq.py`)             | `llama-3.3-70b-versatile`           | `GROQ_API_KEY`       |
+| Generation | Groq       | `GroqGenerationClient` (`backend/ai/providers/groq.py`)             | `openai/gpt-oss-20b`                | `GROQ_API_KEY`       |
 | Generation | OpenRouter | `OpenRouterGenerationClient` (`backend/ai/providers/openrouter.py`) | `meta-llama/llama-3.3-70b-instruct` | `OPENROUTER_API_KEY` |
 | Embedding  | Gemini     | `GoogleEmbeddingClient` (`backend/services/knowledge/embedding.py`) | `gemini-embedding-001`              | `GEMINI_API_KEY`     |
 | Embedding  | Ollama     | `OllamaEmbeddingClient` (`backend/ai/providers/ollama.py`)          | `nomic-embed-text` (768-dim)        | none (self-hosted)   |

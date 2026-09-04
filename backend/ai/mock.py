@@ -133,6 +133,9 @@ class MockEmbeddingClient:
             version=getattr(get_settings(), "embedding_version", "1"),
         )
 
+    async def health(self) -> bool:
+        return True
+
     async def embed(self, texts: list[str]) -> list[list[float]]:
         vectors = [self._vector(text) for text in texts]
         self._usage = EmbeddingUsage(

@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 from backend.ai.gemini import GenerationClient
@@ -70,7 +70,8 @@ from backend.repositories.chat_message_repository import ChatMessageRepository
 from backend.repositories.chat_session_repository import ChatSessionRepository
 from backend.repositories.usage_record_repository import UsageRecordRepository
 from backend.repositories.vector import VectorRepository, VectorSearchResult
-from backend.repositories.vector.reranker import EmbeddingReranker
+from backend.repositories.vector.hybrid import tokenize
+from backend.repositories.vector.reranker import EmbeddingReranker, _strong_lexical_match
 from backend.repositories.website_repository import WebsiteRepository
 from backend.services.billing.pricing import (
     dollars_to_micros,
@@ -78,7 +79,11 @@ from backend.services.billing.pricing import (
     get_model_price,
     load_rate_card,
 )
-from backend.services.chat.confidence import ConfidenceMetrics, assess_confidence
+from backend.services.chat.confidence import (
+    ConfidenceMetrics,
+    assess_result_confidence,
+    usable,
+)
 from backend.services.chat.context_optimizer import (
     OptimizationMetrics,
     compress_text,
@@ -155,6 +160,7 @@ class RagService:
         messages: ChatMessageRepository,
         usage: UsageRecordRepository,
         cache: CacheStore | None = None,
+        embedding_resolver: Callable[[EmbeddingIdentity], EmbeddingClient] | None = None,
         top_k: int | None = None,
         prompt_version: int | None = None,
         memory_turns: int | None = None,
@@ -166,6 +172,7 @@ class RagService:
         self._websites = websites
         self._vector = vector
         self._embedder = embedder
+        self._embedding_resolver = embedding_resolver
         self._generation = generation
         self._sessions = sessions
         self._messages = messages
@@ -184,6 +191,10 @@ class RagService:
         self._timing_enabled = settings.perf_timing_log_enabled
         self._embedding_cache_size = settings.embedding_cache_size
         self._embedding_cache_ttl = settings.embedding_cache_ttl_seconds
+        # Phase 3: coalesce identical concurrent cache misses so N identical
+        # questions sharing a cold embed cache trigger ONE provider call, not N.
+        # Keyed on the normalized question; consumed per retrieval turn.
+        self._embed_inflight: dict[str, asyncio.Future[tuple[list[float], EmbeddingIdentity]]] = {}
         self._retrieval_cache_size = settings.chat_retrieval_cache_size
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
         self._enable_faithfulness_check = settings.enable_faithfulness_check
@@ -214,6 +225,11 @@ class RagService:
         elif settings.enable_hybrid_search:
             self._retrieval_strategy = HybridRetrievalStrategy(
                 rrf_k=settings.hybrid_rrf_k,
+                keyword_top_k=self._hybrid_candidate_limit,
+                # RRF expands past the final top_k into a candidate pool so the
+                # reranker can still surface keyword-only results the vector
+                # stage missed and that RRF would otherwise truncate away.
+                candidate_top_k=self._hybrid_candidate_limit,
             )
         else:
             self._retrieval_strategy = VectorRetrievalStrategy()
@@ -228,13 +244,20 @@ class RagService:
             )
         else:
             self._reranker = None
+        # Source diversification for the reranker input pool (max chunks per
+        # source URL).  <= 0 disables the filter (reranker input unchanged).
+        # getattr with a 0 default keeps behavior unchanged when a settings
+        # stub (e.g. in tests) does not expose the new field.
+        self._rerank_max_chunks_per_source = getattr(settings, "rerank_max_chunks_per_source", 0)
         # AI cost rate card (Phase 1). Parsed once at construction so a
         # malformed AI_MODEL_PRICING_JSON fails fast instead of silently
         # producing zero-cost traffic. Unpriced models warn once per process.
         self._rate_card = load_rate_card(settings.ai_model_pricing_json)
         self._warned_unpriced_models: set[str] = set()
 
-    async def _embed_question(self, question: str) -> tuple[list[float], bool, EmbeddingIdentity]:
+    async def _embed_question(
+        self, question: str, *, required_identity: EmbeddingIdentity | None = None
+    ) -> tuple[list[float], bool, EmbeddingIdentity]:
         """Embed `question`, caching identical questions across turns.
 
         Returns `(vector, cache_hit, identity)` so callers can report hit/miss and the
@@ -242,8 +265,28 @@ class RagService:
         the normalized (case-folded) question text; repeated/echoed questions hit
         the cache and skip the provider call. Eviction is size-only so entries
         never go stale.
+
+        Concurrent identical cache misses are coalesced (single-flight): the
+        first request calls the provider; identical waiters share that one
+        result instead of each embedding the same text (Phase 3 latency audit).
+        Waiter callers report `cache_hit=False` — the provider cache itself was
+        not hit — which is accurate for analytics.
         """
-        key = question.strip().lower()
+        identity_key = ""
+        if required_identity is not None:
+            identity_key = ":".join(
+                [
+                    required_identity.provider,
+                    required_identity.model,
+                    str(required_identity.dimensions),
+                    required_identity.version,
+                ]
+            )
+        key = (
+            f"{identity_key}:{question.strip().lower()}"
+            if identity_key
+            else question.strip().lower()
+        )
         if self._cache is not None and self._embedding_cache_size > 0:
             raw = await self._cache.get("embed", key)
             if raw is not None:
@@ -259,18 +302,46 @@ class RagService:
                     return entry["vector"], True, identity
                 except (json.JSONDecodeError, TypeError):
                     pass
-        vectors = await self._embedder.embed([question])
-        vector = vectors[0]
-        identity = self._embedder.embedding_identity
-        if self._cache is not None and self._embedding_cache_size > 0:
-            ttl = self._embedding_cache_ttl if self._embedding_cache_ttl > 0 else None
-            await self._cache.set(
-                "embed",
-                key,
-                json.dumps({"vector": vector, "embedding_identity": identity.as_dict()}),
-                ttl=ttl,
+        # Single-flight: a concurrent miss on this exact key awaits the owner.
+        concurrent = self._embed_inflight.get(key)
+        if concurrent is not None:
+            vector, identity = await concurrent
+            return vector, False, identity
+        future: asyncio.Future[tuple[list[float], EmbeddingIdentity]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._embed_inflight[key] = future
+        try:
+            embedder = (
+                self._embedding_resolver(required_identity)
+                if required_identity is not None and self._embedding_resolver is not None
+                else self._embedder
             )
-        return vector, False, identity
+            vectors = await embedder.embed([question])
+            vector = vectors[0]
+            identity = embedder.embedding_identity
+            if required_identity is not None and identity != required_identity:
+                raise EmbeddingCompatibilityError(
+                    "Query embedding provider does not match the website corpus identity."
+                )
+            if self._cache is not None and self._embedding_cache_size > 0:
+                ttl = self._embedding_cache_ttl if self._embedding_cache_ttl > 0 else None
+                await self._cache.set(
+                    "embed",
+                    key,
+                    json.dumps({"vector": vector, "embedding_identity": identity.as_dict()}),
+                    ttl=ttl,
+                )
+            if not future.done():
+                future.set_result((vector, identity))
+            return vector, False, identity
+        except BaseException as exc:  # noqa: BLE001 - propagate to owner AND waiters
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            if self._embed_inflight.get(key) is future:
+                self._embed_inflight.pop(key, None)
 
     async def _retrieve(
         self,
@@ -278,6 +349,8 @@ class RagService:
         tenant_id: str,
         website_id: str,
         question: str,
+        embedding_identity: EmbeddingIdentity | None = None,
+        lexical_corpus_version: str = "",
         history_task: asyncio.Task[list[tuple[str, str]]] | None = None,
     ) -> tuple[
         list[float],
@@ -385,15 +458,24 @@ class RagService:
                         ]
                         for raw_result in raw_results:
                             ensure_embedding_compatibility(raw_result.chunk, query_identity)
-                        # Hybrid keyword matching reranks cached vector hits
-                        # only; it must not load unrelated website chunks.
+                        # Hybrid keyword retrieval is a second source over the
+                        # website's full corpus (recovering exact-term matches
+                        # the vector stage missed), so load the corpus for the
+                        # keyword pass when hybrid is enabled.
                         load_chunks_ms = 0.0
-                        hybrid_candidate_count = (
-                            len(raw_results)
-                            if isinstance(self._retrieval_strategy, HybridRetrievalStrategy)
-                            else 0
-                        )
-                        all_chunks = None
+                        hybrid_candidate_count = 0
+                        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
+                            t_load = time.perf_counter()
+                            all_chunks = await self._load_all_chunks(
+                                tenant_id,
+                                website_id,
+                                embedding_identity=query_identity,
+                                corpus_version=lexical_corpus_version,
+                            )
+                            load_chunks_ms = (time.perf_counter() - t_load) * 1000.0
+                            hybrid_candidate_count = len(all_chunks)
+                        else:
+                            all_chunks = None
                         results, metrics = self._retrieval_strategy.search(
                             query=search_query,
                             vector_results=raw_results,
@@ -405,12 +487,21 @@ class RagService:
                         rerank_embedding_ms = 0.0
                         rerank_input_count = 0
                         if self._reranker is not None and results:
+                            results = self._diversify_sources(results, search_query)
+                            results = await self._hydrate_rerank_candidates(
+                                tenant_id, website_id, results
+                            )
                             rerank_input_count = len(results)
                             results, rerank_metrics = await self._reranker.rerank(
                                 search_query, results, query_embedding=vector
                             )
                             rerank_ms = rerank_metrics.rerank_ms
                             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
+                        results = (
+                            self._strip_lexical_scores(results)
+                            if self._reranker is None
+                            else results
+                        )
                         return (
                             vector,
                             results,
@@ -431,7 +522,7 @@ class RagService:
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
             query_vector, embedding_cache_hit, query_identity = await self._embed_question(
-                search_query
+                search_query, required_identity=embedding_identity
             )
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
@@ -477,13 +568,23 @@ class RagService:
             await cache.set(
                 "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
             )
-        # Hybrid keyword matching reranks vector hits only; it must not load
-        # or introduce unrelated chunks from the rest of the website.
+        # Hybrid keyword retrieval is a second source over the website's full
+        # corpus (recovering exact-term matches the vector stage missed), so
+        # load the corpus for the keyword pass when hybrid is enabled.
         load_chunks_ms = 0.0
-        hybrid_candidate_count = (
-            len(raw_results) if isinstance(self._retrieval_strategy, HybridRetrievalStrategy) else 0
-        )
-        all_chunks = None
+        hybrid_candidate_count = 0
+        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
+            t_load = time.perf_counter()
+            all_chunks = await self._load_all_chunks(
+                tenant_id,
+                website_id,
+                embedding_identity=query_identity,
+                corpus_version=lexical_corpus_version,
+            )
+            load_chunks_ms = (time.perf_counter() - t_load) * 1000.0
+            hybrid_candidate_count = len(all_chunks)
+        else:
+            all_chunks = None
         results, metrics = self._retrieval_strategy.search(
             query=search_query,
             vector_results=raw_results,
@@ -495,12 +596,15 @@ class RagService:
         rerank_embedding_ms = 0.0
         rerank_input_count = 0
         if self._reranker is not None and results:
+            results = self._diversify_sources(results, search_query)
+            results = await self._hydrate_rerank_candidates(tenant_id, website_id, results)
             rerank_input_count = len(results)
             results, rerank_metrics = await self._reranker.rerank(
                 search_query, results, query_embedding=query_vector
             )
             rerank_ms = rerank_metrics.rerank_ms
             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
+        results = self._strip_lexical_scores(results) if self._reranker is None else results
         return (
             query_vector,
             results,
@@ -516,6 +620,122 @@ class RagService:
             hybrid_candidate_count,
             adaptive_max_context_chars,
         )
+
+    @staticmethod
+    def _strip_lexical_scores(
+        results: list[VectorSearchResult],
+    ) -> list[VectorSearchResult]:
+        """Clear lexical evidence when reranking did not run.
+
+        The lexical gate in ``_build_context`` is only meaningful when the
+        lexical-aware reranker actually narrowed candidates by strong lexical
+        match. When no reranker is present, the raw strategy results carry RRF
+        evidence that has not been protected, so it must be neutralized to keep
+        the no-reranker path behaving exactly as before (cosine gate only).
+        """
+        return [
+            VectorSearchResult(
+                chunk=r.chunk,
+                score=r.score,
+                dense_score=r.dense_score,
+                lexical_exact=r.lexical_exact,
+            )
+            for r in results
+        ]
+
+    def _diversify_sources(
+        self,
+        results: list[VectorSearchResult],
+        query: str,
+    ) -> list[VectorSearchResult]:
+        """Cap chunks per source URL in the reranker input pool.
+
+        The RRF/hybrid pool can be monopolized by many chunks of a single,
+        highly-relevant source (e.g. several near-identical chunks of one
+        course page) that then crowd genuinely relevant *other* sources out of
+        the reranker's cosine-based ``top_k``.  This filter keeps at most
+        ``max_per_url`` unprotected chunks per source URL while iterating in
+        the existing pool order, so the final top-k spans more distinct
+        sources without changing relevance scoring.
+
+        Strong lexical/protected candidates — the SAME signal the reranker
+        protects (every content token of the query present in the chunk) — are
+        always exempt from the cap, matching the reranker exactly, so the
+        chairperson / dean-of-SOIT lexical protection is never regressed.
+        Exempt chunks do not consume a URL's per-source budget.
+
+        All ``VectorSearchResult`` fields (true cosine ``score``,
+        ``lexical_score``, chunk metadata/source URL) are preserved verbatim —
+        this filter only removes whole candidates, never mutates them.
+
+        Returns a new list to keep the pipeline functional; the original
+        ``results`` is not modified.  Bounded to ``max_per_url`` per source.
+        When ``rerank_max_chunks_per_source <= 0`` the pool is returned
+        unchanged (diversification disabled).
+
+        Note: ``lexical_score``/RRF evidence is a *pool* signal computed before
+        reranking and is separate from the reranker's strong-lexical flag; here
+        we base the exemption on strong-lexical presence (not on
+        ``lexical_score``) to mirror what the reranker will protect.
+        """
+        max_per_url = self._rerank_max_chunks_per_source
+        if max_per_url <= 0:
+            return results
+        query_tokens = tokenize(query)
+        per_url: dict[str, int] = {}
+        kept: list[VectorSearchResult] = []
+        for result in results:
+            is_strong = _strong_lexical_match(query_tokens, result.chunk.chunk_text)
+            if is_strong:
+                kept.append(result)
+                continue
+            url = str(result.chunk.metadata.get("source_url") or "")
+            count = per_url.get(url, 0)
+            if count >= max_per_url:
+                continue
+            per_url[url] = count + 1
+            kept.append(result)
+        return kept
+
+    async def _hydrate_rerank_candidates(
+        self,
+        tenant_id: str,
+        website_id: str,
+        results: list[VectorSearchResult],
+    ) -> list[VectorSearchResult]:
+        """Ensure rerank-pool chunks carry embeddings for the cosine reranker.
+
+        The keyword corpus is loaded embedding-free (via ``list_chunks_light``)
+        so keyword-only candidates it recovered have empty embeddings.  The
+        reranker scores candidates with stored chunk embeddings (and only
+        protects strong lexical matches for candidates *with* embeddings), so
+        an empty-embedding keyword-only chunk would be scored 0.0 and stripped
+        of its lexical evidence — regressing hybrid retrieval.  Hydrate just
+        the missing embeddings by chunk id (a small, bounded subset, at most
+        the rerank candidate pool), keeping the full-corpus transfer light.
+        """
+        missing = [r for r in results if not r.chunk.embedding]
+        if not missing:
+            return results
+        hydrated = await self._vector.get_chunks_by_ids(
+            tenant_id, website_id, [r.chunk.id for r in missing]
+        )
+        by_id = {chunk.id: chunk for chunk in hydrated}
+        out: list[VectorSearchResult] = []
+        for result in results:
+            chunk = result.chunk
+            if not chunk.embedding and chunk.id in by_id:
+                chunk = by_id[chunk.id]
+            out.append(
+                VectorSearchResult(
+                    chunk=chunk,
+                    score=result.score,
+                    lexical_score=result.lexical_score,
+                    dense_score=result.dense_score,
+                    lexical_exact=result.lexical_exact,
+                )
+            )
+        return out
 
     async def stream_answer(
         self,
@@ -612,6 +832,11 @@ class RagService:
                 tenant_id=tenant_id,
                 website_id=website_id,
                 question=question,
+                embedding_identity=website.embedding_identity,
+                # A lexical corpus cache is immutable for one website version.
+                # `updated_at` changes when knowledge processing refreshes the
+                # website, so a new corpus naturally receives a new cache key.
+                lexical_corpus_version=website.updated_at.isoformat(),
                 history_task=history_task,
             )
             (
@@ -713,7 +938,7 @@ class RagService:
         confidence_score: float | None = None
         confidence_metrics: ConfidenceMetrics | None = None
         if self._confidence_check_enabled:
-            confidence_metrics = assess_confidence(retrieval_scores, min_score=self._min_score)
+            confidence_metrics = assess_result_confidence(results, min_score=self._min_score)
             confidence_score = confidence_metrics.confidence
             if confidence_score < self._confidence_threshold:
                 logger.warning(
@@ -1261,23 +1486,87 @@ class RagService:
         return [(message.role, message.content) for message in recent]
 
     async def _load_all_chunks(
-        self, tenant_id: str, website_id: str, *, limit: int = 0
+        self,
+        tenant_id: str,
+        website_id: str,
+        *,
+        embedding_identity: EmbeddingIdentity | None = None,
+        corpus_version: str = "",
     ) -> list[VectorSearchResult]:
-        """Fetch knowledge chunks for a tenant/website for hybrid keyword scoring.
+        """Load the deterministic, embedding-free lexical corpus for one site.
 
-        .. deprecated::
-            This method is **dead code** — the production ``_retrieve()`` flow
-            always passes ``all_chunks=None`` to the retrieval strategy, and
-            ``HybridSearcher`` restricts keyword scoring to vector-search
-            results only.  Retained for potential future full-scan keyword
-            mode and for test coverage of the chunk-loading path.
+        Keyword retrieval must search the complete tenant/website corpus: a
+        ``limit`` here would silently turn it into a natural-order slice and
+        make exact entities unrecoverable.  On a cold cache this performs one
+        Mongo projection excluding ``embedding``; subsequent requests use a
+        compact Redis value containing only text/metadata chunk records.
 
-        When *limit* > 0, at most *limit* chunks are loaded (bounded candidate
-        loading).  When *limit* == 0, all chunks are returned (legacy behavior).
-        Returns ``VectorSearchResult`` objects with a uniform score of 0.5
-        (the keyword scorer will re-rank them).
+        The cache key includes tenant, website, corpus version and embedding
+        identity.  Knowledge processing both changes the website version and
+        explicitly invalidates this namespace, so an old corpus cannot be
+        reused after a completed update.  The cached representation is still
+        sufficient for RRF, source diversity, lexical protection, hydration,
+        citations and context construction; reranking fetches embeddings only
+        for its small candidate subset.
         """
-        chunks = await self._vector.list_chunks(tenant_id, website_id, limit=limit)
+        identity_key = "unlocked"
+        if embedding_identity is not None:
+            identity_key = ":".join(
+                (
+                    embedding_identity.provider,
+                    embedding_identity.model,
+                    str(embedding_identity.dimensions),
+                    embedding_identity.version,
+                )
+            )
+        key = f"{tenant_id}:{website_id}:{corpus_version or 'unknown'}:{identity_key}"
+        cache_enabled = (
+            self._cache is not None
+            and self._retrieval_cache_size > 0
+            and self._retrieval_cache_ttl > 0
+        )
+        if cache_enabled:
+            assert self._cache is not None
+            try:
+                raw = await self._cache.get("lexical", key)
+            except Exception:  # cache is an optimization, never a retrieval dependency
+                logger.warning(
+                    "lexical_corpus_cache_get_failed tenant=%s website=%s",
+                    tenant_id,
+                    website_id,
+                    exc_info=True,
+                )
+                raw = None
+            if raw is not None:
+                try:
+                    payload = json.loads(raw)
+                    chunks = [KnowledgeChunk(**item) for item in payload["chunks"]]
+                    return [VectorSearchResult(chunk=chunk, score=0.5) for chunk in chunks]
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    logger.warning(
+                        "lexical_corpus_cache_invalid tenant=%s website=%s", tenant_id, website_id
+                    )
+
+        # `limit=0` deliberately means the whole scoped corpus.  The repository
+        # projection excludes vectors, and Mongo orders records by `_id`, so the
+        # lexical input is deterministic without transferring embeddings.
+        chunks = await self._vector.list_chunks_light(tenant_id, website_id, limit=0)
+        if cache_enabled:
+            assert self._cache is not None
+            payload = {
+                "chunks": [chunk.model_dump(mode="json", exclude={"embedding"}) for chunk in chunks]
+            }
+            try:
+                await self._cache.set(
+                    "lexical", key, json.dumps(payload), ttl=self._retrieval_cache_ttl
+                )
+            except Exception:
+                logger.warning(
+                    "lexical_corpus_cache_set_failed tenant=%s website=%s",
+                    tenant_id,
+                    website_id,
+                    exc_info=True,
+                )
         return [VectorSearchResult(chunk=chunk, score=0.5) for chunk in chunks]
 
     @staticmethod
@@ -1318,14 +1607,24 @@ class RagService:
         # Phase 1: Exact dedup + min-score filter (always runs).
         # Collect candidate items before applying the budget so optimization
         # can operate on the full candidate set.
-        # ------------------------------------------------------------------
+        #
+        # The gate is score-type-aware. `min_score` is a cosine calibration, so
+        # it only governs candidates whose evidence IS vector cosine. A chunk
+        # that survives reranking as a genuine strong lexical match and carries
+        # explicit RRF/keyword evidence (`lexical_score` set by the hybrid pass
+        # and preserved through the reranker) is accepted on that lexical
+        # evidence even when its cosine falls below the cosine threshold.
         candidate_items: list[ContextItem] = []
         candidate_sources: list[dict[str, Any]] = []
         seen_text: set[tuple[str, str]] = set()
 
         for result in results:
-            if self._min_score > 0 and result.score < self._min_score:
-                continue
+            if not usable(result, dense_floor=self._min_score):
+                # Dense and RRF scores have different scales. Only an
+                # explicit dense score or reranker-confirmed exact lexical
+                # evidence can admit a chunk below the dense floor.
+                if self._min_score > 0:
+                    continue
             chunk = result.chunk
             url = str(chunk.metadata.get("source_url") or "")
             title = str(chunk.metadata.get("title") or url or "Untitled")

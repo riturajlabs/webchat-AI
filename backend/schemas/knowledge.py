@@ -48,6 +48,9 @@ class DocumentStatusSummary(BaseModel):
     processing: int
     completed: int
     failed: int
+    # Documents awaiting a deferred retry after provider quota/rate-limit
+    # rejection (Part E/ING-02): non-terminal, rendered separately from failed.
+    rate_limited: int = 0
 
 
 class KnowledgeDocumentsResponse(BaseModel):

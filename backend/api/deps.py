@@ -19,6 +19,7 @@ from backend.ai.registry import (
     build_embedding_fallback,
     build_generation_fallback,
     build_generation_providers,
+    build_locked_embedding_client,
 )
 from backend.core.cache import RedisCacheStore
 from backend.core.config import get_settings
@@ -292,6 +293,7 @@ def get_rag_service(
         messages=MongoChatMessageRepository(db),
         usage=MongoUsageRecordRepository(db),
         cache=rag_cache,
+        embedding_resolver=build_locked_embedding_client,
     )
 
 
@@ -678,13 +680,14 @@ class RateLimitDependency:
     rather than served without protection (ADR-004).
     """
 
-    def __init__(self, *, limit: int, window_seconds: int) -> None:
+    def __init__(self, *, limit: int, window_seconds: int, always_enforced: bool = False) -> None:
         self.limit = limit
         self.window_seconds = window_seconds
+        self.always_enforced = always_enforced
 
     async def __call__(self, request: Request) -> None:
         settings = get_settings()
-        if not settings.rate_limit_enabled:
+        if not settings.rate_limit_enabled and not self.always_enforced:
             return
         limiter = SlidingWindowRateLimiter(
             _RedisRateLimitStore(get_redis()), limit=self.limit, window_seconds=self.window_seconds
@@ -715,8 +718,6 @@ class RefreshRateLimitDependency:
 
     async def __call__(self, request: Request) -> None:
         settings = get_settings()
-        if not settings.rate_limit_enabled:
-            return
         raw_token = request.cookies.get(settings.refresh_cookie_name, "")
         if not raw_token:
             return  # endpoint rejects with 401 anyway
@@ -735,12 +736,18 @@ class RefreshRateLimitDependency:
 
 
 # Per-endpoint limits (Phase 2 auth abuse protection, ADR-004).
-register_limiter = RateLimitDependency(limit=10, window_seconds=3600)
-login_limiter = RateLimitDependency(limit=20, window_seconds=900)
-verify_email_limiter = RateLimitDependency(limit=10, window_seconds=3600)
-resend_verification_limiter = RateLimitDependency(limit=5, window_seconds=3600)
-forgot_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
-reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600)
+# Auth/credential endpoints are `always_enforced`: they stay rate-limited (and
+# fail closed) even when `RATE_LIMIT_ENABLED=false`, so a dev/testing switch
+# can never silently disarm login brute-force protection. Non-auth endpoints
+# below respect the master switch.
+register_limiter = RateLimitDependency(limit=10, window_seconds=3600, always_enforced=True)
+login_limiter = RateLimitDependency(limit=20, window_seconds=900, always_enforced=True)
+verify_email_limiter = RateLimitDependency(limit=10, window_seconds=3600, always_enforced=True)
+resend_verification_limiter = RateLimitDependency(
+    limit=5, window_seconds=3600, always_enforced=True
+)
+forgot_password_limiter = RateLimitDependency(limit=5, window_seconds=3600, always_enforced=True)
+reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600, always_enforced=True)
 # Phase 3 website-management abuse protection (create/update/delete/list/get).
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).

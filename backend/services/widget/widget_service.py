@@ -21,12 +21,14 @@ from typing import Protocol
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     MessageLimitReachedError,
+    ServiceUnavailableError,
     SessionNotFoundError,
     WebsiteNotReadyError,
     WidgetDisabledError,
     WidgetDomainNotConfiguredError,
     WidgetNotFoundError,
     WidgetOriginNotAllowedError,
+    capture_exception,
 )
 from backend.core.security import create_widget_session_token, utcnow
 from backend.models.chat_session import ChatSession
@@ -251,10 +253,33 @@ class WidgetService:
                 self._settings.widget_session_validity_hours * _VALIDITY_SECONDS_MULTIPLIER,
                 "1",
             )
-        except Exception:
-            # Validity window is a soft ceiling; a Redis hiccup must not block
-            # legitimate visitors from minting a token.
-            logger.warning("widget session validity window refresh failed")
+        except Exception as exc:
+            # Security: fail closed. A Redis outage must never mint a session
+            # token that cannot be bound to its sliding validity window. Log
+            # the failure (with a monitored marker) and surface a controlled,
+            # generic error -- never the internal Redis exception.
+            logger.error(
+                "widget session validity window refresh failed; refusing to mint session",
+                exc_info=True,
+                extra={
+                    "widget_id": widget_id,
+                    "visitor_id": visitor_id,
+                    "redis_auth_failure": True,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            capture_exception(
+                exc,
+                context={
+                    "widget_id": widget_id,
+                    "visitor_id": visitor_id,
+                    "stage": "widget_session_validity",
+                    "redis_auth_failure": True,
+                },
+            )
+            raise ServiceUnavailableError(
+                "Session service is temporarily unavailable. Please try again."
+            ) from exc
 
         token, ttl_s = create_widget_session_token(
             widget_id=widget.widget_id,

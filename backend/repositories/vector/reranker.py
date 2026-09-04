@@ -8,6 +8,17 @@ calls.  This is the optimized P0 path: no embedding API calls are made
 during reranking.
 
 The reranker is opt-in via ``enable_reranking`` in ``backend.core.config``.
+
+Reranking is lexical-aware: cosine similarity remains the primary ranking
+signal and the returned score (so ``CHAT_CONTEXT_MIN_SCORE`` semantics are
+unchanged), but a candidate containing every content token of the query
+(a strong keyword/entity match such as "chairperson" or "dean of SOIT")
+is guaranteed a slot in the top-k output, so such a match cannot be
+discarded solely because its stored embedding is semantically far from the
+query.  For these protected candidates the upstream lexical/RRF evidence is
+carried through on ``VectorSearchResult.lexical_score`` so downstream
+score-type-aware gating (not the cosine threshold) can accept genuinely
+strong lexical evidence.
 """
 
 from __future__ import annotations
@@ -19,6 +30,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from backend.repositories.vector.base import VectorSearchResult
+from backend.repositories.vector.hybrid import tokenize
 
 logger = logging.getLogger("webchat_ai")
 
@@ -113,26 +125,18 @@ class EmbeddingReranker:
         # Fast path: use precomputed query embedding + stored chunk embeddings.
         if query_embedding is not None:
             rerank_embedding_ms = 0.0
-            scored: list[tuple[float, int]] = []
+            query_tokens = tokenize(query)
+            scored: list[tuple[float, int, bool]] = []
             for idx, candidate in enumerate(candidates):
                 chunk_emb = candidate.chunk.embedding
                 if not chunk_emb:
-                    scored.append((0.0, idx))
+                    scored.append((0.0, idx, False))
                     continue
                 sim = _cosine_similarity(query_embedding, chunk_emb)
-                scored.append((sim, idx))
+                strong = _strong_lexical_match(query_tokens, candidate.chunk.chunk_text)
+                scored.append((sim, idx, strong))
 
-            scored.sort(key=lambda x: x[0], reverse=True)
-
-            reranked: list[VectorSearchResult] = []
-            for sim, orig_idx in scored[:limit]:
-                original = candidates[orig_idx]
-                reranked.append(
-                    VectorSearchResult(
-                        chunk=original.chunk,
-                        score=round(sim, 4),
-                    )
-                )
+            reranked = _select_top_k(scored, limit, candidates)
 
             _log_rerank_after(query, reranked)
             return reranked, RerankMetrics(
@@ -175,22 +179,14 @@ class EmbeddingReranker:
         query_vec = embeddings[0]
         chunk_vecs = embeddings[1:]
 
-        scored_legacy: list[tuple[float, int]] = []
+        query_tokens = tokenize(query)
+        scored_legacy: list[tuple[float, int, bool]] = []
         for idx, chunk_vec in enumerate(chunk_vecs):
             sim = _cosine_similarity(query_vec, chunk_vec)
-            scored_legacy.append((sim, idx))
+            strong = _strong_lexical_match(query_tokens, candidates[idx].chunk.chunk_text)
+            scored_legacy.append((sim, idx, strong))
 
-        scored_legacy.sort(key=lambda x: x[0], reverse=True)
-
-        reranked_legacy: list[VectorSearchResult] = []
-        for sim, orig_idx in scored_legacy[:limit]:
-            original = candidates[orig_idx]
-            reranked_legacy.append(
-                VectorSearchResult(
-                    chunk=original.chunk,
-                    score=round(sim, 4),
-                )
-            )
+        reranked_legacy = _select_top_k(scored_legacy, limit, candidates)
 
         _log_rerank_after(query, reranked_legacy)
         return reranked_legacy, RerankMetrics(
@@ -227,10 +223,60 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
         return 0.0
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
+    norm_b = math.sqrt(sum(y * y for y in b))
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _strong_lexical_match(query_tokens: list[str], chunk_text: str) -> bool:
+    """True when a chunk contains every content token of the query.
+
+    A lexical/entity match (e.g. "chairperson", "dean", "SOIT") that appears
+    verbatim in a chunk is a strong, exact signal independent of embedding
+    similarity. Pure-cosine reranking can wrongly discard such a chunk when
+    its stored embedding is semantically far from the query (which is why the
+    vector stage missed it). Protecting these matches ensures they are not
+    dropped solely because their cosine is low.
+    """
+    if not query_tokens:
+        return False
+    text_tokens = set(tokenize(chunk_text))
+    return all(token in text_tokens for token in query_tokens)
+
+
+def _select_top_k(
+    scored: list[tuple[float, int, bool]],
+    limit: int,
+    candidates: list[VectorSearchResult],
+) -> list[VectorSearchResult]:
+    """Pick the top-k candidates without discarding strong lexical matches.
+
+    ``scored`` holds ``(cosine, index, strong_lexical)`` tuples. The primary
+    ranking is still cosine (unchanged semantics); strong lexical matches are
+    simply guaranteed a slot in the output so an exact entity match cannot be
+    trimmed purely by low embedding similarity. The returned ``score`` stays
+    the true cosine, so ``CHAT_CONTEXT_MIN_SCORE`` filtering is unaffected.
+
+    Lexical/RRF evidence is carried through only for candidates that are both
+    strong lexical matches AND were actually retrieved by the keyword pass
+    (``lexical_score`` already set upstream). Unprotected candidates have
+    ``lexical_score`` cleared, so a below-threshold chunk can never qualify
+    for lexical evidence unless it is a genuine strong lexical match.
+    """
+    protected = sorted((s for s in scored if s[2]), key=lambda x: x[0], reverse=True)
+    unprotected = sorted((s for s in scored if not s[2]), key=lambda x: x[0], reverse=True)
+    ordered = protected + unprotected
+    return [
+        VectorSearchResult(
+            chunk=candidates[idx].chunk,
+            score=round(sim, 4),
+            lexical_score=candidates[idx].lexical_score if _protected else None,
+            dense_score=round(sim, 4),
+            lexical_exact=_protected and candidates[idx].lexical_score is not None,
+        )
+        for sim, idx, _protected in ordered[:limit]
+    ]
 
 
 __all__ = ["EmbeddingReranker", "RerankMetrics"]

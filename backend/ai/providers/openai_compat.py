@@ -11,6 +11,7 @@ application error taxonomy (`backend/core/errors.py`) so no SDK error ever
 escapes the AI layer (00 rules §18).
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
@@ -109,6 +110,43 @@ async def iter_openai_sse(
         yield delta, usage if isinstance(usage, dict) else None
 
 
+async def iter_openai_first_token_guarded(
+    response: httpx.Response,
+    *,
+    first_token_timeout_seconds: float,
+) -> AsyncIterator[tuple[str | None, dict[str, Any] | None]]:
+    """Yield SSE tuples; the FIRST item must arrive within the first-token
+    timeout (Phase 3 latency audit).
+
+    Mirrors ``GoogleGeminiClient``: an upstream that accepts the connection but
+    never returns a first content delta fails fast with
+    ``GenerationUnavailableError`` instead of blocking the request for the full
+    provider timeout (which is 60s today, i.e. a silent multi-tens-of-seconds
+    wait before any token is visible to the user). The fallback chain then
+    moves on promptly instead of leaving the visitor staring at a spinner.
+    """
+    iterator = iter_openai_sse(response)
+    first = True
+    while True:
+        try:
+            if first:
+                try:
+                    item = await asyncio.wait_for(
+                        iterator.__anext__(), timeout=first_token_timeout_seconds
+                    )
+                except TimeoutError as exc:
+                    raise GenerationUnavailableError(
+                        "Provider did not produce a first token within "
+                        f"{first_token_timeout_seconds}s."
+                    ) from exc
+                first = False
+            else:
+                item = await iterator.__anext__()
+        except StopAsyncIteration:
+            return
+        yield item
+
+
 def map_openai_http_error(status: int, provider_name: str) -> AppError:
     """Map an upstream HTTP status onto the app error taxonomy.
 
@@ -127,6 +165,7 @@ def map_openai_http_error(status: int, provider_name: str) -> AppError:
 
 __all__ = [
     "build_chat_payload",
+    "iter_openai_first_token_guarded",
     "iter_openai_sse",
     "map_openai_http_error",
     "shared_http_client",

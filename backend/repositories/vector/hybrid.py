@@ -1,9 +1,9 @@
 """Hybrid search: vector similarity + keyword relevance via Reciprocal Rank Fusion.
 
 Combines the strengths of semantic vector search (understanding meaning) with
-keyword matching (exact term hits) using RRF.  The current vector-only path
-remains the default — hybrid search is opt-in and available as an alternative
-ranking strategy for benchmarking and evaluation.
+keyword matching (exact term hits) using RRF.  Hybrid search is the deployed
+default ranking strategy (``enable_hybrid_search`` defaults to ``True``); the
+vector-only path remains available when that flag is disabled.
 
 References
 ----------
@@ -238,7 +238,9 @@ def keyword_search(
                 score += text_freq[qt] / math.sqrt(len(text_tokens))
         scored.append((score, result))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Stable tie breaking matters because RRF consumes rank positions.  Mongo
+    # corpus order must never decide which equal lexical candidate wins.
+    scored.sort(key=lambda item: (-item[0], item[1].chunk.id))
     return [VectorSearchResult(chunk=r.chunk, score=s) for s, r in scored[:top_k] if s > 0.0]
 
 
@@ -262,8 +264,10 @@ class HybridSearcher:
     """Orchestrates vector + keyword search with RRF fusion.
 
     Wraps any ``VectorRepository``-like object (protocol-compatible) and adds
-    keyword ranking on top of the supplied vector results. It does not perform
-    a second retrieval over the website's full chunk set.
+    keyword ranking as a genuine second retrieval source. When a full corpus
+    is supplied via ``all_chunks``, keyword scoring runs over that corpus so
+    exact-term matches absent from the vector results can still be recovered;
+    otherwise it falls back to scoring the supplied vector results.
 
     Attributes
     ----------
@@ -271,10 +275,14 @@ class HybridSearcher:
         RRF constant (default 60).
     keyword_weight:
         Multiplier applied to keyword scores before fusion (1.0 = equal weight).
+    keyword_top_k:
+        Maximum number of keyword candidates fed into the RRF fusion
+        (the keyword retrieval/output limit; not a corpus truncation).
     """
 
     rrf_k: int = DEFAULT_RRF_K
     keyword_weight: float = 1.0
+    keyword_top_k: int = 50
 
     def search(
         self,
@@ -283,6 +291,7 @@ class HybridSearcher:
         all_chunks: list[VectorSearchResult] | None = None,
         *,
         top_k: int = 5,
+        candidate_top_k: int | None = None,
     ) -> list[HybridSearchResult]:
         """Run hybrid search combining vector and keyword rankings.
 
@@ -293,20 +302,30 @@ class HybridSearcher:
         vector_results:
             Pre-computed vector search results (the current pipeline output).
         all_chunks:
-            Deprecated compatibility parameter. Keyword scoring is always
-            restricted to ``vector_results``.
+            Optional full website corpus for keyword retrieval. When provided,
+            keyword scoring is a true second retrieval source over the whole
+            corpus (recovering exact-term matches the vector stage missed).
+            When ``None``, keyword scoring falls back to ``vector_results``.
         top_k:
-            Maximum results to return.
+            Maximum results to return from the fused ranking.
+        candidate_top_k:
+            Optional larger RRF candidate pool size. A downstream reranker
+            selects the final ``top_k`` from this pool, so keyword-only chunks
+            ranked beyond ``top_k`` by RRF still reach the reranker instead of
+            being discarded pre-rerank. Defaults to ``top_k`` when ``None``.
 
         Returns
         -------
         list[HybridSearchResult]
-            Top-k results sorted by descending RRF score with per-source rank info.
+            Up to ``candidate_top_k`` results sorted by descending RRF score
+            with per-source rank info.
         """
-        # Keyword matching is a reranking signal, not a second retrieval
-        # source. Restricting it to vector hits prevents generic exact-term
-        # matches elsewhere in the website from entering the result set.
-        kw_results = keyword_search(query, vector_results, top_k=top_k)
+        # Keyword is a genuine second retrieval source over the website's full
+        # corpus, not a rerank of the vector hits alone. This lets exact-term
+        # matches that the vector stage missed (e.g. rare acronyms/names) enter
+        # the fused result set.
+        kw_corpus = all_chunks if all_chunks else vector_results
+        kw_results = keyword_search(query, kw_corpus, top_k=self.keyword_top_k)
 
         # Build rank maps (1-indexed)
         vector_ranks: dict[str, int] = {
@@ -319,6 +338,11 @@ class HybridSearcher:
             [vector_results, kw_results],
             k=self.rrf_k,
         )
+
+        # Keep a larger RRF pool when requested (e.g. before a downstream
+        # reranker) so keyword-only exact matches ranked below ``top_k`` are
+        # not prematurely discarded. Falls back to ``top_k`` when unset.
+        pool = candidate_top_k if candidate_top_k is not None else top_k
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -335,7 +359,7 @@ class HybridSearcher:
                 keyword_rank=keyword_ranks.get(result.chunk.id, 0),
                 rrf_score=result.score,
             )
-            for result in fused[:top_k]
+            for result in fused[:pool]
         ]
 
 

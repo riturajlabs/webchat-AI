@@ -14,15 +14,18 @@ import asyncio
 import hashlib
 import logging
 import random
+import re
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Protocol
 
 from backend.core.config import get_settings
 from backend.core.embedding_identity import EmbeddingIdentity, ensure_embedding_compatibility
 from backend.core.errors import (
     EmbeddingError,
+    EmbeddingRateLimitedError,
     EmbeddingUnavailableError,
 )
 from backend.services.knowledge.chunker import count_tokens
@@ -33,6 +36,189 @@ logger = logging.getLogger("webchat_ai")
 # vector). Purely in-memory on the client instance - no storage architecture
 # change - bounded so long-running workers cannot grow it without limit.
 _MEMO_MAX_ENTRIES = 1024
+
+# HTTP / GenAI status codes used to classify embedding failures as retryable
+# (temporary provider throttling/availability) vs permanent (client error).
+_HTTP_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
+_HTTP_PERMANENT_STATUSES = frozenset({400, 401, 403, 404})
+
+# Providers encode a retry hint in the error message when no Retry-After header
+# is present (Google GenAI: `Please retry in 23.11s` / `RetryInfo.retryDelay`).
+# ING-02: honor those hints so retries wait for the provider instead of
+# hammering an already-throttled quota window (which tripped the shared
+# provider circuit breakers during the live E2E).
+_RETRY_IN_MSG = re.compile(r"please\s+retry\s+in\s+(\d+(?:[.,]\d+)?)\s*s", re.IGNORECASE)
+_RETRY_DELAY_MSG = re.compile(
+    r"retry\s*delay\s*['\"]?\s*[:=]\s*['\"]?(\d+(?:[.,]\d+)?)\s*s['\"]?", re.IGNORECASE
+)
+# Upper bound on a message-hint wait: any provider asking for more is capped so
+# a single document retry cannot stall the whole ingestion pipeline for minutes.
+_MAX_RETRY_HINT_SECONDS = 300.0
+
+
+class _EmbeddingPacer:
+    """Process-wide concurrency ceiling on embedding batch requests (ING-02).
+
+    ARQ may run several `process_document` jobs concurrently (`max_jobs=10`);
+    without a shared gate they can all open embedding requests at once and
+    exhaust the provider's per-minute embed quota (the observed 429 storm).
+    This pacer is module-level and lazily built, so every `GoogleEmbeddingClient`
+    in a worker process (production and test) contends on the same bounded
+    gate. It only caps how many batches are *in flight*; it does not serialize
+    the whole ingestion pipeline (each document still runs independently and
+    batches inside a document still pipeline).
+    """
+
+    def __init__(self, limit: int) -> None:
+        self._limit = max(1, limit)
+        # Async primitives bind to the running event loop at creation. Tests run
+        # each case on a fresh loop, so (re)build the semaphore lazily, once per
+        # loop, keeping concurrency bounded within whatever loop is active.
+        self._sem: asyncio.Semaphore | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+
+    async def __aenter__(self) -> "_EmbeddingPacer":
+        loop = asyncio.get_running_loop()
+        if self._sem is None or self._loop is not loop:
+            self._sem = asyncio.Semaphore(self._limit)
+            self._loop = loop
+        await self._sem.acquire()
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        assert self._sem is not None
+        self._sem.release()
+
+
+_pacer: _EmbeddingPacer | None = None
+
+
+def _get_pacer() -> _EmbeddingPacer:
+    global _pacer
+    if _pacer is None:
+        _pacer = _EmbeddingPacer(get_settings().embedding_max_concurrent_batches)
+    return _pacer
+
+
+class _RateLimitReason(Enum):
+    NONE = "none"
+    RETRY_AFTER = "retry_after"
+    BACKOFF = "backoff"
+    PERMANENT = "permanent"
+
+
+def _extract_status(exc: Exception) -> int | None:
+    """Best-effort HTTP/Gemini status code from an embedding exception.
+
+    `google.genai.errors.ClientError`/`ServerError` carry an `httpx.Response`
+    (or `requests.Response`); the GenAI SDK may also expose a `.status`. A plain
+    `httpx.HTTPStatusError` is handled too. Returns None when no status is
+    available (e.g. a timeout/transport error).
+    """
+    status = getattr(exc, "status", None)
+    if isinstance(status, int):
+        return status
+    response = getattr(exc, "response", None)
+    if response is not None:
+        code = getattr(response, "status_code", None)
+        if isinstance(code, int):
+            return code
+        status_code = getattr(response, "status", None)
+        if isinstance(status_code, int):
+            return status_code
+    return None
+
+
+def _extract_retry_after(exc: Exception) -> float | None:
+    """Seconds until the provider will accept requests again (Retry-After).
+
+    Prefers the HTTP `Retry-After` header from any exception carrying a
+    response; falls back to a numeric `Retry-After`/`X-RateLimit-Reset`-style
+    hint on the exception itself; finally scans the message text for a provider
+    retry hint ("Please retry in 23s", `retryDelay: '23s'` — Google GenAI does
+    not emit a Retry-After header). Returns None when the provider gave no
+    retry-after information.
+    """
+    response = getattr(exc, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            try:
+                value = headers.get("Retry-After") or headers.get("retry-after")
+                if value is not None:
+                    return max(0.0, float(value))
+            except (TypeError, ValueError):
+                pass
+    for attr in ("retry_after", "Retry-After", "X-RateLimit-Reset"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            try:
+                return max(0.0, float(value))
+            except (TypeError, ValueError):
+                pass
+    message = f"{type(exc).__name__}: {exc}"
+    for pattern in (_RETRY_IN_MSG, _RETRY_DELAY_MSG):
+        match = pattern.search(message)
+        if match is None:
+            continue
+        try:
+            value = max(0.0, float(match.group(1).replace(",", ".")))
+        except ValueError:
+            continue
+        return min(value, _MAX_RETRY_HINT_SECONDS)
+    return None
+
+
+def _rate_limit_reason(exc: Exception) -> _RateLimitReason:
+    """Classify an embedding exception into a retry/backoff decision."""
+    status = _extract_status(exc)
+    if status is not None:
+        if status in _HTTP_PERMANENT_STATUSES:
+            # 400/401/403/404: invalid request / auth / not-found. Retrying
+            # cannot fix it — fail fast (normal failure handling, PART D).
+            return _RateLimitReason.PERMANENT
+        if status in _HTTP_RETRYABLE_STATUSES:
+            return (
+                _RateLimitReason.RETRY_AFTER
+                if _extract_retry_after(exc) is not None
+                else _RateLimitReason.BACKOFF
+            )
+    # Rate-limit text hints (e.g. "quota" / "RESOURCE_EXHAUSTED" / "429" in a
+    # message) with no parseable numeric status still retry with backoff.
+    message = f"{type(exc).__name__}: {exc}".lower()
+    if any(hint in message for hint in ("429", "resource_exhausted", "rate limit", "quota")):
+        return (
+            _RateLimitReason.RETRY_AFTER
+            if _extract_retry_after(exc) is not None
+            else _RateLimitReason.BACKOFF
+        )
+    # Timeouts / transport / 5xx without a header: transient, retry with backoff.
+    if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+        return _RateLimitReason.BACKOFF
+    return _RateLimitReason.BACKOFF
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """True when the failure is a provider quota/rate-limit rejection (429 or a
+    quota text hint with no numeric status). Used to lift the failure into
+    `EmbeddingRateLimitedError` so ingestion can record the document as
+    temporarily rate-limited (Part E/ING-02).
+    """
+    status = _extract_status(exc)
+    if status == 429:
+        return True
+    if status in _HTTP_RETRYABLE_STATUSES or status in _HTTP_PERMANENT_STATUSES:
+        # Any other concrete HTTP status (5xx timeout-ish, 4xx bad request) is
+        # NOT a quota rejection: retry with backoff or fail as permanent.
+        return False
+    message = f"{type(exc).__name__}: {exc}".lower()
+    return any(hint in message for hint in ("429", "resource_exhausted", "rate limit", "quota"))
+
+
+def _cap_backoff(base_delay_ms: int, attempt: int) -> int:
+    """Exponential cap with full jitter: base * 2^attempt * [0,1)."""
+    cap = base_delay_ms * (2**attempt)
+    return int(random.uniform(0, cap)) if cap > 0 else 0
 
 
 def ensure_vector_dimensions(
@@ -82,6 +268,12 @@ class EmbeddingClient(Protocol):
 
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 
+    async def health(self) -> bool:
+        """Cheap readiness probe: configured and believed usable. Never raises
+        and never makes a paid embedding request (a live probe during a fan-out
+        would burn the very quota a 429 is throttling)."""
+        ...
+
 
 class GoogleEmbeddingClient:
     """`gemini-embedding-001` via the Google GenAI async SDK."""
@@ -99,6 +291,7 @@ class GoogleEmbeddingClient:
         dimensions: int | None = None,
         on_usage: Callable[[EmbeddingUsage], None] | None = None,
         genai_client: Any | None = None,
+        pacer: "_EmbeddingPacer | None" = None,
     ) -> None:
         settings = get_settings()
         self._model = model or settings.embedding_model
@@ -107,6 +300,7 @@ class GoogleEmbeddingClient:
             max_retries if max_retries is not None else settings.embedding_max_retries
         )
         self._base_delay_ms = base_delay_ms or settings.embedding_retry_base_delay_ms
+        self._pacer_override = pacer
         self._timeout_seconds = (
             timeout_seconds
             if timeout_seconds is not None
@@ -151,6 +345,13 @@ class GoogleEmbeddingClient:
             dimensions=self._dimensions,
             version=getattr(get_settings(), "embedding_version", "1"),
         )
+
+    async def health(self) -> bool:
+        """Cheap readiness probe: the required API key is configured. We avoid
+        a live embed (it would consume the free-tier quota a 429 is throttling);
+        the key-presence check matches how `build_embedding_chain` gates the
+        provider at selection time."""
+        return bool(get_settings().gemini_api_key)
 
     def _client(self) -> Any:
         """Lazily build the SDK client (never touches network until first call)."""
@@ -210,42 +411,62 @@ class GoogleEmbeddingClient:
         last_error: Exception | None = None
         batch_characters = sum(len(text) for text in batch)
         batch_tokens = sum(count_tokens(text) for text in batch)
-        for attempt in range(self._max_retries):
-            try:
-                # Truncate Gemini's output to EMBEDDING_DIMENSIONS so every
-                # provider in the fallback chain emits the same vector length
-                # (the MongoDB index dimension). gemini-embedding-001 supports
-                # 1..3072 dimensions; the default 3072 is sent only implicitly
-                # (omitted) so existing 3072-index deployments see no change.
-                config: dict[str, int] | None = None
-                if self._dimensions and self._dimensions != 3072:
-                    config = {"output_dimensionality": self._dimensions}
-                vectors = await asyncio.wait_for(
-                    self._client().aio.models.embed_content(
-                        model=self._model, contents=batch, config=config
-                    ),
-                    timeout=self._timeout_seconds,
-                )
-                parsed = self._parse_response(vectors, len(batch))
-                self._record_usage(1, batch_characters, batch_tokens)
-                return parsed
-            except EmbeddingUnavailableError:
-                # Configuration error (e.g. missing API key): fail fast, no
-                # retries or backoff - retrying cannot fix a bad config.
-                raise
-            except Exception as exc:  # noqa: BLE001 - normalized below
-                last_error = exc
-                if attempt < self._max_retries - 1:
-                    delay = self._backoff_ms(attempt) / 1000.0
-                    logger.warning(
-                        "embedding batch failed (attempt %s/%s): %s; retrying in %.2fs",
-                        attempt + 1,
-                        self._max_retries,
-                        exc,
-                        delay,
+        # ING-02: bound concurrent embedding across the whole worker process
+        # before opening the request, so a fan-out cannot saturate the provider.
+        async with self._pacer():
+            for attempt in range(self._max_retries):
+                try:
+                    # Truncate Gemini's output to EMBEDDING_DIMENSIONS so every
+                    # provider in the fallback chain emits the same vector length
+                    # (the MongoDB index dimension). gemini-embedding-001 supports
+                    # 1..3072 dimensions; the default 3072 is sent only implicitly
+                    # (omitted) so existing 3072-index deployments see no change.
+                    config: dict[str, int] | None = None
+                    if self._dimensions and self._dimensions != 3072:
+                        config = {"output_dimensionality": self._dimensions}
+                    vectors = await asyncio.wait_for(
+                        self._client().aio.models.embed_content(
+                            model=self._model, contents=batch, config=config
+                        ),
+                        timeout=self._timeout_seconds,
                     )
-                    await asyncio.sleep(delay)
+                    parsed = self._parse_response(vectors, len(batch))
+                    self._record_usage(1, batch_characters, batch_tokens)
+                    return parsed
+                except EmbeddingUnavailableError:
+                    # Configuration error (e.g. missing API key): fail fast, no
+                    # retries or backoff - retrying cannot fix a bad config.
+                    raise
+                except Exception as exc:  # noqa: BLE001 - normalized below
+                    last_error = exc
+                    reason = _rate_limit_reason(exc)
+                    if reason == _RateLimitReason.PERMANENT:
+                        # 400/404 etc: the request can never succeed; give up
+                        # immediately (no backoff budget burned on a bad request).
+                        raise EmbeddingUnavailableError(
+                            f"Embedding request rejected (permanent provider error): {exc}"
+                        ) from exc
+                    if attempt < self._max_retries - 1:
+                        delay = self._backoff_delay(exc, attempt)
+                        pace = (
+                            " (Respect Retry-After)"
+                            if reason == _RateLimitReason.RETRY_AFTER
+                            else ""
+                        )
+                        logger.warning(
+                            "embedding batch failed (attempt %s/%s): %s; retrying in %.2fs%s",
+                            attempt + 1,
+                            self._max_retries,
+                            exc,
+                            delay,
+                            pace,
+                        )
+                        await asyncio.sleep(delay)
         self._record_usage(0, 0, 0, failures=1)
+        if last_error is not None and _is_rate_limited(last_error):
+            raise EmbeddingRateLimitedError(
+                f"Embedding request rate-limited after {self._max_retries} attempts: {last_error}"
+            ) from last_error
         raise EmbeddingError(
             f"Embedding request failed after {self._max_retries} attempts: {last_error}"
         )
@@ -284,10 +505,23 @@ class GoogleEmbeddingClient:
         if self._on_usage is not None:
             self._on_usage(self._usage)
 
-    def _backoff_ms(self, attempt: int) -> int:
-        """Exponential backoff with full jitter (base * 2^attempt * [0,1))."""
-        cap = self._base_delay_ms * (2**attempt)
-        return int(random.uniform(0, cap)) if cap > 0 else 0
+    def _backoff_delay(self, exc: Exception, attempt: int) -> float:
+        """Delay before the next retry in seconds.
+
+        If the provider returned Retry-After (header, attribute, or an explicit
+        retry hint in the message text), respect it (plus a small jittered
+        headroom) instead of guessing. Otherwise use the existing exponential
+        backoff with full jitter (`base * 2^attempt * [0,1)`), so a 429 with no
+        hint is still paced and a transient timeout uses the same schedule.
+        """
+        retry_after = _extract_retry_after(exc)
+        if retry_after is not None:
+            return retry_after + random.uniform(0, self._base_delay_ms / 1000.0)
+        return _cap_backoff(self._base_delay_ms, attempt) / 1000.0
+
+    def _pacer(self) -> _EmbeddingPacer:
+        """Process-wide bounded concurrency gate; tests may inject an override."""
+        return self._pacer_override or _get_pacer()
 
 
 __all__ = [

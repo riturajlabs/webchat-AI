@@ -119,7 +119,11 @@ def _seed_document(
     retry_count: int = 1,
 ) -> str:
     from backend.models.document import Document
-    from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED, KNOWLEDGE_STATUS_READY
+    from backend.models.knowledge_chunk import (
+        KNOWLEDGE_STATUS_FAILED,
+        KNOWLEDGE_STATUS_RATE_LIMITED,
+        KNOWLEDGE_STATUS_READY,
+    )
 
     document = Document.new(
         tenant_id=tenant_id,
@@ -130,9 +134,19 @@ def _seed_document(
         checksum="abc123",
     )
     document.knowledge_status = (
-        KNOWLEDGE_STATUS_READY if status == "ready" else KNOWLEDGE_STATUS_FAILED
+        KNOWLEDGE_STATUS_READY
+        if status == "ready"
+        else KNOWLEDGE_STATUS_RATE_LIMITED
+        if status == "rate_limited"
+        else KNOWLEDGE_STATUS_FAILED
     )
-    document.knowledge_failure_reason = failure_reason if status == "failed" else None
+    document.knowledge_failure_reason = (
+        failure_reason
+        if status == "failed"
+        else "EmbeddingRateLimitedError: quota exceeded"
+        if status == "rate_limited"
+        else None
+    )
     document.knowledge_retry_count = retry_count
     document.knowledge_chunks = 5 if status == "ready" else 0
     env.documents._documents[document.id] = document
@@ -169,6 +183,7 @@ def test_list_knowledge_documents_endpoint(client) -> None:
         "processing": 0,
         "completed": 1,
         "failed": 1,
+        "rate_limited": 0,
     }
     assert len(payload["documents"]) == 2
     failed = next(d for d in payload["documents"] if d["status"] == "failed")
@@ -177,6 +192,47 @@ def test_list_knowledge_documents_endpoint(client) -> None:
     assert failed["retry_count"] == 1
     assert failed["last_attempt_at"] is None
     assert failed["chunks"] == 0
+
+
+def test_list_knowledge_documents_counts_rate_limited_separately(client) -> None:
+    """Part E: a temporarily rate-limited document is surfaced in its own
+    summary bucket and as a distinct per-document status, not as `failed`."""
+    test_client, env, _ = client
+    headers, tenant_id = _register(test_client)
+    _seed_website(env, tenant_id=tenant_id, website_id="site-a")
+    _seed_document(
+        env,
+        tenant_id=tenant_id,
+        website_id="site-a",
+        url="https://acme.example/",
+        status="ready",
+    )
+    _seed_document(
+        env,
+        tenant_id=tenant_id,
+        website_id="site-a",
+        url="https://acme.example/throttled",
+        status="rate_limited",
+        retry_count=1,
+    )
+    _seed_document(
+        env,
+        tenant_id=tenant_id,
+        website_id="site-a",
+        url="https://acme.example/fail",
+        status="failed",
+    )
+
+    response = test_client.get("/api/knowledge/websites/site-a/documents", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["rate_limited"] == 1
+    assert payload["summary"]["failed"] == 1
+    rate_limited = next(d for d in payload["documents"] if d["status"] == "rate_limited")
+    assert rate_limited["url"] == "https://acme.example/throttled"
+    assert rate_limited["failure_reason"] == "EmbeddingRateLimitedError: quota exceeded"
+    assert rate_limited["retry_count"] == 1
 
 
 def test_list_knowledge_documents_unknown_website_404(client) -> None:

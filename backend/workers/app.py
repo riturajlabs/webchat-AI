@@ -17,7 +17,8 @@ from arq.connections import RedisSettings
 from backend.ai.registry import build_ingestion_embedding_client
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
-from backend.core.redis import close_redis
+from backend.core.redis import close_redis, get_redis
+from backend.services.ai.provider_health import ProviderHealthStore
 from backend.services.ingestion.browser import close_browser
 from backend.workers import tasks
 
@@ -37,6 +38,9 @@ async def startup(ctx: dict[str, Any]) -> None:
     # retries + document-level backoff); exhausted retries quarantine the
     # document instead of writing foreign-space vectors.
     ctx["embedding_client"] = build_ingestion_embedding_client()
+    # Kept separate from generation health: an embedding quota cooldown must
+    # not change LLM routing for the same provider.
+    ctx["embedding_provider_health"] = ProviderHealthStore(get_redis())
 
 
 async def _close_async(resource: str, closer: Callable[[], Awaitable[None]]) -> None:

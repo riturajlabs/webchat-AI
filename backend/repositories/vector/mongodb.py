@@ -45,6 +45,18 @@ class MongoVectorRepository(VectorRepository):
         self._search_supported: bool | None = None
 
     async def insert_chunks(self, chunks: list[KnowledgeChunk]) -> int:
+        """Upsert/insert knowledge chunks (idempotent on the document key).
+
+        Embedding-identity safety: this upsert intentionally does NOT re-assert
+        the embedding identity on the composite key. It depends on the earlier
+        per-website processor guard (see ``KnowledgeProcessor._acquire_embedding_run``
+        / ``_persist_ingestion_lock`` and ``ensure_embedding_compatibility``),
+        which locks the whole website to a single embedding identity and rejects
+        incompatible runs before any chunk is written. Re-asserting identity
+        here would repeat that check on every chunk write; the processor ordering
+        guarantee is what prevents a mixed-identity corpus. If that guard is ever
+        reordered, identity must be enforced here too.
+        """
         if not chunks:
             return 0
         inserted = 0
@@ -67,6 +79,29 @@ class MongoVectorRepository(VectorRepository):
                 # DuplicateKeyError race: another job processed this chunk
                 # first; a plain update converges to the same content.
                 await self._collection.update_one(query, {"$set": payload}, upsert=False)
+        return inserted
+
+    async def replace_by_document(
+        self, tenant_id: str, document_id: str, chunks: list[KnowledgeChunk]
+    ) -> int:
+        """Insert-first, delete-stale replacement for one document (P1 safe).
+
+        New chunks are upserted on the unique (tenant, website, document,
+        chunk_index) key before any delete runs, so a failure mid-replacement
+        leaves the document with its previous chunks (or a superset) - never
+        zero. Only after the new chunks are stored are the document's stale
+        chunk indexes (the old indexes no longer produced) removed.
+        """
+        inserted = await self.insert_chunks(chunks)
+        if not chunks:
+            return inserted
+        new_indexes = {chunk.chunk_index for chunk in chunks}
+        request_filter = {
+            "tenant_id": tenant_id,
+            "document_id": document_id,
+            "chunk_index": {"$nin": list(new_indexes)},
+        }
+        await self._collection.delete_many(request_filter)
         return inserted
 
     async def delete_by_document(self, tenant_id: str, document_id: str) -> int:
@@ -95,16 +130,46 @@ class MongoVectorRepository(VectorRepository):
     ) -> list[KnowledgeChunk]:
         """Like :pymeth:`list_chunks` but excludes embedding vectors.
 
-        .. deprecated::
-            This method is **dead code** — no production code path calls it.
-            Keyword scoring was refactored to operate on vector-search results
-            only, making the lightweight chunk load unnecessary.  Retained for
-            potential future use and for test coverage.
+        Used by the hybrid keyword corpus load in ``RagService._load_all_chunks``:
+        keyword scoring consumes only chunk text/metadata, so we keep every
+        non-embedding field (id, chunk_text, metadata, document_id, created_at,
+        etc.) while dropping the ``embedding`` payload.  This removes a large
+        vector transfer (2162 chunks × 1024 dims ≈ 25–33 s on production)
+        at no cost to keyword/hybrid retrieval correctness.
         """
         query = {"tenant_id": tenant_id, "website_id": website_id}
-        cursor = self._collection.find(query, {"embedding": 0})
+        # A lexical corpus must be repeatable: natural Mongo collection order
+        # changes as documents are inserted/rebuilt. `_id` is stable per chunk
+        # and provides a deterministic tie/order source without transferring
+        # any embedding payload.
+        cursor = self._collection.find(query, {"embedding": 0}).sort("_id", 1)
         if limit > 0:
             cursor = cursor.limit(limit)
+        return [KnowledgeChunk.from_doc(item) async for item in cursor]
+
+    async def get_chunks_by_ids(
+        self, tenant_id: str, website_id: str, ids: list[str]
+    ) -> list[KnowledgeChunk]:
+        """Fetch full documents (with embeddings) for specific chunk ids.
+
+        Used to hydrate embeddings onto the small reranker candidate pool that
+        the embedding-free keyword corpus load cannot provide.  The pool is
+        bounded by the hybrid candidate limit (small), so this is a lightweight
+        ``$in`` fetch and not a full-corpus embedding transfer.
+
+        Defense-in-depth: the query enforces tenant/website scope in addition to
+        the chunk ids, matching the retrieval call path. A raw ``_id`` from
+        another tenant/website therefore resolves to nothing.
+        """
+        if not ids:
+            return []
+        cursor = self._collection.find(
+            {
+                "_id": {"$in": ids},
+                "tenant_id": tenant_id,
+                "website_id": website_id,
+            }
+        )
         return [KnowledgeChunk.from_doc(item) async for item in cursor]
 
     async def similarity_search(
@@ -150,6 +215,7 @@ class MongoVectorRepository(VectorRepository):
                 VectorSearchResult(
                     chunk=KnowledgeChunk.from_doc(item["doc"]),
                     score=float(item["score"]),
+                    dense_score=float(item["score"]),
                 )
                 async for item in cursor
             ]

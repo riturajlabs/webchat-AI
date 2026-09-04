@@ -737,9 +737,12 @@ async def test_worker_invalidates_retrieval_cache_on_completion(patch_dns) -> No
     cache = FakeCacheStore()
 
     # Seed the cache with entries for this website and a different website.
-    await cache.set("retrieval", f"{job.website_id}:what is acme", '["stale"]')
-    await cache.set("retrieval", f"{job.website_id}:pricing", '["stale"]')
-    await cache.set("retrieval", "other-website-id:pricing", '["keep"]')
+    # Keys use the API-side layout `{tenant_id}:{website_id}:{query}` (audit
+    # R-01 / cache prefix parity).
+    prefix = f"{job.tenant_id}:{job.website_id}:"
+    await cache.set("retrieval", f"{prefix}what is acme", '["stale"]')
+    await cache.set("retrieval", f"{prefix}pricing", '["stale"]')
+    await cache.set("retrieval", "tenant-a:other-website-id:pricing", '["keep"]')
     assert len(cache._data) == 3
 
     result = await _run_crawl_job(
@@ -755,10 +758,10 @@ async def test_worker_invalidates_retrieval_cache_on_completion(patch_dns) -> No
 
     assert result["status"] == "completed"
     # The two entries for this website must be evicted.
-    assert await cache.get("retrieval", f"{job.website_id}:what is acme") is None
-    assert await cache.get("retrieval", f"{job.website_id}:pricing") is None
+    assert await cache.get("retrieval", f"{prefix}what is acme") is None
+    assert await cache.get("retrieval", f"{prefix}pricing") is None
     # The entry for the other website must be untouched.
-    assert await cache.get("retrieval", "other-website-id:pricing") == '["keep"]'
+    assert await cache.get("retrieval", "tenant-a:other-website-id:pricing") == '["keep"]'
 
 
 async def test_worker_cache_invalidation_is_best_effort(patch_dns) -> None:

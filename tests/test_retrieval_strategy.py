@@ -12,6 +12,7 @@ Covers:
 
 from unittest.mock import patch
 
+from backend.repositories.vector.hybrid import keyword_search
 from backend.services.chat.rag_service import RagService
 from backend.services.chat.retrieval_strategy import (
     HybridRetrievalStrategy,
@@ -446,50 +447,79 @@ async def test_prompt_injection_protection_preserved() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bounded hybrid candidate loading (HYBRID_SEARCH_CANDIDATE_LIMIT)
+# Complete embedding-free lexical corpus loading
 # ---------------------------------------------------------------------------
 
 
-async def test_load_all_chunks_respects_limit() -> None:
-    """_load_all_chunks with limit returns at most limit chunks."""
+async def test_load_all_chunks_has_no_first_50_recall_cap() -> None:
+    """A rare exact term outside an old 50-record slice remains retrievable."""
     env = build_chat_env()
-    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=10)
-    for i in range(10):
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=51)
+    for i in range(50):
         await make_chunk(
             env,
             tenant_id=TENANT,
             website_id=WEBSITE,
-            text=f"Chunk {i} content.",
+            text=f"ordinary content {i}",
             chunk_index=i,
         )
-    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=3)
-    assert len(all_chunks) == 3
+    target = await make_chunk(
+        env,
+        tenant_id=TENANT,
+        website_id=WEBSITE,
+        text="SOIT rarefaculty exact information.",
+        chunk_index=50,
+        document_id="rare-document",
+    )
+
+    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE)
+    results = keyword_search("SOIT rarefaculty", all_chunks, top_k=5)
+
+    assert len(all_chunks) == 51
+    assert [result.chunk.id for result in results] == [target.id]
 
 
-async def test_load_all_chunks_zero_limit_returns_all() -> None:
-    """_load_all_chunks with limit=0 returns all chunks (legacy behavior)."""
+async def test_lexical_corpus_is_tenant_and_website_scoped() -> None:
+    """Lexical loading must never include another tenant or website."""
     env = build_chat_env()
-    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=5)
-    for i in range(5):
-        await make_chunk(
-            env,
-            tenant_id=TENANT,
-            website_id=WEBSITE,
-            text=f"Chunk {i}.",
-            chunk_index=i,
-        )
-    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=0)
-    assert len(all_chunks) == 5
+    await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
+    await make_website(env, tenant_id=TENANT, website_id="other-web", knowledge_chunks=1)
+    await make_website(env, tenant_id="other-tenant", website_id=WEBSITE, knowledge_chunks=1)
+    own = await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="SOIT own fact")
+    await make_chunk(env, tenant_id=TENANT, website_id="other-web", text="SOIT other site fact")
+    await make_chunk(
+        env, tenant_id="other-tenant", website_id=WEBSITE, text="SOIT other tenant fact"
+    )
+
+    chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, corpus_version="v1")
+
+    assert [chunk.chunk.id for chunk in chunks] == [own.id]
+    assert all(chunk.chunk.embedding == [] for chunk in chunks)
 
 
-async def test_load_all_chunks_limit_larger_than_total() -> None:
-    """Limit larger than total chunks returns all chunks."""
+async def test_lexical_corpus_cache_reuses_embedding_free_payload(monkeypatch) -> None:
+    """Cache hit avoids a second Mongo light load and stores no vector values."""
     env = build_chat_env()
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=2)
     await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="A", chunk_index=0)
     await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="B", chunk_index=1)
-    all_chunks = await env.rag._load_all_chunks(TENANT, WEBSITE, limit=100)
-    assert len(all_chunks) == 2
+    calls: list[int] = []
+    original = env.vector.list_chunks_light
+
+    async def spy(tenant_id: str, website_id: str, *, limit: int = 0):
+        calls.append(limit)
+        return await original(tenant_id, website_id, limit=limit)
+
+    monkeypatch.setattr(env.vector, "list_chunks_light", spy)
+    first = await env.rag._load_all_chunks(TENANT, WEBSITE, corpus_version="v1")
+    second = await env.rag._load_all_chunks(TENANT, WEBSITE, corpus_version="v1")
+
+    assert len(first) == len(second) == 2
+    assert calls == [0]
+    lexical_write = next(call for call in env.cache.set_calls if call[0] == "lexical")
+    raw = await env.cache.get("lexical", lexical_write[1])
+    assert raw is not None
+    assert '"embedding"' not in raw
 
 
 async def test_hybrid_candidate_count_in_timing() -> None:

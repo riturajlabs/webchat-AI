@@ -5,8 +5,10 @@ FakeDocumentRepository, FakeVectorRepository, FakeKnowledgeChunkRepository,
 FakeWebsiteRepository, FakeAuditLogRepository and FakeEmbeddingClient.
 """
 
+from collections import Counter
 from dataclasses import dataclass, field
 
+import pytest
 from backend.core.errors import EmbeddingError, EmbeddingUnavailableError
 from backend.models.audit_log import AUDIT_KNOWLEDGE_FAILED, AUDIT_KNOWLEDGE_PROCESSED
 from backend.models.document import Document
@@ -18,7 +20,8 @@ from backend.models.knowledge_chunk import (
 )
 from backend.models.usage_record import usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
-from backend.services.knowledge.processor import KnowledgeProcessor
+from backend.services.knowledge.chunker import chunk_text
+from backend.services.knowledge.processor import KnowledgeProcessor, _dedupe_text_chunks
 
 from tests.fakes import (
     FakeAuditLogRepository,
@@ -308,7 +311,8 @@ async def test_website_fanout_enqueues_each_document() -> None:
 
     result = await env.processor.process_website_documents(env.website.id, enqueue=enqueue)
 
-    assert result == {"status": "queued", "documents": 2}
+    assert result["status"] == "queued"
+    assert result["documents"] == 2
     assert set(enqueue.document_ids) == {env.document.id, second.id}
     website = env.websites.websites[env.website.id]
     assert website.knowledge_status == KNOWLEDGE_STATUS_PROCESSING
@@ -857,17 +861,19 @@ async def test_completed_processing_removes_stale_retrieval_entries() -> None:
     """Stale answers seeded before re-processing must not survive it."""
     events: list[str] = []
     cache = FakeCacheStore()
-    await cache.set("retrieval", "site-1:old question", '["stale answer"]')
-    await cache.set("retrieval", "other-site:q", '["keep"]')
+    await cache.set("retrieval", "tenant-a:site-1:old question", '["stale answer"]')
+    await cache.set("lexical", "tenant-a:site-1:v1:fake:model:1:1", '{"chunks": []}')
+    await cache.set("retrieval", "tenant-a:other-site:q", '["keep"]')
 
     build = _processor_with(cache, events, website_id="site-1")
     processor, document, _vector = await build()
 
     result = await processor.process_document(document.id)
     assert result["status"] == "processed"
-    assert await cache.get("retrieval", "site-1:old question") is None
+    assert await cache.get("retrieval", "tenant-a:site-1:old question") is None
+    assert await cache.get("lexical", "tenant-a:site-1:v1:fake:model:1:1") is None
     # Only the re-processed website's entries are purged.
-    assert await cache.get("retrieval", "other-site:q") == '["keep"]'
+    assert await cache.get("retrieval", "tenant-a:other-site:q") == '["keep"]'
 
 
 async def test_cache_purge_is_best_effort_on_cache_outage() -> None:
@@ -879,3 +885,158 @@ async def test_cache_purge_is_best_effort_on_cache_outage() -> None:
     result = await processor.process_document(document.id)
     assert result["status"] == "processed"
     assert vector.chunks
+
+
+class FailOnInsertVectorRepository(FakeVectorRepository):
+    """Vector repo whose `insert_chunks` fails (simulating a transient DB error).
+
+    `replace_by_document` on the base runs insert-first; this forces the insert
+    to fail so tests can assert the document is NOT left zeroed out.
+    """
+
+    async def insert_chunks(self, chunks):  # type: ignore[no-untyped-def]
+        if getattr(self, "fail", False):
+            raise EmbeddingError("insert failed (transient)")
+        return await super().insert_chunks(chunks)
+
+
+async def test_replacement_insert_failure_never_zeroes_document() -> None:
+    """P1 safe-re-ingestion: a failed insert must not wipe existing chunks.
+
+    Historically the processor deleted a document's chunks BEFORE inserting the
+    replacement, so a transient insert failure left the document with zero
+    chunks. `replace_by_document` inserts first and deletes stale indexes
+    second, so an insert failure leaves the prior corpus intact.
+    """
+    vector = FailOnInsertVectorRepository()
+    chunks = FakeKnowledgeChunkRepository(vector=vector)
+    documents = FakeDocumentRepository()
+    websites = FakeWebsiteRepository()
+    audit = FakeAuditLogRepository()
+    embedder = FakeEmbeddingClient()
+
+    website = Website.new(tenant_id="tenant-a", name="Acme", url="https://acme.example/")
+    await websites.create(website)
+    document = Document.new(
+        tenant_id="tenant-a",
+        website_id=website.id,
+        url="https://acme.example/",
+        title="Home",
+        content=TEXT,
+        checksum="abc123",
+    )
+    await documents.upsert(document)
+
+    processor = KnowledgeProcessor(
+        documents=documents,
+        vector=vector,
+        chunks=chunks,
+        websites=websites,
+        audit=audit,
+        embedder=embedder,
+        chunk_size=30,
+        overlap=5,
+    )
+
+    # First (successful) pass stores the document's chunks.
+    assert (await processor.process_document(document.id))["status"] == "processed"
+    old_chunks = vector.by_document(document.tenant_id, document.id)
+    assert old_chunks
+
+    # Changing the content and breaking the insert must not zero the doc.
+    document.content = TEXT + " New content appended with more words. "
+    document.checksum = "changed-456"
+    await documents.upsert(document)
+    vector.fail = True
+
+    with pytest.raises(EmbeddingError, match="insert failed"):
+        await processor.process_document(document.id)
+
+    # The pre-replacement corpus is intact - zero-chunk window is impossible.
+    assert len(vector.by_document(document.tenant_id, document.id)) == len(old_chunks)
+
+
+async def test_replacement_success_replaces_with_only_new_chunks() -> None:
+    """On success `replace_by_document` converges to exactly the new chunks."""
+    env = await _env()
+    await env.processor.process_document(env.document.id)
+    old_chunks = env.vector.by_document(env.document.tenant_id, env.document.id)
+    assert old_chunks
+
+    env.document.content = TEXT + " New content appended to grow the page. "
+    env.document.checksum = "changed-789"
+    await env.documents.upsert(env.document)
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    new_chunks = env.vector.by_document(env.document.tenant_id, env.document.id)
+    assert new_chunks
+    assert len(new_chunks) == result["chunks"]
+    # The stored set matches the replacement chunk list exactly - no stale
+    # chunks from the old corpus survive the insert-first/delete-stale step.
+    stored = {
+        (c.chunk_index, c.chunk_text)
+        for c in env.vector.by_document(env.document.tenant_id, env.document.id)
+    }
+    assert stored == {(c.chunk_index, c.chunk_text) for c in new_chunks}
+
+
+# P1.1 G1: per-document exact normalized-text dedup (bba triple regression).
+async def test_dedupe_text_chunks_keeps_unique_normalized_text() -> None:
+    """Byte-identical chunks (after normalization) collapse to one instance.
+
+    The overlapping chunker can re-emit the same text on one document (e.g. a
+    repeated "Learning Experiences" intro across curriculum tables on a BBA
+    course page). Duplication is pure redundancy; the first occurrence in
+    document order wins.
+    """
+    chunks = chunk_text(
+        "## Learning Experiences\nAt Indira University, the BBA program offers "
+        "an immersive learning journey with industry-relevant exposure. " * 8,
+        chunk_size=30,
+        overlap=5,
+    )
+    counts = Counter(c.text for c in chunks)
+    raw_extra = sum(max(0, n - 1) for n in counts.values())
+    assert raw_extra > 0, "test fixture must actually produce duplicate chunks"
+
+    deduped = _dedupe_text_chunks(chunks)
+    keys = {" ".join((c.text or "").split()).lower() for c in deduped}
+    # Every stored chunk has a distinct normalized text.
+    assert len(keys) == len(deduped)
+    # The first occurrence survives (position 0 of every duplicate run).
+    first_occurrence = []
+    seen = set()
+    for c in chunks:
+        key = " ".join((c.text or "").split()).lower()
+        if key not in seen:
+            seen.add(key)
+            first_occurrence.append(c.text)
+    assert [c.text for c in deduped] == first_occurrence
+
+
+async def test_dedup_collapses_bba_style_triple_before_replacement() -> None:
+    """End-to-end: a document whose chunker emits an identical triple stores 1.
+
+    Mirrors the P1 dry-run finding on `course/bba-banking-and-financial-services`,
+    where a repeated "Learning Experiences" intro produced three byte-identical
+    chunks. Dedup must run before embedding/replacement so the replacement set
+    ends with no exact-duplicate normalized text, while preserving insert-first
+    safety.
+    """
+    env = await _env(
+        content="## Learning Experiences\nAt Indira University, the BBA program "
+        "offers not just academic knowledge but an immersive learning journey "
+        "that blends theory with real-world applications for our students. " * 8,
+    )
+
+    result = await env.processor.process_document(env.document.id)
+
+    assert result["status"] == "processed"
+    stored = env.vector.by_document(env.document.tenant_id, env.document.id)
+    assert stored
+    assert len(stored) == result["chunks"]
+    norm = {" ".join((c.chunk_text or "").split()).lower() for c in stored}
+    # No two stored chunks may share normalized text (G1: 0 exact-dup extras).
+    assert len(norm) == len(stored)

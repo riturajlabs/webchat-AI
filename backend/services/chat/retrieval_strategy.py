@@ -4,9 +4,11 @@ Provides a pluggable strategy layer between the embedding/vector-search step
 and the context-building step in ``RagService``.  Two strategies ship out of
 the box:
 
-- ``VectorRetrievalStrategy``: the current default (vector-only).
 - ``HybridRetrievalStrategy``: combines vector similarity with keyword-based
-  ranking via Reciprocal Rank Fusion (RRF).
+  ranking via Reciprocal Rank Fusion (RRF).  This is the deployed default
+  (``enable_hybrid_search`` defaults to ``True``).
+- ``VectorRetrievalStrategy``: the vector-only fallback used when
+  ``enable_hybrid_search`` is disabled.
 
 The feature flag ``enable_hybrid_search`` in ``backend.core.config`` controls
 which strategy is active.  When disabled, ``VectorRetrievalStrategy`` is used
@@ -91,17 +93,22 @@ class VectorRetrievalStrategy:
 class HybridRetrievalStrategy:
     """Hybrid retrieval: vector + keyword via Reciprocal Rank Fusion.
 
-    Wraps the existing ``HybridSearcher`` and adds keyword-based ranking
-    on top of the vector results.  The RRF constant is configurable.
+    Wraps the existing ``HybridSearcher`` and adds keyword-based retrieval
+    over the website's full corpus (``all_chunks``) as a genuine second
+    retrieval source, so exact-term matches the vector stage missed can be
+    recovered. The RRF constant and keyword candidate limit are configurable.
 
-    Keyword matching is restricted to the vector candidate set, so hybrid
-    ranking cannot introduce unrelated website chunks. RRF determines the
-    ordering, while the original vector score is retained for context
-    filtering and confidence decisions.
+    RRF determines the ordering. The original vector score is retained for
+    chunks that also came from the vector stage (used for context filtering and
+    confidence decisions); keyword-only chunks carry their RRF fusion score.
     """
 
-    def __init__(self, *, rrf_k: int = 60) -> None:
+    def __init__(
+        self, *, rrf_k: int = 60, keyword_top_k: int = 50, candidate_top_k: int | None = None
+    ) -> None:
         self._rrf_k = rrf_k
+        self._keyword_top_k = keyword_top_k
+        self._candidate_top_k = candidate_top_k
 
     def search(
         self,
@@ -119,8 +126,17 @@ class HybridRetrievalStrategy:
                 final_result_count=0,
             )
 
-        searcher = HybridSearcher(rrf_k=self._rrf_k)
-        hybrid_results = searcher.search(query, vector_results, all_chunks, top_k=top_k)
+        searcher = HybridSearcher(rrf_k=self._rrf_k, keyword_top_k=self._keyword_top_k)
+        # When the full corpus is supplied, expand the RRF candidate pool past
+        # ``top_k`` so keyword-only exact matches that RRF ranks below ``top_k``
+        # still reach the downstream reranker, which then selects the final
+        # ``top_k``. With no corpus, behavior is unchanged (pool == top_k).
+        pool = (
+            self._candidate_top_k if (all_chunks and self._candidate_top_k is not None) else top_k
+        )
+        hybrid_results = searcher.search(
+            query, vector_results, all_chunks, top_k=top_k, candidate_top_k=pool
+        )
 
         # RRF is a rank signal, not a similarity score. Preserve the original
         # vector score so a weak nearest neighbor cannot become 1.0 merely
@@ -150,7 +166,17 @@ def _preserve_vector_scores(
     return [
         VectorSearchResult(
             chunk=hr.chunk.chunk,
-            score=vector_scores.get(hr.chunk.chunk.id, 0.0),
+            # Restore the original vector score for chunks that also came from
+            # the vector stage. Keyword-only chunks recovered from the full
+            # corpus have no vector score, so keep their RRF fusion score
+            # (instead of 0.0) so they remain present in the result set.
+            score=vector_scores.get(hr.chunk.chunk.id, hr.rrf_score),
+            # Explicit lexical/RRF evidence, retained separately from ``score``
+            # so the downstream gate can be score-type-aware. Only candidates
+            # the keyword pass actually retrieved carry this evidence; vector
+            # cosine remains the sole signal for everything else.
+            lexical_score=(hr.rrf_score if hr.keyword_rank >= 1 else None),
+            dense_score=vector_scores.get(hr.chunk.chunk.id),
         )
         for hr in hybrid_results
     ]

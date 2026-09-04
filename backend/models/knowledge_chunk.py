@@ -25,6 +25,10 @@ KNOWLEDGE_STATUS_PENDING = "pending"
 KNOWLEDGE_STATUS_PROCESSING = "processing"
 KNOWLEDGE_STATUS_READY = "ready"
 KNOWLEDGE_STATUS_FAILED = "failed"
+# Embedding failed for quota/rate-limit reasons and a deferred automatic retry
+# is pending (Part E/ING-02). Unlike `failed`, this is non-terminal: the doc may
+# still succeed on retry, so the dashboard renders it separately.
+KNOWLEDGE_STATUS_RATE_LIMITED = "rate_limited"
 
 KNOWLEDGE_STATUSES = {
     KNOWLEDGE_STATUS_NONE,
@@ -32,6 +36,7 @@ KNOWLEDGE_STATUSES = {
     KNOWLEDGE_STATUS_PROCESSING,
     KNOWLEDGE_STATUS_READY,
     KNOWLEDGE_STATUS_FAILED,
+    KNOWLEDGE_STATUS_RATE_LIMITED,
 }
 
 
@@ -119,6 +124,7 @@ __all__ = [
     "KNOWLEDGE_STATUS_NONE",
     "KNOWLEDGE_STATUS_PENDING",
     "KNOWLEDGE_STATUS_PROCESSING",
+    "KNOWLEDGE_STATUS_RATE_LIMITED",
     "KNOWLEDGE_STATUS_READY",
     "KnowledgeChunk",
 ]

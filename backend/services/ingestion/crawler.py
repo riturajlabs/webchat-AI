@@ -10,8 +10,8 @@ detector).
 """
 
 import hashlib
+import heapq
 import logging
-from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -25,6 +25,7 @@ from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED
 from backend.repositories import DocumentRepository
 from backend.services.ingestion.cleaner import clean_html
 from backend.services.ingestion.extractor import extract_page, pick_preview_image
+from backend.services.ingestion.priority import score_crawl_candidate
 from backend.services.ingestion.ssrf_guard import SsrFGuard
 from backend.utils.robots import RobotsTxt
 from backend.utils.url_validator import normalize_crawl_url, validate_hostname
@@ -108,14 +109,20 @@ class CrawlSession:
 
         max_pages = self._settings.crawl_max_pages
         max_depth = self._settings.crawl_max_depth
-        queue: deque[tuple[str, int]] = deque([(seed, 0)])
+        # Priority frontier ordered by `(-score, depth, seq)` so content-rich
+        # candidates are fetched before navigation/hub pages, while ties (equal
+        # scores) break toward lower depth then earlier discovery -- keeping the
+        # traversal deterministic and BFS-like (ING-01).
+        seq = 0
+        queue: list[tuple[int, int, int, str]] = [(0, 0, seq, seed)]
         visited: set[str] = set()
+        queued: set[str] = set()
         stored = 0
         if self._on_progress is not None:
             await self._on_progress(0, max_pages)
 
         while queue and stored < max_pages:
-            url, depth = queue.popleft()
+            _, depth, _, url = heapq.heappop(queue)
             normalized = normalize_crawl_url(url, url) or url
             if normalized in visited:
                 continue
@@ -176,8 +183,21 @@ class CrawlSession:
                     except InvalidUrlError:
                         continue
                     candidate = normalize_crawl_url(link, link)
-                    if candidate is not None and candidate not in visited:
-                        queue.append((candidate, depth + 1))
+                    if (
+                        candidate is not None
+                        and candidate not in visited
+                        and candidate not in queued
+                    ):
+                        seq += 1
+                        score = score_crawl_candidate(
+                            candidate,
+                            depth=depth + 1,
+                            max_depth=max_depth,
+                            link_density=len(extracted.links),
+                            content_length=len(content),
+                        )
+                        heapq.heappush(queue, (-score, depth + 1, seq, candidate))
+                        queued.add(candidate)
 
         await self._fetcher.close()
         return stored

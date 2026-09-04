@@ -17,7 +17,11 @@ from collections.abc import AsyncIterator
 
 from backend.ai.gemini import GenerationClient, GenerationUsage
 from backend.ai.router import FallbackGenerationClient, ProviderLatencyMetrics
-from backend.services.ai.provider_health import ProviderHealth, ProviderHealthStore
+from backend.services.ai.provider_health import (
+    ProviderHealth,
+    ProviderHealthStore,
+    provider_health_name,
+)
 
 logger = logging.getLogger("webchat_ai")
 
@@ -115,8 +119,9 @@ class AdaptiveProviderRouter:
         names = list(self._provider_map.keys())
         health_snapshots: list[tuple[str, ProviderHealth, bool]] = []
         for name in names:
-            snapshot = await self._health.get_health(name)
-            available = await self._health.is_available(name)
+            health_name = provider_health_name("generation", name)
+            snapshot = await self._health.get_health(health_name)
+            available = await self._health.is_available(health_name)
             health_snapshots.append((name, snapshot, available))
 
         healthy: list[tuple[str, float, str]] = []
@@ -231,13 +236,15 @@ class AdaptiveProviderRouter:
             return
         # Record failure for every provider that was tried and failed.
         for name in metrics.failed_providers:
-            await self._health.record_failure(name)
+            await self._health.record_failure(provider_health_name("generation", name))
         # Record success for the provider that actually served the response.
         if metrics.success and metrics.provider not in ("none", "unknown"):
             latency = metrics.total_generation_latency_ms
             if metrics.first_token_latency_ms is not None:
                 latency = metrics.first_token_latency_ms
-            await self._health.record_success(metrics.provider, latency)
+            await self._health.record_success(
+                provider_health_name("generation", metrics.provider), latency
+            )
 
 
 __all__ = ["AdaptiveProviderRouter"]

@@ -33,6 +33,8 @@ const CSRF_COOKIE_NAME = 'csrf_token';
 
 const CSRF_PROTECTED_PATHS = new Set(['/api/auth/refresh', '/api/auth/logout']);
 
+let refreshInFlight: Promise<boolean> | null = null;
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -164,6 +166,15 @@ function redirectToLogin(): void {
 }
 
 async function refreshSession(): Promise<boolean> {
+  if (refreshInFlight) {
+    return refreshInFlight;
+  }
+
+  refreshInFlight = performRefreshSession();
+  return refreshInFlight;
+}
+
+async function performRefreshSession(): Promise<boolean> {
   const csrf = getCsrfToken() ?? readCsrfCookie();
   const headers = new Headers();
   if (csrf) {
@@ -176,6 +187,8 @@ async function refreshSession(): Promise<boolean> {
       credentials: 'include',
     });
     if (!response.ok) {
+      clearSession();
+      redirectToLogin();
       return false;
     }
     const payload = (await response.json()) as {
@@ -183,6 +196,8 @@ async function refreshSession(): Promise<boolean> {
       csrf_token?: string;
     };
     if (typeof payload.access_token !== 'string') {
+      clearSession();
+      redirectToLogin();
       return false;
     }
     // setAccessToken mirrors the token to the SSE cookie automatically.
@@ -190,7 +205,11 @@ async function refreshSession(): Promise<boolean> {
     setCsrfToken(payload.csrf_token ?? readCsrfCookie());
     return true;
   } catch {
+    clearSession();
+    redirectToLogin();
     return false;
+  } finally {
+    refreshInFlight = null;
   }
 }
 
@@ -229,8 +248,6 @@ export async function request<T>(
     if (refreshed) {
       return request<T>(path, init, { retry: false });
     }
-    clearSession();
-    redirectToLogin();
     throw new ApiError(401, 'session_expired', 'Session expired. Please sign in again.');
   }
 

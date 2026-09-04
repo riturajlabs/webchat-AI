@@ -48,6 +48,7 @@ async def list_knowledge_documents(
         processing=sum(1 for doc in documents if doc.processing_status == "processing"),
         completed=sum(1 for doc in documents if doc.processing_status == "completed"),
         failed=sum(1 for doc in documents if doc.processing_status == "failed"),
+        rate_limited=sum(1 for doc in documents if doc.processing_status == "rate_limited"),
     )
     return KnowledgeDocumentsResponse(
         website_id=website_id,

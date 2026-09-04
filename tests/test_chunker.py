@@ -5,7 +5,7 @@ cache so tests use the default 700/100 unless overridden.
 """
 
 import pytest
-from backend.services.knowledge.chunker import TextChunk, chunk_text, count_tokens
+from backend.services.knowledge.chunker import TextChunk, chunk_text, clean_html, count_tokens
 
 SHORT = "This is a short page with a few tokens only."
 LONG = "Sentence one. " * 50  # 100 sentences => plenty of tokens and boundaries.
@@ -21,6 +21,36 @@ def test_count_tokens_counts_words_and_punctuation() -> None:
 def test_empty_text_yields_no_chunks() -> None:
     assert chunk_text("") == []
     assert chunk_text("   \n\n  ") == []
+
+
+def test_clean_html_removes_boilerplate_and_preserves_main_headings() -> None:
+    html = """
+        <html><body>
+            <header>Global navigation</header>
+            <nav>Home Pricing Login</nav>
+            <main><h1>Pricing</h1><p>Pro costs nineteen dollars.</p>
+                <aside>Related links</aside>
+            </main>
+            <footer>Copyright notice</footer>
+            <script>alert('ignore');</script><style>.hidden { display: none; }</style>
+        </body></html>
+        """
+
+    cleaned = clean_html(html)
+    assert "# Pricing" in cleaned
+    assert "Pro costs nineteen dollars." in cleaned
+    assert "Global navigation" not in cleaned
+    assert "Related links" not in cleaned
+    assert "Copyright notice" not in cleaned
+    assert "alert" not in cleaned
+
+
+def test_chunk_text_cleans_html_before_heading_tracking() -> None:
+    chunks = chunk_text("<nav>Pricing Login</nav><main><h2>Pricing</h2>Pro costs $19.</main>")
+
+    assert len(chunks) == 1
+    assert chunks[0].heading == "Pricing"
+    assert "Pricing Login" not in chunks[0].text
 
 
 def test_short_text_is_a_single_chunk() -> None:
@@ -126,3 +156,99 @@ def test_heading_before_any_content_is_attached_to_first_chunk() -> None:
     chunks = chunk_text("# Intro\nAlpha beta. Gamma delta. Epsilon zeta.", chunk_size=10, overlap=0)
     assert len(chunks) == 2
     assert all(chunk.heading == "Intro" for chunk in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Corpus-quality: no 1-token near-duplicate chain, fragments merged, sections
+# start fresh (accuracy phase; generic, no site-specific hardcoding)
+# ---------------------------------------------------------------------------
+
+
+def _is_suffix_shift(prev: str, nxt: str) -> bool:
+    """True when `nxt` is just `prev` with a leading portion dropped.
+
+    This is the window-stall signature that used to produce runs of
+    near-identical chunks that each dropped only the first word or two
+    (e.g. "and industrial visits...", "industrial visits...", "visits...").
+    """
+    a, b = prev.strip(), nxt.strip()
+    if not a or not b or a == b:
+        return False
+    return a.endswith(b) or (len(b) < len(a) and b in a and a.find(b) <= len(a) // 4)
+
+
+def test_no_adjacent_near_duplicate_chain_on_long_paragraph() -> None:
+    # A long paragraph with sentence boundaries must advance the window forward,
+    # never emit the same text shifted by one token (the overcut/overlap stall).
+    sentences = " ".join(
+        f"Module {i} introduces the concept of item {i} and applies it to scenario "
+        f"number {i} within the curriculum for the current year. "
+        for i in range(1, 200)
+    )
+    chunks = chunk_text(sentences, chunk_size=200, overlap=100)
+    assert len(chunks) > 1
+    shift_pairs = sum(
+        1 for i in range(len(chunks) - 1) if _is_suffix_shift(chunks[i].text, chunks[i + 1].text)
+    )
+    assert shift_pairs == 0
+
+
+def test_no_adjacent_near_duplicate_chain_across_section_headings() -> None:
+    # A section between two headings must not be re-emitted as a shifted chain,
+    # and must stay within a sane chunk count (not a runaway stall).
+    intro = " ".join(f"Intro paragraph sentence number {i} about the topic. " for i in range(1, 60))
+    curriculum = " ".join(
+        f"Mandatory module {i} covers learning outcome and credit weight. " for i in range(1, 200)
+    )
+    doc = f"## Intro\n{intro}\n## Curriculum\n{curriculum}\n"
+    chunks = chunk_text(doc, chunk_size=250, overlap=100)
+    shift_pairs = sum(
+        1 for i in range(len(chunks) - 1) if _is_suffix_shift(chunks[i].text, chunks[i + 1].text)
+    )
+    assert shift_pairs == 0
+    # Every curriculum chunk is correctly attributed to its own section (never
+    # the Intro heading that precedes it).
+    for c in chunks:
+        if "Mandatory module" in c.text:
+            assert c.heading == "Curriculum"
+
+
+def test_section_heading_starts_a_fresh_chunk() -> None:
+    # A heading that begins a new section must open its own chunk (no overlap
+    # pull-back that re-labels the previous section's tail under the new one).
+    doc = (
+        "## Alpha\nAlpha content only. " * 60 + "\n"
+        "## Beta\nBeta content only and nothing else. " * 60 + "\n"
+    )
+    chunks = chunk_text(doc, chunk_size=200, overlap=100)
+    beta_chunks = [c for c in chunks if "Beta content" in c.text]
+    assert beta_chunks
+    # A chunk containing Beta content must carry the Beta heading (never Alpha).
+    assert all(c.heading == "Beta" for c in beta_chunks if "Beta" in c.text[:40])
+    # Alpha content must not be mislabeled Beta.
+    for c in chunks:
+        if "Alpha content" in c.text and "Beta content" not in c.text:
+            assert c.heading == "Alpha"
+
+
+def test_tiny_trailing_fragment_merged_into_previous_chunk() -> None:
+    # A short tail (shorter than the min-chunk floor) is merged into the prior
+    # chunk instead of stored as a low-value standalone embedding.
+    doc = (
+        "A sufficiently long opening paragraph that fills out the chunk size so "
+        "that we have room for fragmentation. " * 30 + "Tiny tail fact: the dean is Dr Pawar."
+    )
+    chunks = chunk_text(doc, chunk_size=200, overlap=50, min_chunk_tokens=20)
+    assert chunks
+    # The tiny tail sentence is inside some chunk (not dropped) and no chunk is
+    # a bare fragment below the floor.
+    assert any("Dr Pawar" in c.text for c in chunks)
+    assert all(c.tokens >= 20 for c in chunks[1:])
+
+
+def test_default_min_chunk_fragment_merge_generic() -> None:
+    # Generic guarantee: no emitted chunk (after the first) is a bare fragment.
+    doc = ("Sentence number one. " * 40) + ("Ending tiny bit." * 3)
+    chunks = chunk_text(doc)  # production default size
+    assert all(c.tokens >= 5 for c in chunks)  # no near-empty fragment chunks
+    assert all(c.text.strip() for c in chunks)

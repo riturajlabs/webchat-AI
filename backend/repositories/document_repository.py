@@ -16,6 +16,7 @@ from backend.models.knowledge_chunk import (
     KNOWLEDGE_STATUS_NONE,
     KNOWLEDGE_STATUS_PENDING,
     KNOWLEDGE_STATUS_PROCESSING,
+    KNOWLEDGE_STATUS_RATE_LIMITED,
 )
 
 
@@ -97,7 +98,9 @@ class MongoDocumentRepository:
         )
 
     async def count_non_terminal_by_website(self, tenant_id: str, website_id: str) -> int:
-        """Documents not yet in a terminal knowledge state (pending/processing)."""
+        """Documents not yet in a terminal knowledge state (pending/processing/
+        rate-limited-and-awaiting-retry). Rate-limited docs remain non-terminal:
+        they are queued for a deferred retry, not permanently failed."""
         return await self._collection.count_documents(
             {
                 "tenant_id": tenant_id,
@@ -107,6 +110,7 @@ class MongoDocumentRepository:
                         KNOWLEDGE_STATUS_NONE,
                         KNOWLEDGE_STATUS_PENDING,
                         KNOWLEDGE_STATUS_PROCESSING,
+                        KNOWLEDGE_STATUS_RATE_LIMITED,
                     ],
                 },
             }

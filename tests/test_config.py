@@ -75,6 +75,17 @@ def test_default_jwt_secret_is_at_least_32_bytes() -> None:
     assert len(settings.jwt_secret.encode("utf-8")) >= 32
 
 
+def test_production_rejects_class_default_jwt_secret() -> None:
+    # A production deploy that omits JWT_SECRET falls back to the dev default
+    # `dev-only-jwt-secret-change-me-please`; startup must fail (SEC-7 / S-03).
+    # Build a valid prod config with every other required field but leave the
+    # secret unset so only the default-secret rejection can fire.
+    base = dict(_PRODUCTION_BASE)
+    del base["jwt_secret"]
+    with pytest.raises(ValueError, match="JWT_SECRET"):
+        Settings(**base)
+
+
 def test_trust_proxy_defaults_to_false() -> None:
     assert Settings(_env_file=None).trust_proxy is False
 
@@ -117,6 +128,17 @@ def test_provider_order_defaults_to_gemini() -> None:
     settings = Settings(_env_file=None)
     assert settings.generation_provider_order == ["gemini"]
     assert settings.embedding_provider_order == ["gemini"]
+
+
+def test_groq_model_default_is_currently_hosted() -> None:
+    """An unset GROQ_MODEL must never fall back to a retired model id.
+
+    Groq shut down `llama-3.3-70b-versatile` on 2026-08-16; requests to it
+    return HTTP 404, which silently kills the Groq fallback path. The default
+    therefore points at a model verified live on the current Groq API.
+    """
+    settings = Settings(_env_file=None)
+    assert settings.groq_model == "openai/gpt-oss-20b"
 
 
 def test_production_rejects_settings_with_no_provider_key() -> None:

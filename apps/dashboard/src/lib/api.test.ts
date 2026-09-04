@@ -115,6 +115,36 @@ describe('api client', () => {
     expect((retryCall[1]!.headers as Headers).get('Authorization')).toBe('Bearer fresh-token');
   });
 
+  it('shares one refresh request across concurrent 401 responses', async () => {
+    setAccessToken('expired-token');
+    const fetchMock = vi.mocked(fetch);
+    let refreshCalls = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/refresh')) {
+        refreshCalls += 1;
+        return jsonResponse({ access_token: 'fresh-token', user: USER });
+      }
+      if (url.endsWith('/api/websites') || url.endsWith('/api/analytics/summary')) {
+        const headers = new Headers(init?.headers);
+        return headers.get('Authorization') === 'Bearer expired-token'
+          ? jsonResponse({}, 401)
+          : jsonResponse({ ok: true });
+      }
+      return jsonResponse({});
+    });
+
+    const [websites, analytics] = await Promise.all([
+      api.get('/api/websites'),
+      api.get('/api/analytics/summary'),
+    ]);
+
+    expect(websites).toEqual({ ok: true });
+    expect(analytics).toEqual({ ok: true });
+    expect(refreshCalls).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
   it('does not refresh more than once (no infinite loop)', async () => {
     setAccessToken('expired-token');
     const assign = vi.fn();

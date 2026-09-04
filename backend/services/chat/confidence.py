@@ -11,6 +11,9 @@ No LLM calls, no external dependencies — pure arithmetic on existing scores.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
+
+from backend.repositories.vector.base import VectorSearchResult
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,65 @@ class ConfidenceMetrics:
     minimum_score: float
     average_score: float
     rejected_chunks_count: int
+
+
+def usable(
+    result: VectorSearchResult,
+    *,
+    dense_floor: float,
+) -> bool:
+    """Return whether a result has evidence safe for LLM context.
+
+    ``score`` is intentionally not inspected: vector candidates and keyword-only
+    RRF candidates use different scales. A dense score must clear the calibrated
+    floor, or the reranker must confirm an exact lexical match that also carries
+    keyword retrieval evidence.
+    """
+    if dense_floor <= 0:
+        return True
+    dense_score = getattr(result, "dense_score", None)
+    # Backward compatibility for repository implementations that predate the
+    # explicit provenance field: score is dense only when no lexical score is
+    # attached. RRF-only results must never be treated as cosine values.
+    lexical_score = getattr(result, "lexical_score", None)
+    if dense_score is None and lexical_score is None:
+        dense_score = result.score
+    if dense_score is not None and dense_score >= dense_floor:
+        return True
+    return getattr(result, "lexical_exact", False) and lexical_score is not None
+
+
+def assess_result_confidence(
+    results: list[VectorSearchResult],
+    *,
+    min_score: float = 0.0,
+) -> ConfidenceMetrics:
+    """Assess confidence using dense scores and explicit lexical evidence only."""
+    if not results:
+        return ConfidenceMetrics(0.0, 0.0, 0.0, 0)
+
+    dense_scores = [
+        getattr(result, "dense_score", None)
+        if getattr(result, "dense_score", None) is not None
+        else result.score
+        for result in results
+        if getattr(result, "dense_score", None) is not None or result.lexical_score is None
+    ]
+    lexical_hits = sum(
+        1 for result in results if result.lexical_exact and result.lexical_score is not None
+    )
+    if not dense_scores:
+        confidence = 1.0 if lexical_hits else 0.0
+        return ConfidenceMetrics(confidence, confidence, confidence, len(results) - lexical_hits)
+
+    metrics = assess_confidence(cast(list[float], dense_scores), min_score=min_score)
+    accepted = sum(1 for result in results if usable(result, dense_floor=min_score))
+    return ConfidenceMetrics(
+        confidence=round(metrics.confidence, 4),
+        minimum_score=metrics.minimum_score,
+        average_score=metrics.average_score,
+        rejected_chunks_count=len(results) - accepted,
+    )
 
 
 def _normalize_scores(scores: list[float]) -> list[float]:
@@ -98,4 +160,10 @@ def calculate_confidence(
     return assess_confidence(scores, min_score=min_score).confidence
 
 
-__all__ = ["ConfidenceMetrics", "assess_confidence", "calculate_confidence"]
+__all__ = [
+    "ConfidenceMetrics",
+    "assess_confidence",
+    "assess_result_confidence",
+    "calculate_confidence",
+    "usable",
+]

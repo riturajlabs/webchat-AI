@@ -889,6 +889,22 @@ class FakeVectorRepository:
                 del self._chunks[key]
         return deleted
 
+    async def replace_by_document(
+        self, tenant_id: str, document_id: str, chunks: list[KnowledgeChunk]
+    ) -> int:
+        """Insert-first, delete-stale replacement (mirrors Mongo, P1 safety).
+
+        New chunks are written before any delete, so a failure mid-replacement
+        leaves the document with its previous chunks (or a superset), never
+        zero. Then stale indexes no longer produced are removed.
+        """
+        inserted = await self.insert_chunks(chunks)
+        new_indexes = {chunk.chunk_index for chunk in chunks}
+        for key in list(self._chunks):
+            if key[0] == tenant_id and key[2] == document_id and key[3] not in new_indexes:
+                del self._chunks[key]
+        return inserted
+
     async def delete_by_website(self, tenant_id: str, website_id: str) -> int:
         deleted = 0
         for key in list(self._chunks):
@@ -912,7 +928,7 @@ class FakeVectorRepository:
     async def list_chunks_light(
         self, tenant_id: str, website_id: str, *, limit: int = 0
     ) -> list[KnowledgeChunk]:
-        """Deprecated: dead code retained for test coverage."""
+        """In-memory mirror of the embedding-free corpus load."""
         chunks = [
             chunk
             for chunk in self._chunks.values()
@@ -929,10 +945,28 @@ class FakeVectorRepository:
                 chunk_text=chunk.chunk_text,
                 chunk_index=chunk.chunk_index,
                 metadata=chunk.metadata,
+                embedding_provider=chunk.embedding_provider,
+                embedding_model=chunk.embedding_model,
+                embedding_dimensions=chunk.embedding_dimensions,
+                embedding_version=chunk.embedding_version,
                 created_at=chunk.created_at,
                 schema_version=chunk.schema_version,
             )
             for chunk in chunks
+        ]
+
+    async def get_chunks_by_ids(
+        self, tenant_id: str, website_id: str, ids: list[str]
+    ) -> list[KnowledgeChunk]:
+        """Return full chunks (with embeddings) matching the given ids,
+        scoped to the given tenant and website (defense-in-depth)."""
+        wanted = set(ids)
+        return [
+            chunk
+            for chunk in self._chunks.values()
+            if chunk.id in wanted
+            and chunk.tenant_id == tenant_id
+            and chunk.website_id == website_id
         ]
 
     async def similarity_search(

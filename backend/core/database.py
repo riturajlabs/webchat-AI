@@ -32,6 +32,7 @@ _FEEDBACK_TTL_SECONDS = 2 * 365 * 24 * 60 * 60
 # now + CHAT_RETENTION_DAYS by ChatSession.new, so this yields the configured
 # 90-day retention without double-counting.
 _CHAT_SESSION_TTL_SECONDS = 0
+_VECTOR_INDEX_NAME = "default"
 # Messages TTL (on created_at) and usage_records TTL (on updated_at) are
 # derived from config at index-creation time so CHAT_RETENTION_DAYS /
 # USAGE_RETENTION_DAYS stay the single source of truth (defaults 90 days /
@@ -320,6 +321,86 @@ class MongoDB:
             [("tenant_id", 1), ("message_id", 1)], unique=True, name="uniq_tenant_message"
         )
         await db["feedback"].create_index("created_at", expireAfterSeconds=_FEEDBACK_TTL_SECONDS)
+        await cls._validate_vector_search_index(db)
+
+    @classmethod
+    async def _validate_vector_search_index(cls, db: AsyncIOMotorDatabase[Any]) -> bool:
+        """Warn when the Atlas vector index is absent or incompatible.
+
+        Atlas Search indexes are managed separately from MongoDB B-tree
+        indexes, so ``init_indexes`` cannot create the vector index. This probe
+        keeps startup non-fatal for local MongoDB while making a production
+        misconfiguration visible before traffic reaches the brute-force
+        fallback.
+        """
+        expected_dimensions = get_settings().embedding_dimensions
+        expected_filters = {
+            "tenant_id",
+            "website_id",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dimensions",
+            "embedding_version",
+        }
+        try:
+            cursor = db["knowledge_chunks"].aggregate(
+                [{"$listSearchIndexes": {"name": _VECTOR_INDEX_NAME}}]
+            )
+            async for index in cursor:
+                if not isinstance(index, dict):
+                    continue
+                definition = index.get("latestDefinition") or index.get("definition") or {}
+                fields = definition.get("fields", []) if isinstance(definition, dict) else []
+                vector_fields = [
+                    field
+                    for field in fields
+                    if isinstance(field, dict)
+                    and field.get("type") == "vector"
+                    and field.get("path") == "embedding"
+                ]
+                filter_paths = {
+                    field.get("path")
+                    for field in fields
+                    if isinstance(field, dict) and field.get("type") == "filter"
+                }
+                vector = vector_fields[0] if vector_fields else None
+                valid = (
+                    index.get("status") in (None, "READY")
+                    and index.get("queryable") is not False
+                    and vector is not None
+                    and vector.get("numDimensions") == expected_dimensions
+                    and vector.get("similarity") == "cosine"
+                    and expected_filters <= filter_paths
+                )
+                if valid:
+                    logger.info(
+                        "mongodb_vector_index_ready name=%s dimensions=%s",
+                        _VECTOR_INDEX_NAME,
+                        expected_dimensions,
+                    )
+                    return True
+                logger.warning(
+                    "mongodb_vector_index_misconfigured name=%s expected_path=embedding "
+                    "expected_dimensions=%s expected_similarity=cosine missing_filters=%s",
+                    _VECTOR_INDEX_NAME,
+                    expected_dimensions,
+                    sorted(expected_filters - filter_paths),
+                )
+                return False
+            logger.warning(
+                "mongodb_vector_index_missing name=%s expected_path=embedding "
+                "expected_dimensions=%s; provision it in Atlas Search administration",
+                _VECTOR_INDEX_NAME,
+                expected_dimensions,
+            )
+        except Exception as exc:  # local MongoDB does not support $listSearchIndexes
+            logger.warning(
+                "mongodb_vector_index_probe_unavailable name=%s error_type=%s; "
+                "Atlas vector search must be provisioned for production",
+                _VECTOR_INDEX_NAME,
+                type(exc).__name__,
+            )
+        return False
 
     @classmethod
     async def close(cls) -> None:

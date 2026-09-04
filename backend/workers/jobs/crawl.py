@@ -245,7 +245,9 @@ async def _run_crawl_job(
         # must never fail the crawl job.
         if cache is not None:
             try:
-                await cache.delete_by_prefix("retrieval", f"{job.website_id}:")
+                prefix = f"{job.tenant_id}:{job.website_id}:"
+                await cache.delete_by_prefix("retrieval", prefix)
+                await cache.delete_by_prefix("lexical", prefix)
             except Exception:
                 logger.warning(
                     "Failed to invalidate retrieval cache for website %s",

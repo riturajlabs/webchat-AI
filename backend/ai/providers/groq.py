@@ -16,7 +16,7 @@ import httpx
 from backend.ai.gemini import GenerationUsage
 from backend.ai.providers.openai_compat import (
     build_chat_payload,
-    iter_openai_sse,
+    iter_openai_first_token_guarded,
     map_openai_http_error,
     shared_http_client,
 )
@@ -29,7 +29,7 @@ _BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
 class GroqGenerationClient:
-    """Groq (llama-3.3-70b-versatile) streaming via the OpenAI-compatible API."""
+    """Groq (openai/gpt-oss-20b) streaming via the OpenAI-compatible API."""
 
     name = "groq"
 
@@ -39,6 +39,7 @@ class GroqGenerationClient:
         model: str | None = None,
         api_key: str | None = None,
         timeout_seconds: float | None = None,
+        first_token_timeout_seconds: float | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         settings = get_settings()
@@ -46,6 +47,11 @@ class GroqGenerationClient:
         self._api_key = api_key if api_key is not None else settings.groq_api_key
         self._timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else settings.ai_provider_timeout_seconds
+        )
+        self._first_token_timeout_seconds = (
+            first_token_timeout_seconds
+            if first_token_timeout_seconds is not None
+            else settings.generation_first_token_timeout_seconds
         )
         self._http_client = http_client
         self._usage = GenerationUsage()
@@ -83,7 +89,9 @@ class GroqGenerationClient:
                 if response.status_code >= 400:
                     await response.aread()
                     raise map_openai_http_error(response.status_code, "Groq")
-                async for delta, usage in iter_openai_sse(response):
+                async for delta, usage in iter_openai_first_token_guarded(
+                    response, first_token_timeout_seconds=self._first_token_timeout_seconds
+                ):
                     if usage is not None:
                         self._usage = GenerationUsage(
                             input_tokens=int(usage.get("prompt_tokens") or 0),

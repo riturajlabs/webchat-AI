@@ -119,7 +119,7 @@ x-backend-env: &backend-env
   GEMINI_MODEL: ${GEMINI_MODEL-gemini-2.5-flash}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL-gemini-embedding-001}
   GROQ_API_KEY: ${GROQ_API_KEY-}
-  GROQ_MODEL: ${GROQ_MODEL-llama-3.3-70b-versatile}
+  GROQ_MODEL: ${GROQ_MODEL-openai/gpt-oss-20b}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY-}
   OPENROUTER_MODEL: ${OPENROUTER_MODEL-meta-llama/llama-3.3-70b-instruct}
   GENERATION_PROVIDER_ORDER: ${GENERATION_PROVIDER_ORDER-["gemini","groq","openrouter"]}
@@ -299,16 +299,24 @@ services:
     # When REDIS_PASSWORD is set, requirepass is enabled (Phase 14.9.3); empty
     # in development => no auth (local docker only). `$$REDIS_PASSWORD` is the
     # container's own env var (the `$$` disables compose interpolation).
+    # redis-server must run as the `redis` user so it can persist to the named
+    # volume: the `sh` wrapper below mirrors the official entrypoint by (1)
+    # chowning /data (fresh named volumes start root-owned) and (2) using
+    # setpriv to drop privileges before launching redis-server. Without the
+    # drop, redis-server would run as root and, under cap_drop: ALL (no
+    # CAP_DAC_OVERRIDE), cannot write into a redis:redis-owned /data — every
+    # BGSAVE fails with EACCES (project Redis persistence defect).
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD-}
     command:
       - sh
       - -c
       - >-
+        chown -R redis:redis /data 2>/dev/null || true;
         if [ -n "$$REDIS_PASSWORD" ]; then
-          exec redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 200mb --maxmemory-policy allkeys-lru;
+          exec setpriv --reuid redis --regid redis --clear-groups redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 200mb --maxmemory-policy allkeys-lru;
         else
-          exec redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru;
+          exec setpriv --reuid redis --regid redis --clear-groups redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru;
         fi
     # No host port mapping — internal Docker network only (SEC-14.2).
     # To connect from the host for debugging, use:
@@ -341,6 +349,14 @@ services:
     cap_drop:
       - ALL
     cap_add:
+      # The sh wrapper runs as root only to chown /data (CHOWN, DAC_OVERRIDE)
+      # and then setpriv-drops to the `redis` user (SETGID, SETUID) before
+      # exec'ing redis-server — mirroring the official entrypoint's bootstrap.
+      # These four caps stay under the drop-ALL hardening; redis-server itself
+      # runs as uid 999. Dropping them disabled Redis persistence (BGSAVE EACCES
+      # against the redis:redis-owned volume).
+      - CHOWN
+      - DAC_OVERRIDE
       - SETGID
       - SETUID
 

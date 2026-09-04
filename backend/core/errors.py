@@ -187,6 +187,18 @@ class EmbeddingUnavailableError(EmbeddingError):
     code = "EMBEDDING_UNAVAILABLE"
 
 
+class EmbeddingRateLimitedError(EmbeddingError):
+    """Embedding request rejected for quota/rate-limit reasons (e.g. a 429).
+
+    Distinguishes "temporarily rate-limited" from a generic transient failure:
+    the knowledge pipeline records such documents as `rate_limited` (awaiting a
+    deferred retry) instead of permanently `failed`, so the dashboard can render
+    them separately.
+    """
+
+    code = "EMBEDDING_RATE_LIMITED"
+
+
 class EmbeddingCompatibilityError(EmbeddingError):
     """Stored and query vectors belong to incompatible embedding spaces."""
 

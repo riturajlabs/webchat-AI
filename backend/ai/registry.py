@@ -11,8 +11,10 @@ corpus corrupts `$vectorSearch`; the configured `EMBEDDING_DIMENSIONS` must
 match every provider in the order (validated in `backend/core/config.py`).
 """
 
+import asyncio
 import inspect
 import logging
+import time
 from collections.abc import Callable, Sequence
 
 from backend.ai.gemini import GenerationClient, GoogleGeminiClient
@@ -23,7 +25,9 @@ from backend.ai.providers.jina import JinaEmbeddingClient
 from backend.ai.providers.openrouter import OpenRouterGenerationClient
 from backend.ai.router import FallbackEmbeddingClient, FallbackGenerationClient
 from backend.core.config import get_settings
+from backend.core.embedding_identity import EmbeddingIdentity
 from backend.core.errors import ProviderConfigurationError
+from backend.services.ai.provider_health import ProviderHealthStore, provider_health_name
 from backend.services.knowledge.embedding import EmbeddingClient, GoogleEmbeddingClient
 
 logger = logging.getLogger("webchat_ai")
@@ -213,10 +217,114 @@ def _instantiate(factory: EmbeddingFactory, max_retries: int | None) -> Embeddin
     return factory(max_retries=max_retries)
 
 
+async def _is_healthy(provider: EmbeddingClient) -> bool:
+    """Non-raising readiness probe used by provider selection at fan-out.
+
+    Providers that expose a `health()` method (all of them) are probed; a
+    provider that reports unhealthy (e.g. a rate-limited/failed probe, or
+    missing/cleared config) is skipped during selection so a quota-exhausted
+    provider is never chosen for a fresh ingestion. A probe failure never
+    crashes selection - it just rules that provider out.
+    """
+    probe = getattr(provider, "health", None)
+    if probe is None:
+        # Provider with no probe: it passed the key gate in build_embedding_chain.
+        return True
+    try:
+        return bool(await probe())
+    except Exception:  # noqa: BLE001 - a probe failure only rules one out
+        logger.warning(
+            "embedding provider %r failed its health probe during ingestion "
+            "selection; skipping it.",
+            getattr(provider, "name", "?"),
+        )
+        return False
+
+
+async def select_ingestion_embedding_provider(
+    *,
+    force_provider: str | None = None,
+    health: ProviderHealthStore | None = None,
+) -> EmbeddingClient:
+    """Health-check the configured embedding providers and return exactly ONE
+    for a website's ingestion, honoring a per-website provider lock.
+
+    The selected provider is locked to the website for the whole ingestion
+    (persisted on the website record): every document and every retry resolves
+    through this same function with `force_provider`, so the embedding space
+    never changes.
+
+    * When `force_provider` is set (the website is already locked) that exact
+      provider is returned - the configured order and health are not consulted
+      for selection, so a retry resumes in the SAME embedding space. If the
+      locked provider can no longer be built (API key removed / renamed /
+      disabled) this raises instead of silently switching to another provider.
+    * Without a lock, the available (keyed) providers are health-checked in
+      configured order and the first healthy one is selected.
+    """
+    chain = _registry.build_embedding_chain(get_settings().embedding_provider_order)
+    if not chain:
+        raise ProviderConfigurationError(
+            "No embedding provider is available for ingestion; configure at "
+            "least one keyed provider in EMBEDDING_PROVIDER_ORDER."
+        )
+    if force_provider is not None:
+        for provider in chain:
+            if provider.name == force_provider:
+                return provider
+        raise ProviderConfigurationError(
+            f"Website is locked to embedding provider {force_provider!r}, which is "
+            "no longer available. Refusing to switch embedding spaces mid-ingestion; "
+            "re-index the website to select a new provider."
+        )
+    # No lock yet: health-check in configured order, take the first healthy one.
+    for provider in chain:
+        health_name = provider_health_name("embedding", provider.name)
+        if health is not None and not await health.is_available(health_name):
+            continue
+        started = time.perf_counter()
+        try:
+            is_healthy = await asyncio.wait_for(_is_healthy(provider), timeout=2.0)
+        except TimeoutError:
+            is_healthy = False
+        if is_healthy:
+            if health is not None:
+                await health.record_success(health_name, (time.perf_counter() - started) * 1000.0)
+            return provider
+        if health is not None:
+            await health.record_failure(health_name)
+    provider_names = ", ".join(p.name for p in chain) or "none"
+    raise ProviderConfigurationError(
+        f"No healthy embedding provider is available for ingestion (checked: {provider_names})."
+    )
+
+
+def build_locked_embedding_client(identity: EmbeddingIdentity) -> EmbeddingClient:
+    """Build exactly the client matching a persisted corpus identity.
+
+    This intentionally has no fallback: vectors from different providers or
+    model revisions inhabit different spaces even when their dimensions match.
+    """
+    for provider in _registry.build_embedding_chain(get_settings().embedding_provider_order):
+        if provider.name != identity.provider:
+            continue
+        if provider.embedding_identity != identity:
+            raise ProviderConfigurationError(
+                "Configured embedding provider no longer matches the website corpus identity; "
+                "re-index the whole website before serving retrieval."
+            )
+        return provider
+    raise ProviderConfigurationError(
+        f"Website is locked to embedding provider {identity.provider!r}, which is unavailable."
+    )
+
+
 __all__ = [
     "ProviderRegistry",
     "build_embedding_fallback",
     "build_generation_fallback",
     "build_generation_providers",
     "build_ingestion_embedding_client",
+    "build_locked_embedding_client",
+    "select_ingestion_embedding_provider",
 ]

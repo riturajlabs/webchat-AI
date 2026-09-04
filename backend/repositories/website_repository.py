@@ -3,12 +3,13 @@
 from typing import Any, Literal, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo import ASCENDING, DESCENDING
+from pymongo import ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+from backend.core.embedding_identity import EmbeddingIdentity
 from backend.core.errors import DuplicateWebsiteError
-from backend.core.security import utcnow
-from backend.models.website import WEBSITE_STATUS_DELETED, Website
+from backend.core.security import new_id, utcnow
+from backend.models.website import WEBSITE_STATUS_DELETED, EmbeddingRun, Website
 
 WebsiteSortField = Literal["created_at", "name"]
 WebsiteSortOrder = Literal["asc", "desc"]
@@ -57,6 +58,10 @@ class WebsiteRepository(Protocol):
     async def count_by_tenant(self, tenant_id: str, *, status: str | None = None) -> int: ...
 
     async def update(self, website: Website) -> None: ...
+
+    async def acquire_embedding_run(
+        self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
+    ) -> Website | None: ...
 
     async def delete(self, tenant_id: str, website_id: str) -> None: ...
 
@@ -132,6 +137,36 @@ class MongoWebsiteRepository:
         await self._collection.replace_one(
             {"_id": website.id, "tenant_id": website.tenant_id}, website.to_doc()
         )
+
+    async def acquire_embedding_run(
+        self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
+    ) -> Website | None:
+        """Atomically start one fenced embedding run for a website.
+
+        Only an absent or terminal run can transition to ``running``.  A
+        duplicate fan-out therefore receives ``None`` and must not enqueue a
+        second set of page jobs.  This is deliberately a targeted `$set`, not
+        the repository's general read/modify/replace update path.
+        """
+        now = utcnow()
+        run = EmbeddingRun(
+            id=new_id(), identity=identity, started_at=now, updated_at=now
+        ).model_dump(mode="python")
+        doc = await self._collection.find_one_and_update(
+            {
+                "_id": website_id,
+                "tenant_id": tenant_id,
+                "status": {"$ne": WEBSITE_STATUS_DELETED},
+                "$or": [
+                    {"embedding_run": {"$exists": False}},
+                    {"embedding_run": None},
+                    {"embedding_run.state": {"$in": ["completed", "failed"]}},
+                ],
+            },
+            {"$set": {"embedding_run": run, "updated_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return Website.from_doc(doc) if doc else None
 
     async def delete(self, tenant_id: str, website_id: str) -> None:
         website = await self._collection.find_one({"_id": website_id, "tenant_id": tenant_id})

@@ -318,17 +318,20 @@ async def test_refresh_limiter_fails_closed_on_store_error(monkeypatch) -> None:
     get_settings.cache_clear()
 
 
-async def test_refresh_limiter_disabled_by_switch(monkeypatch) -> None:
-    """When rate_limit_enabled=false, the limiter is a no-op."""
+async def test_refresh_limiter_always_enforced_when_disabled_by_switch(monkeypatch) -> None:
+    """Refresh (auth) stays rate-limited even when RATE_LIMIT_ENABLED=false."""
     import backend.api.deps as deps
 
     get_settings.cache_clear()
     monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setenv("REFRESH_RATE_LIMIT_PER_MINUTE", "5")
     store = FakeRateLimitStore()
     monkeypatch.setattr(deps, "get_redis", lambda: store)
     req = _fake_refresh_request("any-token")
-    for _ in range(100):
-        await deps.refresh_limiter(req)  # never raises
+    for _ in range(5):
+        await deps.refresh_limiter(req)
+    with pytest.raises(RateLimitExceededError):
+        await deps.refresh_limiter(req)  # still rejected when master switch is off
     get_settings.cache_clear()
 
 
@@ -401,5 +404,38 @@ async def test_window_expiry_resets_budget() -> None:
     store._members["k"] = {}
 
     assert await limiter.consume("k") is True
-    assert await limiter.consume("k") is True
-    assert await limiter.consume("k") is False
+
+
+# -----------------------------------------------------------------------
+# SEC-14: credential endpoints stay protected even when the switch is off
+# -----------------------------------------------------------------------
+
+
+async def test_login_limiter_always_enforced_when_disabled_by_switch(monkeypatch) -> None:
+    """Login stays rate-limited (and fails closed) when RATE_LIMIT_ENABLED=false."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_request("/api/auth/login")
+    for _ in range(20):
+        await deps.login_limiter(req)
+    with pytest.raises(RateLimitExceededError):
+        await deps.login_limiter(req)  # still rejected when master switch is off
+    get_settings.cache_clear()
+
+
+async def test_non_auth_limiter_respects_switch(monkeypatch) -> None:
+    """Non-credential endpoints honor RATE_LIMIT_ENABLED=false (no-op)."""
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "false")
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    req = _fake_request("/api/websites")
+    for _ in range(500):
+        await deps.website_limiter(req)  # never raises; switch disables it
+    get_settings.cache_clear()

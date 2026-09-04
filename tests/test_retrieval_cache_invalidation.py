@@ -1,7 +1,7 @@
 """Regression tests for retrieval-cache invalidation prefix parity (R-01).
 
 The crawl worker must invalidate exactly the namespace the API writes:
-``{redis_prefix}:rag:retrieval:{website_id}:{query}``. A prefix mismatch made
+``{redis_prefix}:rag:retrieval:{tenant_id}:{website_id}:{query}``. A prefix mismatch made
 invalidation a silent NO-OP, so stale answers survived the full 900 s TTL
 after every re-crawl.
 """
@@ -59,19 +59,23 @@ async def test_worker_invalidation_deletes_api_prefixed_entries(monkeypatch) -> 
     api_style_prefix = f"{get_settings().redis_prefix}:rag"
     # The API side (deps.get_rag_service) writes entries through this shape.
     api_store = RedisCacheStore(fake_redis, prefix=api_style_prefix)
-    await api_store.set("retrieval", "site-a:what is acme", '["old"]', ttl=900)
-    await api_store.set("retrieval", "site-b:pricing", '["keep"]')
+    await api_store.set("retrieval", "tenant-a:site-a:what is acme", '["old"]', ttl=900)
+    await api_store.set("lexical", "tenant-a:site-a:v1:identity", '{"chunks": []}', ttl=900)
+    await api_store.set("retrieval", "tenant-a:site-b:pricing", '["keep"]')
 
     # The worker builds its invalidation store via the production factory.
     worker_store = _build_cache()
     assert worker_store is not None
 
-    deleted = await worker_store.delete_by_prefix("retrieval", "site-a:")
+    deleted = await worker_store.delete_by_prefix("retrieval", "tenant-a:site-a:")
+    lexical_deleted = await worker_store.delete_by_prefix("lexical", "tenant-a:site-a:")
 
     assert deleted == 1
-    assert await api_store.get("retrieval", "site-a:what is acme") is None
+    assert lexical_deleted == 1
+    assert await api_store.get("retrieval", "tenant-a:site-a:what is acme") is None
+    assert await api_store.get("lexical", "tenant-a:site-a:v1:identity") is None
     # Entries for other websites are untouched.
-    assert await api_store.get("retrieval", "site-b:pricing") == '["keep"]'
+    assert await api_store.get("retrieval", "tenant-a:site-b:pricing") == '["keep"]'
 
 
 def test_worker_cache_uses_api_rag_prefix(monkeypatch) -> None:

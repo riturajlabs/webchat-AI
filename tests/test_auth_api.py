@@ -1,6 +1,7 @@
 """End-to-end HTTP tests for the /api/auth endpoints using fake repositories."""
 
 import pytest
+from backend.api import deps as deps_module
 from backend.api.deps import get_account_service, get_auth_service, require_role
 from backend.core.config import get_settings
 from backend.core.errors import AppError
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from tests.auth_helpers import VALID_PASSWORD, build_auth_env, token_from_url
 from tests.fakes import FakeTenantPurgeRepository
+from tests.test_rate_limit import FakeRateLimitStore
 
 
 @pytest.fixture
@@ -32,9 +34,11 @@ def client(monkeypatch):
         audit=env.audit,
         purge=purge,
     )
+    deps_module.get_redis = lambda: FakeRateLimitStore()
     with TestClient(app) as test_client:
         yield test_client, env
     get_settings.cache_clear()
+    deps_module.get_redis = None
 
 
 REGISTER_PAYLOAD = {

@@ -11,6 +11,7 @@ from backend.repositories.vector.hybrid import (
     reciprocal_rank_fusion,
     tokenize,
 )
+from backend.services.chat.retrieval_strategy import HybridRetrievalStrategy
 
 from tests.chat_helpers import build_chat_env, make_chunk, make_website
 
@@ -216,6 +217,16 @@ def test_keyword_search_relevance_ordering() -> None:
     assert results[0].chunk.id == "a"
 
 
+def test_keyword_search_ties_are_deterministic_by_chunk_id() -> None:
+    """Equal lexical scores must not inherit Mongo/natural corpus ordering."""
+    later = _make_result("z-chunk", "SOIT dean", source_url="https://example.com/z")
+    earlier = _make_result("a-chunk", "SOIT dean", source_url="https://example.com/a")
+
+    results = keyword_search("SOIT dean", [later, earlier], top_k=2)
+
+    assert [result.chunk.id for result in results] == ["a-chunk", "z-chunk"]
+
+
 # ---------------------------------------------------------------------------
 # HybridSearcher
 # ---------------------------------------------------------------------------
@@ -268,23 +279,128 @@ def test_hybrid_searcher_fallback_to_vector_only() -> None:
     assert len(results) > 0
 
 
-def test_hybrid_searcher_does_not_introduce_keyword_only_chunks() -> None:
-    """Keyword matches outside vector hits cannot enter the fused results."""
+def test_hybrid_searcher_recovers_keyword_only_chunk_from_corpus() -> None:
+    """A keyword-only match absent from the vector hits can now be recovered.
+
+    When a full corpus is supplied via ``all_chunks``, keyword retrieval runs
+    over that corpus as a genuine second source. Exact-term matches the vector
+    stage missed must still enter the fused result set.
+    """
     vector_chunks = [
         _make_result("semantic", "account settings and profile", 0.9),
     ]
-    unrelated_keyword_chunk = _make_result(
-        "keyword-only", "create an API key in the dashboard", 0.1
-    )
+    keyword_only_chunk = _make_result("keyword-only", "create an API key in the dashboard", 0.1)
 
     results = HybridSearcher().search(
         "How do I create an API key?",
         vector_chunks,
-        all_chunks=[*vector_chunks, unrelated_keyword_chunk],
+        all_chunks=[*vector_chunks, keyword_only_chunk],
         top_k=5,
     )
 
-    assert [result.chunk.chunk.id for result in results] == ["semantic"]
+    ids = [result.chunk.chunk.id for result in results]
+    assert "keyword-only" in ids, "keyword-only chunk should be recovered"
+    assert "semantic" in ids
+    keyword_only = next(result for result in results if result.chunk.chunk.id == "keyword-only")
+    assert keyword_only.keyword_rank > 0
+    assert keyword_only.rrf_score > 0.0
+
+
+def test_hybrid_searcher_preserves_vector_only_when_no_corpus() -> None:
+    """Without a supplied corpus, keyword falls back to the vector hits only.
+
+    This preserves the previous vector-only behavior: keyword scoring is
+    restricted to the supplied vector results and cannot introduce chunks that
+    have no vector representation.
+    """
+    vector_chunks = [
+        _make_result("semantic", "account settings and profile", 0.9),
+    ]
+
+    results = HybridSearcher().search(
+        "How do I create an API key?",
+        vector_chunks,
+        all_chunks=None,
+        top_k=5,
+    )
+
+    ids = [result.chunk.chunk.id for result in results]
+    assert "semantic" in ids
+    assert "keyword-only" not in ids
+
+
+def test_hybrid_searcher_candidate_pool_keeps_keyword_only_beyond_top_k() -> None:
+    """A keyword-only chunk RRF-ranks below ``top_k`` but survives a larger pool.
+
+    Five vector chunks match both vector and keyword (double RRF boost) and
+    occupy the fused top-5. A sixth keyword-only chunk (only in the keyword
+    ranking) ranks 6th by RRF, so ``top_k=5`` discards it. Expanding the RRF
+    candidate pool past ``top_k`` must keep it so a downstream reranker can
+    still consider it.
+    """
+    vector_chunks = [
+        _make_result("v0", "pricing plan zero", 0.9),
+        _make_result("v1", "pricing plan one", 0.8),
+        _make_result("v2", "pricing plan two", 0.7),
+        _make_result("v3", "pricing plan three", 0.6),
+        _make_result("v4", "pricing plan four", 0.5),
+    ]
+    keyword_only = _make_result("kw-only", "pricing plan dashboard", 0.1)
+    corpus = [*vector_chunks, keyword_only]
+
+    truncated = HybridSearcher().search("pricing plan", vector_chunks, all_chunks=corpus, top_k=5)
+    expanded = HybridSearcher().search(
+        "pricing plan", vector_chunks, all_chunks=corpus, top_k=5, candidate_top_k=10
+    )
+
+    truncated_ids = [r.chunk.chunk.id for r in truncated]
+    assert "kw-only" not in truncated_ids
+    assert len(truncated) == 5
+
+    expanded_ids = [r.chunk.chunk.id for r in expanded]
+    assert "kw-only" in expanded_ids
+    assert len(expanded) > len(truncated)
+
+
+def test_hybrid_strategy_candidate_pool_reaches_reranker_with_corpus() -> None:
+    """The strategy returns the expanded RRF pool (pre-rerank) only with a corpus.
+
+    With ``all_chunks`` supplied and ``candidate_top_k`` set, the strategy
+    returns more than ``top_k`` candidates so the reranker can select the final
+    ``top_k``. Without a corpus, it returns at most ``top_k`` — behavior is
+    preserved.
+    """
+    vector_chunks = [
+        _make_result("v0", "pricing plan zero", 0.9),
+        _make_result("v1", "pricing plan one", 0.8),
+        _make_result("v2", "pricing plan two", 0.7),
+        _make_result("v3", "pricing plan three", 0.6),
+        _make_result("v4", "pricing plan four", 0.5),
+    ]
+    keyword_only = _make_result("kw-only", "pricing plan dashboard", 0.1)
+    corpus = [*vector_chunks, keyword_only]
+
+    strategy = HybridRetrievalStrategy(candidate_top_k=10)
+
+    with_corpus, _ = strategy.search(
+        query="pricing plan",
+        vector_results=vector_chunks,
+        all_chunks=corpus,
+        top_k=5,
+    )
+    no_corpus, _ = strategy.search(
+        query="pricing plan",
+        vector_results=vector_chunks,
+        all_chunks=None,
+        top_k=5,
+    )
+
+    with_corpus_ids = [r.chunk.id for r in with_corpus]
+    assert "kw-only" in with_corpus_ids
+    assert len(with_corpus) > 5
+
+    assert len(no_corpus) == 5
+    assert "kw-only" not in [r.chunk.id for r in no_corpus]
 
 
 def test_hybrid_searcher_rank_info() -> None:
