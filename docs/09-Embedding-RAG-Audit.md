@@ -78,15 +78,28 @@ Add a repository operation using `find_one_and_update`; do not use `WebsiteRepos
 # backend/repositories/website_repository.py
 from pymongo import ReturnDocument
 
-async def acquire_embedding_run(self, tenant_id: str, website_id: str, identity: EmbeddingIdentity) -> Website | None:
+
+async def acquire_embedding_run(
+    self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
+) -> Website | None:
     now = utcnow()
     run = {
-        "id": new_id(), "state": "running", "identity": identity.as_dict(),
-        "attempt": 0, "started_at": now, "next_retry_at": None,
+        "id": new_id(),
+        "state": "running",
+        "identity": identity.as_dict(),
+        "attempt": 0,
+        "started_at": now,
+        "next_retry_at": None,
     }
     doc = await self._collection.find_one_and_update(
-        {"_id": website_id, "tenant_id": tenant_id,
-         "$or": [{"embedding_run": {"$exists": False}}, {"embedding_run.state": {"$in": ["completed", "failed"]}}]},
+        {
+            "_id": website_id,
+            "tenant_id": tenant_id,
+            "$or": [
+                {"embedding_run": {"$exists": False}},
+                {"embedding_run.state": {"$in": ["completed", "failed"]}},
+            ],
+        },
         {"$set": {"embedding_run": run, "knowledge_status": "processing", "updated_at": now}},
         return_document=ReturnDocument.AFTER,
     )
@@ -97,7 +110,9 @@ The selector should use `ProviderHealthStore` for pre-flight availability and al
 
 ```python
 # backend/services/knowledge/embedding.py (or a new embedding_router.py)
-async def select_healthy_embedding_provider(order: list[str], health: ProviderHealthStore) -> EmbeddingClient:
+async def select_healthy_embedding_provider(
+    order: list[str], health: ProviderHealthStore
+) -> EmbeddingClient:
     for name in order:
         provider = build_embedding_provider(name)  # raises if key/model config is invalid
         if not await health.is_available(f"embedding:{name}"):
@@ -109,7 +124,7 @@ async def select_healthy_embedding_provider(order: list[str], health: ProviderHe
         except Exception:
             await health.record_failure(f"embedding:{name}")
             continue
-        await health.record_success(f"embedding:{name}", (time.perf_counter()-started)*1000)
+        await health.record_success(f"embedding:{name}", (time.perf_counter() - started) * 1000)
         return provider
     raise EmbeddingUnavailableError("No healthy configured embedding provider")
 ```

@@ -114,10 +114,7 @@ async def main() -> None:
     old_ms = (time.perf_counter() - t0) * 1000.0
     print(f"  old corpus chunks={len(old_chunks)} (load {old_ms:.0f}ms, embedding-free)")
 
-    old_entries = [
-        CorpusEntry.from_chunk(chunk)
-        for chunk in old_chunks
-    ]
+    old_entries = [CorpusEntry.from_chunk(chunk) for chunk in old_chunks]
 
     # 2. Documents (source content for the simulated re-chunk).
     documents = await docs_repo.list_by_website(args.tenant, args.website)
@@ -132,8 +129,10 @@ async def main() -> None:
     t0 = time.perf_counter()
     report = build_dry_run_report(old_entries, sim_docs, probes=probes)
     sim_ms = (time.perf_counter() - t0) * 1000.0
-    print(f"  chunker simulation done in {sim_ms:.0f}ms "
-          f"-> simulated-new chunks={report.new.total_chunks}")
+    print(
+        f"  chunker simulation done in {sim_ms:.0f}ms "
+        f"-> simulated-new chunks={report.new.total_chunks}"
+    )
 
     # 4. Gates.
     gates = evaluate_gates(
@@ -152,9 +151,7 @@ async def main() -> None:
         "new": report.new.to_dict(),
         "probes_old": [p.to_dict() for p in report.probes_old],
         "probes_new": [p.to_dict() for p in report.probes_new],
-        "gates": [
-            {"name": g.name, "passed": g.passed, "detail": g.detail} for g in gates
-        ],
+        "gates": [{"name": g.name, "passed": g.passed, "detail": g.detail} for g in gates],
         "all_gates_passed": all(g.passed for g in gates),
         "probes": [{"label": label, "fragment": fragment} for label, fragment in probes],
         "structural_headings": list(args.structural_heading),
@@ -171,6 +168,7 @@ async def main() -> None:
             for e in report.new_entries[:5]
         ],
     }
+
     def _write_out() -> None:
         with open(args.out, "w") as f:
             json.dump(json_out, f, indent=2)

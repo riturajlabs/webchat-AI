@@ -59,8 +59,12 @@ def _res(chunk: KnowledgeChunk, score: float, lexical: float | None) -> VectorSe
 async def _rerank(top_result: VectorSearchResult, query: str) -> list[VectorSearchResult]:
     """Run the protected top candidate through the reranker top-5."""
     sem = [
-        _chunk(f"sem-{i}", f"pricing plan variant {i}", [0.95 - 0.05 * i, 0.0, 0.0],
-               url=f"https://x/sem-{i}")
+        _chunk(
+            f"sem-{i}",
+            f"pricing plan variant {i}",
+            [0.95 - 0.05 * i, 0.0, 0.0],
+            url=f"https://x/sem-{i}",
+        )
         for i in range(4)
     ]
     candidates = [
@@ -104,8 +108,7 @@ async def test_chairperson_lexical_reaches_context_despite_low_cosine() -> None:
 
     reached, _scores = _gate(env, reranked)
     assert "chair-1" in reached, (
-        "chairperson chunk must reach context on its lexical/RRF evidence "
-        "despite cosine < 0.56"
+        "chairperson chunk must reach context on its lexical/RRF evidence despite cosine < 0.56"
     )
 
 
@@ -260,13 +263,13 @@ async def test_reranker_carries_and_clears_lexical_evidence() -> None:
     other = _chunk("sem-1", "pricing plan", [0.99, 0.0, 0.0], url="https://x/sem")
     candidates = [
         _res(protected, 0.0164, lexical=0.0159),  # keyword import, protected
-        _res(other, 0.95, lexical=0.014),          # keyword-imported but NOT protected
+        _res(other, 0.95, lexical=0.014),  # keyword-imported but NOT protected
     ]
     reranker = EmbeddingReranker(embedder=_NoopEmbedder(), top_k=5)
     out, _ = await reranker.rerank("who is chairperson", candidates, query_embedding=QUERY_VECTOR)
     by_id = {r.chunk.id: r for r in out}
 
     assert by_id["prot-1"].lexical_score == 0.0159  # carried (protected + evidence)
-    assert by_id["sem-1"].lexical_score is None      # cleared (unprotected)
-    assert by_id["prot-1"].score == 0.0               # true cosine preserved
+    assert by_id["sem-1"].lexical_score is None  # cleared (unprotected)
+    assert by_id["prot-1"].score == 0.0  # true cosine preserved
     assert by_id["prot-1"].score != by_id["prot-1"].lexical_score

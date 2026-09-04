@@ -212,10 +212,7 @@ def usable(result: VectorSearchResult, *, dense_floor: float) -> bool:
     dense = result.dense_score
     lexical = result.lexical_score or 0.0
     strong_exact = result.evidence_reason == "exact_phrase_or_entity"
-    return (
-        (dense is not None and dense >= dense_floor)
-        or (strong_exact and lexical >= 0.20)
-    )
+    return (dense is not None and dense >= dense_floor) or (strong_exact and lexical >= 0.20)
 ```
 
 This requires extending `VectorSearchResult` instead of overloading `score`. The current implementation should at minimum stop using an RRF value as a cosine-like confidence input.

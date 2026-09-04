@@ -56,9 +56,7 @@ def _semantic_chunks() -> list[KnowledgeChunk]:
         "support contact information",
         "billing and invoicing guide",
     ]
-    return [
-        _chunk(f"sem-{i}", texts[i], [0.95 - 0.05 * i, 0.0, 0.0]) for i in range(5)
-    ]
+    return [_chunk(f"sem-{i}", texts[i], [0.95 - 0.05 * i, 0.0, 0.0]) for i in range(5)]
 
 
 def test_strong_lexical_match_full_coverage() -> None:

@@ -125,8 +125,7 @@ async def test_retry_hint_in_message_text_is_respected() -> None:
     fake_sdk = FakeGenAIClient()
     fake_sdk.failures = [
         _FakeMessageError(
-            "429 RESOURCE_EXHAUSTED. You exceeded your current quota... "
-            "Please retry in 23.11s."
+            "429 RESOURCE_EXHAUSTED. You exceeded your current quota... Please retry in 23.11s."
         )
     ]
 
@@ -252,6 +251,7 @@ async def test_server_error_is_retryable_not_rate_limited() -> None:
 async def test_concurrent_embeds_are_paced_to_one_in_flight() -> None:
     """With a limit-1 pacer, two concurrent batch calls must never be in
     flight simultaneously."""
+
     class PacedSDK(FakeGenAIClient):
         async def _embed_content(self, model: str, contents: list[str]):
             nonlocal in_flight, peak

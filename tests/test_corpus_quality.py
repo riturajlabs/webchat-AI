@@ -109,8 +109,8 @@ def test_metrics_within_document_duplicate_still_counted() -> None:
 
 def test_metrics_count_tiny_chunks() -> None:
     entries = [
-        CorpusEntry(text="tiny"),                                     # < 40 tokens
-        CorpusEntry(text="word " * 100),                              # ~100 tokens
+        CorpusEntry(text="tiny"),  # < 40 tokens
+        CorpusEntry(text="word " * 100),  # ~100 tokens
     ]
     m = compute_metrics(entries, tiny_token_threshold=40)
     assert m.tiny_chunks_below == 1
@@ -236,7 +236,7 @@ def test_simulate_rechunk_is_pure_and_writes_nothing() -> None:
 def test_dry_run_report_compares_old_vs_simulated_new() -> None:
     old = [
         CorpusEntry(text="tiny"),
-        CorpusEntry(text="tiny"),                              # duplicate
+        CorpusEntry(text="tiny"),  # duplicate
         CorpusEntry(text="word " * 200, heading="Learning Experiences"),
     ]
     docs = [SimulatedDocument(source="http://a", content="word " * 800)]

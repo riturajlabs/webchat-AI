@@ -327,8 +327,7 @@ def build_dry_run_report(
     are checked against both the old and the simulated-new corpus.
     """
     old_items = [
-        CorpusEntry.from_chunk(item) if not hasattr(item, "text") else item
-        for item in old_entries
+        CorpusEntry.from_chunk(item) if not hasattr(item, "text") else item for item in old_entries
     ]
     old_entries_typed: list[CorpusEntry] = [
         item if isinstance(item, CorpusEntry) else CorpusEntry(text=getattr(item, "text", ""))

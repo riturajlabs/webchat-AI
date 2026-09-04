@@ -25,18 +25,12 @@ def _hub_home() -> str:
     """A link-dense navigation hub (many links, little <main> text)."""
     links = "".join(f'<a href="/docs/page-{i}">Page {i}</a>' for i in range(80))
     return (
-        "<html><body><main><h1>Docs</h1><nav>"
-        + links
-        + "</nav><p>short</p></main></body></html>"
+        "<html><body><main><h1>Docs</h1><nav>" + links + "</nav><p>short</p></main></body></html>"
     )
 
 
 def _content_page(title: str, body: str) -> str:
-    return (
-        "<html><body><main>"
-        f"<h1>{title}</h1><p>{body}</p>"
-        "</main></body></html>"
-    )
+    return f"<html><body><main><h1>{title}</h1><p>{body}</p></main></body></html>"
 
 
 def _session(fetcher, guard, **kwargs) -> CrawlSession:
@@ -167,12 +161,10 @@ async def test_max_pages_still_respected(guard):
 async def test_max_depth_still_respected(guard):
     pages = {
         SEED: (
-            "<html><body><main><h1>H</h1><p>home</p>"
-            '<a href="/level1">L1</a></main></body></html>'
+            '<html><body><main><h1>H</h1><p>home</p><a href="/level1">L1</a></main></body></html>'
         ),
         "https://docs.acme.example/level1": (
-            "<html><body><main><h1>L1</h1><p>l1</p>"
-            '<a href="/level2">L2</a></main></body></html>'
+            '<html><body><main><h1>L1</h1><p>l1</p><a href="/level2">L2</a></main></body></html>'
         ),
         "https://docs.acme.example/level2": _content_page("L2", "l2"),
     }
@@ -236,9 +228,7 @@ async def test_deterministic_ordering_when_scores_equal(guard):
     await session.run()
     urls = [d.url for d in session._documents.documents.values()]
     # /a/x discovered before /b/y => stays ordered when scores tie.
-    assert urls.index("https://docs.acme.example/a/x") < urls.index(
-        "https://docs.acme.example/b/y"
-    )
+    assert urls.index("https://docs.acme.example/a/x") < urls.index("https://docs.acme.example/b/y")
 
 
 async def test_no_duplicate_urls(guard):
