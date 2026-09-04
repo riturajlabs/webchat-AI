@@ -188,6 +188,7 @@ class KnowledgeProcessor:
         *,
         on_retry: RetryFn | None = None,
         run_id: str | None = None,
+        force_rechunk: bool = False,
     ) -> dict[str, Any]:
         """Embed one document into the knowledge base (idempotent).
 
@@ -213,7 +214,11 @@ class KnowledgeProcessor:
                 return {"status": "stale_job", "run_id": run_id}
 
         existing_chunks = await self._chunks.count_by_document(document.tenant_id, document.id)
-        if document.knowledge_checksum == document.checksum and existing_chunks > 0:
+        if (
+            not force_rechunk
+            and document.knowledge_checksum == document.checksum
+            and existing_chunks > 0
+        ):
             return {"status": "unchanged"}
 
         document.knowledge_status = KNOWLEDGE_STATUS_PROCESSING

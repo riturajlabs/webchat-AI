@@ -75,6 +75,10 @@ def test_tokenize_numbers() -> None:
     assert "costs" in tokens
 
 
+def test_tokenize_normalizes_common_spelling_variants() -> None:
+    assert tokenize("Can I take addmission?") == ["admission"]
+
+
 # ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion
 # ---------------------------------------------------------------------------
@@ -225,6 +229,17 @@ def test_keyword_search_ties_are_deterministic_by_chunk_id() -> None:
     results = keyword_search("SOIT dean", [later, earlier], top_k=2)
 
     assert [result.chunk.id for result in results] == ["a-chunk", "z-chunk"]
+
+
+def test_keyword_search_rare_entity_beats_repeated_generic_term() -> None:
+    chunks = [
+        _make_result("generic", "admission admission admission", 0.9),
+        _make_result("bca", "admission bca", 0.8),
+    ]
+
+    results = keyword_search("addmission bca", chunks, top_k=2)
+
+    assert results[0].chunk.id == "bca"
 
 
 # ---------------------------------------------------------------------------

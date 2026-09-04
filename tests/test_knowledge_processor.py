@@ -279,6 +279,32 @@ async def test_embedding_failure_records_failed_state_and_audits() -> None:
     assert env.vector.chunks == []
 
 
+async def test_forced_rechunk_embedding_failure_preserves_existing_chunks() -> None:
+    env = await _env()
+    await env.processor.process_document(env.document.id)
+    original = list(env.vector.chunks)
+
+    class FailingEmbedder(FakeEmbeddingClient):
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            raise EmbeddingError("rate limited")
+
+    processor = KnowledgeProcessor(
+        documents=env.documents,
+        vector=env.vector,
+        chunks=env.chunks,
+        websites=env.websites,
+        audit=env.audit,
+        embedder=FailingEmbedder(),
+        chunk_size=30,
+        overlap=5,
+    )
+
+    result = await processor.process_document(env.document.id, force_rechunk=True)
+
+    assert result["status"] == "failed"
+    assert env.vector.chunks == original
+
+
 async def test_missing_document_is_not_found() -> None:
     env = await _env()
     assert await env.processor.process_document("missing") == {"status": "not_found"}

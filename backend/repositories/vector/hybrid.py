@@ -99,6 +99,7 @@ _STOP_WORDS: frozenset[str] = frozenset(
         "do",
         "does",
         "did",
+        "take",
         "will",
         "would",
         "could",
@@ -193,7 +194,15 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 def tokenize(text: str) -> list[str]:
     """Lowercase, strip punctuation, remove stop words, return content tokens."""
     words = _WORD_RE.findall(text.lower())
-    return [w for w in words if w not in _STOP_WORDS]
+    return [_normalize_token(w) for w in words if w not in _STOP_WORDS]
+
+
+_COMMON_TOKEN_VARIANTS = {"addmission": "admission", "admisssion": "admission"}
+
+
+def _normalize_token(token: str) -> str:
+    """Normalize frequent spelling variants without site-specific vocabulary."""
+    return _COMMON_TOKEN_VARIANTS.get(token, token)
 
 
 def keyword_search(
@@ -222,9 +231,17 @@ def keyword_search(
     if not query_tokens:
         return []
 
-    scored: list[tuple[float, VectorSearchResult]] = []
+    document_frequency: dict[str, int] = defaultdict(int)
+    tokenized_chunks: list[tuple[VectorSearchResult, list[str]]] = []
     for result in chunks:
         text_tokens = tokenize(result.chunk.chunk_text)
+        tokenized_chunks.append((result, text_tokens))
+        for token in set(text_tokens):
+            document_frequency[token] += 1
+
+    corpus_size = len(tokenized_chunks)
+    scored: list[tuple[float, VectorSearchResult]] = []
+    for result, text_tokens in tokenized_chunks:
         if not text_tokens:
             scored.append((0.0, result))
             continue
@@ -235,7 +252,8 @@ def keyword_search(
         score = 0.0
         for qt in query_tokens:
             if qt in text_freq:
-                score += text_freq[qt] / math.sqrt(len(text_tokens))
+                idf = math.log((corpus_size + 1) / (document_frequency[qt] + 1)) + 1.0
+                score += idf / math.sqrt(len(text_tokens))
         scored.append((score, result))
 
     # Stable tie breaking matters because RRF consumes rank positions.  Mongo
