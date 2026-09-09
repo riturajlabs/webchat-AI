@@ -15,6 +15,7 @@ from backend.models.website import WEBSITE_STATUS_READY, Website
 from backend.repositories.vector.base import VectorSearchResult
 from backend.services.chat.rag_service import RagService
 from backend.services.website import WebsiteService
+from backend.utils.prompt_security import InjectionTracker
 
 from tests.fakes import (
     FakeAuditLogRepository,
@@ -53,6 +54,7 @@ def build_chat_env(
     deltas: list[str] | None = None,
     cache: FakeCacheStore | None = None,
     reranker: bool = False,
+    injection_tracker: InjectionTracker | None = None,
 ) -> ChatEnv:
     websites = FakeWebsiteRepository()
     widgets = FakeWidgetRepository()
@@ -76,6 +78,7 @@ def build_chat_env(
         top_k=top_k,
         memory_turns=memory_turns,
         allow_reranking=reranker,
+        injection_tracker=injection_tracker,
     )
     websites_service = WebsiteService(
         websites=websites,

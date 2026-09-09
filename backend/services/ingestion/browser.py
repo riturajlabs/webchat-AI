@@ -18,6 +18,16 @@ from backend.services.ingestion.ssrf_guard import SsrFGuard
 _playwright: Any = None
 _browser: Browser | None = None
 _semaphore: asyncio.Semaphore | None = None
+# ARCH-02: the lazy browser launch is racy without a lock - two coroutines
+# seeing `_browser is None` would each start a separate Chromium process.
+_launch_lock: asyncio.Lock | None = None
+
+
+def _browser_lock() -> asyncio.Lock:
+    global _launch_lock
+    if _launch_lock is None:
+        _launch_lock = asyncio.Lock()
+    return _launch_lock
 
 
 def crawl_semaphore() -> asyncio.Semaphore:
@@ -29,17 +39,26 @@ def crawl_semaphore() -> asyncio.Semaphore:
 
 
 async def get_browser() -> Browser:
-    """Return the shared headless Chromium instance (lazily launched)."""
+    """Return the shared headless Chromium instance (lazily launched).
+
+    The launch is serialized with an ``asyncio.Lock`` (ARCH-02) so concurrent
+    first callers share one browser instead of each starting their own.
+    """
     global _playwright, _browser
     if _browser is not None and _browser.is_connected():
         return _browser
-    settings = get_settings()
-    args = ["--disable-dev-shm-usage"]
-    if settings.crawl_no_sandbox:
-        args.append("--no-sandbox")
-    _playwright = await async_playwright().start()
-    _browser = await _playwright.chromium.launch(headless=True, args=args)
-    return _browser
+    async with _browser_lock():
+        # Double-checked: while we waited for the lock another coroutine may
+        # have completed the launch.
+        if _browser is not None and _browser.is_connected():
+            return _browser
+        settings = get_settings()
+        args = ["--disable-dev-shm-usage"]
+        if settings.crawl_no_sandbox:
+            args.append("--no-sandbox")
+        _playwright = await async_playwright().start()
+        _browser = await _playwright.chromium.launch(headless=True, args=args)
+        return _browser
 
 
 async def close_browser() -> None:

@@ -249,3 +249,47 @@ def test_mixed_dimension_prevented() -> None:
             jina_embedding_dimensions=512,
             embedding_provider_order=["gemini", "jina"],
         )
+
+
+# ---- protocol compliance regression (Phase 3) ----
+
+
+async def test_fallback_embedding_client_satisfies_protocol() -> None:
+    """FallbackEmbeddingClient must satisfy the EmbeddingClient protocol."""
+    gemini = FakeEmbeddingProvider("gemini")
+    fallback = FallbackEmbeddingClient([gemini])
+
+    # Protocol-required attributes
+    assert isinstance(fallback.name, str)
+    assert callable(getattr(fallback, "health", None))
+    assert callable(getattr(fallback, "embed", None))
+
+    # health() returns True when providers are present
+    assert await fallback.health() is True
+
+
+async def test_fallback_empty_chain_health_is_false() -> None:
+    """FallbackEmbeddingClient with no providers reports unhealthy."""
+    fallback = FallbackEmbeddingClient([])
+    assert await fallback.health() is False
+
+
+async def test_fallback_name_tracks_active_provider() -> None:
+    """FallbackEmbeddingClient.name reflects the serving provider after embed."""
+    gemini = FakeEmbeddingProvider("gemini")
+    fallback = FallbackEmbeddingClient([gemini])
+    assert fallback.name == "fallback"
+
+    await fallback.embed(["test"])
+    assert fallback.name == "gemini"
+
+
+async def test_fallback_name_fallback_on_failure() -> None:
+    """FallbackEmbeddingClient.name stays 'fallback' when all providers fail."""
+    gemini = FakeEmbeddingProvider("gemini", fail=True)
+    fallback = FallbackEmbeddingClient([gemini])
+    assert fallback.name == "fallback"
+
+    with pytest.raises(EmbeddingUnavailableError):
+        await fallback.embed(["test"])
+    assert fallback.name == "fallback"

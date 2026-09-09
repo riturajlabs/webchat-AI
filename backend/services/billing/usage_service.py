@@ -169,16 +169,19 @@ class UsageService:
             return
         if quantity <= 0:
             return
-        plan = await self.get_plan(tenant_id)
-        limit = self._limit_for(plan, event_type)
-        if limit is None:
-            return
-        used = await self._used_for(tenant_id, event_type)
-        if used + quantity > limit:
-            raise LimitReachedError(
-                f"The {plan.name} plan limit for {event_type} has been reached.",
-                extra={"metric": event_type, "used": used, "limit": limit},
-            )
+        from backend.workers.timing import chat_stage
+
+        async with chat_stage("gate.usage_check_limit"):
+            plan = await self.get_plan(tenant_id)
+            limit = self._limit_for(plan, event_type)
+            if limit is None:
+                return
+            used = await self._used_for(tenant_id, event_type)
+            if used + quantity > limit:
+                raise LimitReachedError(
+                    f"The {plan.name} plan limit for {event_type} has been reached.",
+                    extra={"metric": event_type, "used": used, "limit": limit},
+                )
 
     async def record_usage(
         self,

@@ -1,0 +1,20 @@
+# Prometheus scrape configuration for WebChat AI (Phase 6, OBS-03).
+#
+# The application exposes Prometheus text format at root `/metrics` (no /api
+# prefix; see backend/api/routes/metrics.py). This file is the reference
+# scrape config; adjust the target address/port to your deployment and merge
+# the rule file listed below with your existing Prometheus configuration:
+#
+#   rule_files:
+#     - /etc/prometheus/alerts.yml   # docker/prometheus/alerts.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 1m
+
+scrape_configs:
+  - job_name: webchat-ai
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - api:8000

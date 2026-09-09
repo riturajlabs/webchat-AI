@@ -67,8 +67,8 @@ def _prod_settings() -> Settings:
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         mongo_username="test-user",
         mongo_password="test-pass",
         redis_password="test-pass",
@@ -179,12 +179,15 @@ async def _ready_website(chat_env) -> None:
     )
 
 
+VISITOR_ID = "3f0c5f6a-2c1a-4d8e-9b7a-1a2b3c4d5e6f"
+
+
 def _token() -> str:
     token, _ = create_widget_session_token(
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
         website_id=WEBSITE_ID,
-        visitor_id="visitor-origin",
+        visitor_id=VISITOR_ID,
     )
     return f"Bearer {token}"
 
@@ -206,7 +209,7 @@ async def test_allowed_origin_full_flow(client) -> None:
 
     session = test_client.post(
         "/api/widget/v1/sessions",
-        json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+        json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
         headers=_headers(),
     )
     assert session.status_code == 200
@@ -276,7 +279,7 @@ async def test_allowed_origin_matching_is_case_insensitive(client) -> None:
     "method, path, body, headers",
     [
         ("get", "/api/widget/v1/config/widget-origin-1", None, {}),
-        ("post", "/api/widget/v1/sessions", {"widget_id": WIDGET_ID, "visitor_id": "v"}, {}),
+        ("post", "/api/widget/v1/sessions", {"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID}, {}),
         ("post", "/api/widget/v1/chat", {"question": "Hi"}, {"Authorization": _token()}),
         (
             "post",
@@ -411,7 +414,7 @@ async def test_sessions_without_origin_header_rejected(client) -> None:
     for headers in ({}, {"User-Agent": BROWSER_UA}, {"User-Agent": "curl/8.4.0"}):
         response = test_client.post(
             "/api/widget/v1/sessions",
-            json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+            json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
             headers=headers,
         )
         assert response.status_code == 403, headers
@@ -423,7 +426,7 @@ async def test_null_origin_cannot_mint_session(client) -> None:
     test_client, _, _ = client
     response = test_client.post(
         "/api/widget/v1/sessions",
-        json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+        json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
         headers={"Origin": "null"},
     )
     assert response.status_code == 403
@@ -488,7 +491,7 @@ async def test_localhost_full_flow_still_works_in_development(client) -> None:
 
     session = test_client.post(
         "/api/widget/v1/sessions",
-        json={"widget_id": WIDGET_ID, "visitor_id": "v"},
+        json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
         headers=origin,
     )
     assert session.status_code == 200

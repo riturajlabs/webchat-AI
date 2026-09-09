@@ -20,14 +20,16 @@ the streaming endpoint stays uniform.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import time
 from collections.abc import AsyncGenerator, Callable
+from dataclasses import dataclass
 from typing import Any
 
-from backend.ai.gemini import GenerationClient
+from backend.ai.gemini import GenerationClient, GenerationUsage
 from backend.core.cache import CacheStore
 from backend.core.config import get_settings
 from backend.core.errors import (
@@ -46,9 +48,10 @@ from backend.core.metrics import (
     record_llm_tokens,
     record_rag_empty,
     record_rag_latency,
+    record_rag_stage_latency,
 )
 from backend.core.privacy import content_hash
-from backend.core.prompt_guard import validate_response
+from backend.core.prompt_guard import InjectionVerdict, validate_response
 from backend.core.quota import LLMQuotaService
 from backend.core.security import new_id
 from backend.models.chat_message import (
@@ -80,7 +83,9 @@ from backend.services.billing.pricing import (
     load_rate_card,
 )
 from backend.services.chat.confidence import (
+    AnswerabilityMetrics,
     ConfidenceMetrics,
+    assess_answerability,
     assess_result_confidence,
     usable,
 )
@@ -106,13 +111,93 @@ from backend.services.knowledge.embedding import (
     EmbeddingIdentity,
     ensure_embedding_compatibility,
 )
+from backend.utils.prompt_security import InjectionTracker
+from backend.utils.sanitization import truncate_at_word_boundary
 from backend.workers.timing import chat_stage
 
 logger = logging.getLogger("webchat_ai")
 
+# RAG-02: shared process-local abuse tracker. Wired into the RAG entry path
+# (`stream_answer`) so every injection verdict recorded by the existing
+# `sanitize_question` -> `scan_user_input` pass also feeds repeated-HIGH-attempt
+# escalation. Process-local by design and bounded (see InjectionTracker);
+# callers that need a deterministic instance (tests) inject their own.
+_SHARED_INJECTION_TRACKER = InjectionTracker()
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    """Structured retrieval-stage output (replaces a 13-element tuple).
+
+    Carries the vector query plus every per-stage timer and diagnostic so
+    ``stream_answer`` consumes the stage by name instead of positional
+    unpacking (BE-Q10).
+    """
+
+    query_vector: list[float]
+    results: list[VectorSearchResult]
+    embedding_ms: float
+    retrieval_ms: float
+    embedding_cache_hit: bool
+    retrieval_cache_hit: bool
+    metrics: RetrievalMetricsInfo
+    load_chunks_ms: float
+    rerank_ms: float
+    rerank_embedding_ms: float
+    rerank_input_count: int
+    hybrid_candidate_count: int
+    adaptive_max_context_chars: int
+
 
 def _error_event(code: str, message: str) -> dict[str, Any]:
     return {"event": "error", "data": {"code": code, "message": message}}
+
+
+# RAG-PERF-02: stable serialization for a final retrieval result so the
+# retrieval cache can round-trip the post-strategy, post-rerank output
+# (schema 2) without recomputing the lexical/RRF/rerank pipeline on a hit.
+# All eight VectorSearchResult fields are preserved so downstream consumers
+# (context builder, confidence, answerability) see identical evidence on a
+# cache hit and a miss.
+def _vector_result_payload(result: VectorSearchResult) -> dict[str, Any]:
+    payload = {
+        "chunk": result.chunk.model_dump(mode="json"),
+        "score": result.score,
+    }
+    if result.lexical_score is not None:
+        payload["lexical_score"] = result.lexical_score
+    if result.dense_score is not None:
+        payload["dense_score"] = result.dense_score
+    if result.lexical_exact:
+        payload["lexical_exact"] = True
+    return payload
+
+
+def _vector_result_from_payload(payload: dict[str, Any]) -> VectorSearchResult:
+    return VectorSearchResult(
+        chunk=KnowledgeChunk(**payload["chunk"]),
+        score=payload["score"],
+        lexical_score=payload.get("lexical_score"),
+        dense_score=payload.get("dense_score"),
+        lexical_exact=bool(payload.get("lexical_exact", False)),
+    )
+
+
+def _parse_lexical_corpus(raw: str) -> list[VectorSearchResult]:
+    """CPU-bound hydration of the compact lexical-corpus Redis payload.
+
+    Pure transformation (JSON parse + ``KnowledgeChunk`` construction +
+    ``VectorSearchResult`` wrapping) with NO I/O. Runs inside a worker thread
+    via ``asyncio.to_thread`` so it never blocks the asyncio event loop
+    (RAG-PERF-03 / F-01). Input order is preserved and raise types mirror the
+    legacy inline code (``JSONDecodeError``/``KeyError``/``TypeError``/
+    ``ValueError``) so malformed cache values still degrade to the DB path
+    exactly as before.
+    """
+    payload = json.loads(raw)
+    return [
+        VectorSearchResult(chunk=KnowledgeChunk(**item), score=0.5) for item in payload["chunks"]
+    ]
 
 
 def _now() -> float:
@@ -160,6 +245,7 @@ class RagService:
         messages: ChatMessageRepository,
         usage: UsageRecordRepository,
         cache: CacheStore | None = None,
+        injection_tracker: InjectionTracker | None = None,
         embedding_resolver: Callable[[EmbeddingIdentity], EmbeddingClient] | None = None,
         top_k: int | None = None,
         prompt_version: int | None = None,
@@ -178,6 +264,9 @@ class RagService:
         self._messages = messages
         self._usage = usage
         self._cache = cache
+        self._injection_tracker = (
+            injection_tracker if injection_tracker is not None else _SHARED_INJECTION_TRACKER
+        )
         self._top_k = top_k if top_k is not None else settings.chat_top_k
         self._prompt_version = (
             prompt_version if prompt_version is not None else settings.rag_prompt_version
@@ -195,6 +284,11 @@ class RagService:
         # questions sharing a cold embed cache trigger ONE provider call, not N.
         # Keyed on the normalized question; consumed per retrieval turn.
         self._embed_inflight: dict[str, asyncio.Future[tuple[list[float], EmbeddingIdentity]]] = {}
+        # PERF-05: write-behind embedding cache SETs. The cache entry only
+        # benefits future callers, so the Redis write runs as a background task
+        # off the request critical path. Held here (strong ref) so the loop does
+        # not GC a pending task; each task self-removes on completion.
+        self._embedding_write_tasks: set[asyncio.Task[None]] = set()
         self._retrieval_cache_size = settings.chat_retrieval_cache_size
         self._retrieval_cache_ttl = settings.chat_retrieval_cache_ttl_seconds
         self._enable_faithfulness_check = settings.enable_faithfulness_check
@@ -255,6 +349,73 @@ class RagService:
         self._rate_card = load_rate_card(settings.ai_model_pricing_json)
         self._warned_unpriced_models: set[str] = set()
 
+    @staticmethod
+    def _tracking_identity(
+        tenant_id: str, visitor_id: str | None, session_id: str | None
+    ) -> str | None:
+        """Tenant-scoped key for injection tracking, or None when unattributable.
+
+        Skipping anonymous requests (no visitor/session) keeps the tracker
+        isolated: attempts can only ever be counted for an identity that
+        actually identifies a caller, and the tenant prefix prevents any
+        cross-tenant visitor/session id collision.
+        """
+        raw = visitor_id or session_id
+        if not raw:
+            return None
+        return f"{tenant_id}:{raw}"
+
+    def _injection_hook(
+        self, tenant_id: str, visitor_id: str | None, session_id: str | None
+    ) -> Callable[[InjectionVerdict], None]:
+        """Build the on_verdict hook feeding the injection abuse tracker.
+
+        Consumes the verdict already produced by `sanitize_question`'s single
+        `scan_user_input` pass (no re-scan). The tracker records only HIGH
+        severity; when it crosses the escalation threshold a warning log fires.
+        Tracker failures are caught so security monitoring can never break the
+        normal request path (fail-open).
+        """
+        identity = self._tracking_identity(tenant_id, visitor_id, session_id)
+
+        def hook(verdict: InjectionVerdict) -> None:
+            if identity is None:
+                return
+            try:
+                self._injection_tracker.record(identity, verdict.severity)
+                if self._injection_tracker.is_escalated(identity):
+                    logger.warning(
+                        "prompt_security injection_escalated identity=%s severity=%s patterns=%s",
+                        identity,
+                        verdict.severity,
+                        verdict.patterns,
+                    )
+            except Exception:
+                logger.exception("prompt_security tracker_record_failed")
+
+        return hook
+
+    async def _embedded_from_cache(self, key: str) -> tuple[list[float], EmbeddingIdentity] | None:
+        """Read and decode a cached question embedding; None on miss/corrupt."""
+        if self._cache is None or self._embedding_cache_size <= 0:
+            return None
+        raw = await self._cache.get("embed", key)
+        if raw is None:
+            return None
+        try:
+            entry = json.loads(raw)
+            identity_data = entry["embedding_identity"]
+            identity = EmbeddingIdentity(
+                provider=identity_data["provider"],
+                model=identity_data["model"],
+                dimensions=identity_data["dimensions"],
+                version=identity_data["version"],
+            )
+            return entry["vector"], identity
+        except (json.JSONDecodeError, TypeError, KeyError):
+            # Corrupt entry: treated as a miss so the exact text is re-embedded.
+            return None
+
     async def _embed_question(
         self, question: str, *, required_identity: EmbeddingIdentity | None = None
     ) -> tuple[list[float], bool, EmbeddingIdentity]:
@@ -271,6 +432,19 @@ class RagService:
         result instead of each embedding the same text (Phase 3 latency audit).
         Waiter callers report `cache_hit=False` — the provider cache itself was
         not hit — which is accurate for analytics.
+
+        Ownership of a key is claimed atomically via `setdefault` (BE-Q01), so
+        two concurrent callers can never both embed the same text: exactly one
+        registers as owner, every other caller awaits that same future, and an
+        owner re-checks the cache after winning the key so a flight that
+        completed during the race window is reused instead of re-embedded.
+
+        The cache write-back is off the critical path (PERF-05): the SET only
+        benefits future requests, so it runs as a background task and the
+        request proceeds once the vector is produced. The single-flight key
+        stays claimed until the write settles so a caller arriving mid-write
+        shares this resolved future instead of re-embedding (BE-Q01); write
+        failures are logged and the cache remains fail-open.
         """
         identity_key = ""
         if required_identity is not None:
@@ -287,31 +461,30 @@ class RagService:
             if identity_key
             else question.strip().lower()
         )
-        if self._cache is not None and self._embedding_cache_size > 0:
-            raw = await self._cache.get("embed", key)
-            if raw is not None:
-                try:
-                    entry = json.loads(raw)
-                    identity_data = entry["embedding_identity"]
-                    identity = EmbeddingIdentity(
-                        provider=identity_data["provider"],
-                        model=identity_data["model"],
-                        dimensions=identity_data["dimensions"],
-                        version=identity_data["version"],
-                    )
-                    return entry["vector"], True, identity
-                except (json.JSONDecodeError, TypeError):
-                    pass
-        # Single-flight: a concurrent miss on this exact key awaits the owner.
-        concurrent = self._embed_inflight.get(key)
-        if concurrent is not None:
-            vector, identity = await concurrent
+        cached = await self._embedded_from_cache(key)
+        if cached is not None:
+            return cached[0], True, cached[1]
+        # Single-flight: claim the key atomically. `setdefault` guarantees only
+        # the first registrant becomes owner; all other concurrent callers
+        # receive the owner's future and await the same result.
+        loop = asyncio.get_running_loop()
+        my_future: asyncio.Future[tuple[list[float], EmbeddingIdentity]] = loop.create_future()
+        owner = self._embed_inflight.setdefault(key, my_future)
+        if owner is not my_future:
+            # A concurrent owner already claimed this key — share its result.
+            vector, identity = await owner
             return vector, False, identity
-        future: asyncio.Future[tuple[list[float], EmbeddingIdentity]] = (
-            asyncio.get_running_loop().create_future()
-        )
-        self._embed_inflight[key] = future
+        write_pending = False
         try:
+            # We own the key. Re-check the cache: an owner that completed in
+            # the window between our first cache read and this registration
+            # already wrote the entry (BE-Q01). Reuse it instead of opening a
+            # duplicate provider call for the same text.
+            cached = await self._embedded_from_cache(key)
+            if cached is not None:
+                if not my_future.done():
+                    my_future.set_result(cached)
+                return cached[0], False, cached[1]
             embedder = (
                 self._embedding_resolver(required_identity)
                 if required_identity is not None and self._embedding_resolver is not None
@@ -326,22 +499,136 @@ class RagService:
                 )
             if self._cache is not None and self._embedding_cache_size > 0:
                 ttl = self._embedding_cache_ttl if self._embedding_cache_ttl > 0 else None
-                await self._cache.set(
-                    "embed",
-                    key,
-                    json.dumps({"vector": vector, "embedding_identity": identity.as_dict()}),
-                    ttl=ttl,
-                )
-            if not future.done():
-                future.set_result((vector, identity))
+                # PERF-05 write-behind: the SET is only read by *future*
+                # requests, so it must never block this one. Run it as a
+                # background task after producing the vector. The single-flight
+                # key stays claimed until the write settles — the done-callback
+                # below releases it — so a caller arriving mid-write shares this
+                # already-resolved future instead of opening a duplicate provider
+                # call for the same text (BE-Q01).
+                payload = json.dumps({"vector": vector, "embedding_identity": identity.as_dict()})
+
+                def _release_after_write(task: asyncio.Task[None]) -> None:
+                    self._embedding_write_tasks.discard(task)
+                    try:
+                        task.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.warning(
+                            "embedding cache write-behind failed (key=%r)", key, exc_info=True
+                        )
+                    finally:
+                        if self._embed_inflight.get(key) is my_future:
+                            self._embed_inflight.pop(key, None)
+
+                write_task = asyncio.create_task(self._cache.set("embed", key, payload, ttl=ttl))
+                self._embedding_write_tasks.add(write_task)
+                write_task.add_done_callback(_release_after_write)
+                write_pending = True
+            if not my_future.done():
+                my_future.set_result((vector, identity))
             return vector, False, identity
         except BaseException as exc:  # noqa: BLE001 - propagate to owner AND waiters
-            if not future.done():
-                future.set_exception(exc)
+            if not my_future.done():
+                my_future.set_exception(exc)
+            try:
+                # The owner never awaits its own future, so make it retrieve
+                # its exception here: a flight with no waiters must not surface
+                # an unobserved Future exception. Waiters (if any) saw the same
+                # value; the original exception is re-raised below regardless.
+                await my_future
+            except BaseException:  # noqa: BLE001 - value was already seen by waiters
+                pass
             raise
         finally:
-            if self._embed_inflight.get(key) is future:
+            # Cleanup on every exit (success AND failure) so a later caller can
+            # retry. The identity guard never evicts a newer owner of the key.
+            # When a write-behind was scheduled the key is released by its
+            # done-callback instead (BE-Q01 coalescing across the write window).
+            if not write_pending and self._embed_inflight.get(key) is my_future:
                 self._embed_inflight.pop(key, None)
+
+    async def _run_retrieval_strategy(
+        self,
+        *,
+        query: str,
+        vector_results: list[VectorSearchResult],
+        all_chunks: list[VectorSearchResult] | None,
+        top_k: int,
+    ) -> tuple[list[VectorSearchResult], RetrievalMetricsInfo]:
+        """Run the configured retrieval strategy off the event loop (PERF-K01).
+
+        ``HybridRetrievalStrategy`` tokenizes the full lexical corpus — a
+        CPU-bound O(n) pass (50-300ms on large websites) — so it is moved to a
+        worker thread to keep the event loop responsive during chat requests.
+        The vector-only pass-through stays on the loop (it does no work).
+        """
+        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
+            return await asyncio.to_thread(
+                self._retrieval_strategy.search,
+                query=query,
+                vector_results=vector_results,
+                all_chunks=all_chunks,
+                top_k=top_k,
+            )
+        return self._retrieval_strategy.search(
+            query=query,
+            vector_results=vector_results,
+            all_chunks=all_chunks,
+            top_k=top_k,
+        )
+
+    @staticmethod
+    async def _stop_history_task(history_task: asyncio.Task[Any]) -> None:
+        """Cancel the background history read and consume its termination.
+
+        ``Task.cancel()`` only *schedules* cancellation; without awaiting the
+        task, the resulting ``CancelledError`` surfaces later as a noisy
+        "Task exception was never retrieved" background traceback and the read's
+        resources are not released deterministically (BE-Q11).
+        """
+        history_task.cancel()
+        try:
+            await history_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _fallback_events(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        history_task: asyncio.Task[Any] | None,
+        session: ChatSession,
+        started: float,
+        vector_queries: int,
+        reason: str,
+        query: str,
+        scores: list[float] | None = None,
+        confidence_metrics: ConfidenceMetrics | None = None,
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Emit the safe-fallback stream and record it (BE-Q09 pipeline stage).
+
+        Stops the background history read (when one is in flight), emits the
+        no-context fallback event sequence and records the chat failure.
+        Callers forward the yielded events and ``return``.
+        """
+        if history_task is not None:
+            await self._stop_history_task(history_task)
+        async for event in self._emit_fallback(
+            tenant_id=tenant_id,
+            website_id=website_id,
+            session=session,
+            started=started,
+            vector_queries=vector_queries,
+            reason=reason,
+            query=query,
+            scores=scores,
+            confidence_metrics=confidence_metrics,
+        ):
+            yield event
+        record_chat_failure(reason=reason)
 
     async def _retrieve(
         self,
@@ -352,28 +639,14 @@ class RagService:
         embedding_identity: EmbeddingIdentity | None = None,
         lexical_corpus_version: str = "",
         history_task: asyncio.Task[list[tuple[str, str]]] | None = None,
-    ) -> tuple[
-        list[float],
-        list[VectorSearchResult],
-        float,
-        float,
-        bool,
-        bool,
-        RetrievalMetricsInfo,
-        float,
-        float,
-        float,
-        int,
-        int,
-        int,
-    ]:
+    ) -> RetrievalResult:
         """Embed + search, memoizing repeats within the retrieval TTL.
 
-        Returns `(query_vector, results, embedding_ms, retrieval_ms,
-        embedding_cache_hit, retrieval_cache_hit, retrieval_metrics,
-        load_chunks_ms, rerank_ms, rerank_embedding_ms,
-        rerank_input_count, hybrid_candidate_count,
-        adaptive_max_context_chars)`.
+        Returns a :class:`RetrievalResult` carrying ``(query_vector, results,
+        embedding_ms, retrieval_ms, embedding_cache_hit,
+        retrieval_cache_hit, retrieval_metrics, load_chunks_ms, rerank_ms,
+        rerank_embedding_ms, rerank_input_count, hybrid_candidate_count,
+        adaptive_max_context_chars)``.
 
         When *history_task* is supplied and the question looks
         context-dependent, the most recent user turn is prepended before
@@ -429,7 +702,11 @@ class RagService:
                     )
 
         cache = self._cache
-        cache_key = f"{tenant_id}:{website_id}:{search_query.strip().lower()}"
+        # RAG-07: bind the retrieval cache to the corpus version so a knowledge
+        # re-processing (which bumps `website.updated_at`) can never serve stale
+        # cached results for the same question within the TTL window.
+        corpus_part = f":{lexical_corpus_version}" if lexical_corpus_version else ""
+        cache_key = f"{tenant_id}:{website_id}{corpus_part}:{search_query.strip().lower()}"
         now = _now()
         retrieval_enabled = (
             cache is not None and self._retrieval_cache_size > 0 and self._retrieval_cache_ttl > 0
@@ -441,83 +718,64 @@ class RagService:
                 try:
                     entry = json.loads(raw)
                     if now - entry["cached_at"] < self._retrieval_cache_ttl:
-                        vector = entry["vector"]
-                        identity_data = entry["embedding_identity"]
-                        query_identity = EmbeddingIdentity(
-                            provider=identity_data["provider"],
-                            model=identity_data["model"],
-                            dimensions=identity_data["dimensions"],
-                            version=identity_data["version"],
-                        )
-                        raw_results = [
-                            VectorSearchResult(
-                                chunk=KnowledgeChunk(**r["chunk"]),
-                                score=r["score"],
+                        if entry.get("schema") == 2:
+                            # RAG-PERF-02: schema-2 entries hold the FINAL
+                            # post-strategy, post-rerank retrieval result. A
+                            # valid hit returns it directly, skipping the full
+                            # lexical-corpus load + keyword/RRF pass + rerank
+                            # (deterministic given query vector + stored chunk
+                            # embeddings + query tokens + top_k).
+                            vector = entry["vector"]
+                            identity_data = entry["embedding_identity"]
+                            query_identity = EmbeddingIdentity(
+                                provider=identity_data["provider"],
+                                model=identity_data["model"],
+                                dimensions=identity_data["dimensions"],
+                                version=identity_data["version"],
                             )
-                            for r in entry["results"]
-                        ]
-                        for raw_result in raw_results:
-                            ensure_embedding_compatibility(raw_result.chunk, query_identity)
-                        # Hybrid keyword retrieval is a second source over the
-                        # website's full corpus (recovering exact-term matches
-                        # the vector stage missed), so load the corpus for the
-                        # keyword pass when hybrid is enabled.
-                        load_chunks_ms = 0.0
-                        hybrid_candidate_count = 0
-                        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
-                            t_load = time.perf_counter()
-                            all_chunks = await self._load_all_chunks(
-                                tenant_id,
-                                website_id,
-                                embedding_identity=query_identity,
-                                corpus_version=lexical_corpus_version,
+                            results = [_vector_result_from_payload(r) for r in entry["results"]]
+                            for result in results:
+                                ensure_embedding_compatibility(result.chunk, query_identity)
+                            metrics_data = entry.get("metrics") or {}
+                            metrics = RetrievalMetricsInfo(
+                                retrieval_method=metrics_data.get("retrieval_method", "vector"),
+                                vector_result_count=metrics_data.get("vector_result_count", 0),
+                                keyword_result_count=metrics_data.get("keyword_result_count", 0),
+                                final_result_count=metrics_data.get("final_result_count", 0),
+                                hybrid_candidate_count=metrics_data.get(
+                                    "hybrid_candidate_count", 0
+                                ),
                             )
-                            load_chunks_ms = (time.perf_counter() - t_load) * 1000.0
-                            hybrid_candidate_count = len(all_chunks)
-                        else:
-                            all_chunks = None
-                        results, metrics = self._retrieval_strategy.search(
-                            query=search_query,
-                            vector_results=raw_results,
-                            all_chunks=all_chunks,
-                            top_k=effective_top_k,
-                        )
-                        # Apply reranking to cached results too.
-                        rerank_ms = 0.0
-                        rerank_embedding_ms = 0.0
-                        rerank_input_count = 0
-                        if self._reranker is not None and results:
-                            results = self._diversify_sources(results, search_query)
-                            results = await self._hydrate_rerank_candidates(
-                                tenant_id, website_id, results
+                            return RetrievalResult(
+                                query_vector=vector,
+                                results=results,
+                                embedding_ms=0.0,
+                                retrieval_ms=0.0,
+                                embedding_cache_hit=True,
+                                retrieval_cache_hit=True,
+                                metrics=metrics,
+                                load_chunks_ms=0.0,
+                                # No lexical load / keyword-RRF / rerank ran on
+                                # THIS request: report zero measured stage cost
+                                # (percentile histograms observe what actually
+                                # executed). The cached result itself is the
+                                # same the miss path would have returned.
+                                rerank_ms=0.0,
+                                rerank_embedding_ms=0.0,
+                                rerank_input_count=0,
+                                # `hybrid_candidate_count` describes the corpus
+                                # that produced the served results (the cache
+                                # key is corpus-version-bound, so the cached
+                                # value equals what a re-run would report).
+                                hybrid_candidate_count=int(
+                                    entry.get("hybrid_candidate_count", 0) or 0
+                                ),
+                                adaptive_max_context_chars=adaptive_max_context_chars,
                             )
-                            rerank_input_count = len(results)
-                            results, rerank_metrics = await self._reranker.rerank(
-                                search_query, results, query_embedding=vector
-                            )
-                            rerank_ms = rerank_metrics.rerank_ms
-                            rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
-                        results = (
-                            self._strip_lexical_scores(results)
-                            if self._reranker is None
-                            else results
-                        )
-                        return (
-                            vector,
-                            results,
-                            0.0,
-                            0.0,
-                            True,
-                            True,
-                            metrics,
-                            load_chunks_ms,
-                            rerank_ms,
-                            rerank_embedding_ms,
-                            rerank_input_count,
-                            hybrid_candidate_count,
-                            adaptive_max_context_chars,
-                        )
-                except (json.JSONDecodeError, TypeError, KeyError):
+                        # schema-1 legacy entries (raw vector results only) are
+                        # treated as a cache miss: they lack the final rerank
+                        # output and would otherwise short-circuit incorrectly.
+                except (json.JSONDecodeError, TypeError, KeyError, ValueError):
                     pass
         t0 = time.perf_counter()
         async with chat_stage("retrieval.embed"):
@@ -526,14 +784,41 @@ class RagService:
             )
         embedding_ms = (time.perf_counter() - t0) * 1000.0
         t1 = time.perf_counter()
-        async with chat_stage("retrieval.vector_search"):
-            raw_results = await self._vector.similarity_search(
-                tenant_id,
-                website_id,
-                query_vector,
-                top_k=effective_top_k,
-                embedding_identity=query_identity,
+        # RAG-PERF-07: the hybrid lexical corpus load (Redis/DB read of the
+        # website's full embedding-free corpus) is independent of the `$vectorSearch`
+        # result set — same tenant/website scope, same embedding identity, corpus
+        # version bound — so it is started now and overlaps the vector round trip
+        # instead of serializing behind it. `_run_retrieval_strategy` still awaits
+        # both inputs and runs in the same order, so RRF fusion, ranking and the
+        # returned metrics are byte-for-byte identical to the sequential behavior.
+        load_chunks_ms = 0.0
+        hybrid_candidate_count = 0
+        load_task: asyncio.Task[list[VectorSearchResult]] | None = None
+        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
+            t_load = time.perf_counter()
+            load_task = asyncio.create_task(
+                self._load_all_chunks(
+                    tenant_id,
+                    website_id,
+                    embedding_identity=query_identity,
+                    corpus_version=lexical_corpus_version,
+                )
             )
+        try:
+            async with chat_stage("retrieval.vector_search"):
+                raw_results = await self._vector.similarity_search(
+                    tenant_id,
+                    website_id,
+                    query_vector,
+                    top_k=effective_top_k,
+                    embedding_identity=query_identity,
+                )
+        except BaseException:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                if load_task is not None:
+                    load_task.cancel()
+                    await load_task
+            raise
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "mongodb_vector_search_debug question=%r vector_result_count=%d",
@@ -552,40 +837,18 @@ class RagService:
                     result.chunk.chunk_text[:200],
                 )
         retrieval_ms = (time.perf_counter() - t1) * 1000.0
-        # Cache raw vector results (before strategy) so deserialization
-        # always produces clean VectorSearchResult/KnowledgeChunk objects.
-        if retrieval_enabled:
-            assert cache is not None  # guaranteed by retrieval_enabled
-            entry = {
-                "vector": query_vector,
-                "embedding_identity": query_identity.as_dict(),
-                "results": [
-                    {"chunk": r.chunk.model_dump(mode="json"), "score": r.score}
-                    for r in raw_results
-                ],
-                "cached_at": _now(),
-            }
-            await cache.set(
-                "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
-            )
         # Hybrid keyword retrieval is a second source over the website's full
         # corpus (recovering exact-term matches the vector stage missed), so
-        # load the corpus for the keyword pass when hybrid is enabled.
-        load_chunks_ms = 0.0
-        hybrid_candidate_count = 0
-        if isinstance(self._retrieval_strategy, HybridRetrievalStrategy):
-            t_load = time.perf_counter()
-            all_chunks = await self._load_all_chunks(
-                tenant_id,
-                website_id,
-                embedding_identity=query_identity,
-                corpus_version=lexical_corpus_version,
-            )
+        # load the corpus for the keyword pass when hybrid is enabled. The read
+        # has been running concurrently with the vector search above; only its
+        # residual wait (if any) remains.
+        if load_task is not None:
+            all_chunks = await load_task
             load_chunks_ms = (time.perf_counter() - t_load) * 1000.0
             hybrid_candidate_count = len(all_chunks)
         else:
             all_chunks = None
-        results, metrics = self._retrieval_strategy.search(
+        results, metrics = await self._run_retrieval_strategy(
             query=search_query,
             vector_results=raw_results,
             all_chunks=all_chunks,
@@ -605,20 +868,51 @@ class RagService:
             rerank_ms = rerank_metrics.rerank_ms
             rerank_embedding_ms = rerank_metrics.rerank_embedding_ms
         results = self._strip_lexical_scores(results) if self._reranker is None else results
-        return (
-            query_vector,
-            results,
-            embedding_ms,
-            retrieval_ms,
-            embedding_cache_hit,
-            False,
-            metrics,
-            load_chunks_ms,
-            rerank_ms,
-            rerank_embedding_ms,
-            rerank_input_count,
-            hybrid_candidate_count,
-            adaptive_max_context_chars,
+        # RAG-PERF-02: cache the FINAL retrieval result (post-strategy, post-
+        # rerank) so a warm cache hit can return it directly, skipping the full
+        # lexical-corpus load + keyword/RRF pass + reranking. Reranking is
+        # deterministic given (query vector, stored chunk embeddings, query
+        # tokens, top_k) — all fixed per (search_query, corpus version) — so the
+        # cached result is exactly what a repeat of the miss path would compute.
+        # Schema 2 marks this enriched format; older schema-1 entries (raw
+        # vector results only) are treated as misses by the reader.
+        if retrieval_enabled:
+            assert cache is not None  # guaranteed by retrieval_enabled
+            entry = {
+                "schema": 2,
+                "vector": query_vector,
+                "embedding_identity": query_identity.as_dict(),
+                "results": [_vector_result_payload(r) for r in results],
+                "metrics": {
+                    "retrieval_method": metrics.retrieval_method,
+                    "vector_result_count": metrics.vector_result_count,
+                    "keyword_result_count": metrics.keyword_result_count,
+                    "final_result_count": metrics.final_result_count,
+                    "hybrid_candidate_count": metrics.hybrid_candidate_count,
+                },
+                "rerank_ms": rerank_ms,
+                "rerank_embedding_ms": rerank_embedding_ms,
+                "rerank_input_count": rerank_input_count,
+                "hybrid_candidate_count": hybrid_candidate_count,
+                "cached_at": _now(),
+            }
+            await cache.set(
+                "retrieval", cache_key, json.dumps(entry), ttl=self._retrieval_cache_ttl
+            )
+        return RetrievalResult(
+            query_vector=query_vector,
+            results=results,
+            embedding_ms=embedding_ms,
+            retrieval_ms=retrieval_ms,
+            embedding_cache_hit=embedding_cache_hit,
+            retrieval_cache_hit=False,
+            metrics=metrics,
+            load_chunks_ms=load_chunks_ms,
+            rerank_ms=rerank_ms,
+            rerank_embedding_ms=rerank_embedding_ms,
+            rerank_input_count=rerank_input_count,
+            hybrid_candidate_count=hybrid_candidate_count,
+            adaptive_max_context_chars=adaptive_max_context_chars,
         )
 
     @staticmethod
@@ -764,7 +1058,10 @@ class RagService:
                 yield _error_event("WEBSITE_NOT_FOUND", "Website not found.")
                 record_chat_failure(reason="website_not_found")
                 return
-            question = sanitize_question(question)
+            question = sanitize_question(
+                question,
+                on_verdict=self._injection_hook(tenant_id, visitor_id, session_id),
+            )
             logger.info(
                 "chat_request tenant=%s website=%s session=%s knowledge_chunks=%s "
                 "query_hash=%s query_length=%d",
@@ -804,9 +1101,10 @@ class RagService:
         user_message_persist_ms = (time.perf_counter() - t_user_persist) * 1000.0
 
         if website.knowledge_chunks == 0:
-            async for event in self._emit_fallback(
+            async for event in self._fallback_events(
                 tenant_id=tenant_id,
                 website_id=website_id,
+                history_task=None,
                 session=session,
                 started=started,
                 vector_queries=0,
@@ -814,7 +1112,6 @@ class RagService:
                 query=question,
             ):
                 yield event
-            record_chat_failure(reason="knowledge_empty")
             return
 
         # Start the conversation-memory read up front so the Mongo query
@@ -839,36 +1136,34 @@ class RagService:
                 lexical_corpus_version=website.updated_at.isoformat(),
                 history_task=history_task,
             )
-            (
-                query_vector,
-                results,
-                embedding_ms,
-                retrieval_ms,
-                embedding_cache_hit,
-                retrieval_cache_hit,
-                retrieval_metrics,
-                load_chunks_ms,
-                rerank_ms,
-                rerank_embedding_ms,
-                rerank_input_count,
-                hybrid_candidate_count,
-                adaptive_max_context_chars,
-            ) = retrieval
+            query_vector = retrieval.query_vector
+            results = retrieval.results
+            embedding_ms = retrieval.embedding_ms
+            retrieval_ms = retrieval.retrieval_ms
+            embedding_cache_hit = retrieval.embedding_cache_hit
+            retrieval_cache_hit = retrieval.retrieval_cache_hit
+            retrieval_metrics = retrieval.metrics
+            load_chunks_ms = retrieval.load_chunks_ms
+            rerank_ms = retrieval.rerank_ms
+            rerank_embedding_ms = retrieval.rerank_embedding_ms
+            rerank_input_count = retrieval.rerank_input_count
+            hybrid_candidate_count = retrieval.hybrid_candidate_count
+            adaptive_max_context_chars = retrieval.adaptive_max_context_chars
         except EmbeddingCompatibilityError:
             # Audit fix (embedding identity): a mixed/incompatible corpus must
             # never surface as an error to the visitor. The repositories
             # already refuse to mix embedding spaces; here we degrade to the
             # existing safe fallback instead of an error event.
-            history_task.cancel()
             logger.warning(
                 "rag_embedding_identity_mismatch tenant=%s website=%s session=%s",
                 tenant_id,
                 website_id,
                 session.session_id,
             )
-            async for event in self._emit_fallback(
+            async for event in self._fallback_events(
                 tenant_id=tenant_id,
                 website_id=website_id,
+                history_task=history_task,
                 session=session,
                 started=started,
                 vector_queries=1,
@@ -876,10 +1171,9 @@ class RagService:
                 query=question,
             ):
                 yield event
-            record_chat_failure(reason="embedding_mismatch")
             return
         except Exception as exc:
-            history_task.cancel()
+            await self._stop_history_task(history_task)
             logger.exception("question embedding failed (tenant=%s)", tenant_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
             record_chat_failure(reason="embedding_error")
@@ -915,10 +1209,10 @@ class RagService:
             )
 
         if not results:
-            history_task.cancel()
-            async for event in self._emit_fallback(
+            async for event in self._fallback_events(
                 tenant_id=tenant_id,
                 website_id=website_id,
+                history_task=history_task,
                 session=session,
                 started=started,
                 vector_queries=1,
@@ -926,7 +1220,6 @@ class RagService:
                 query=question,
             ):
                 yield event
-            record_chat_failure(reason="retrieval_empty")
             record_rag_empty()
             return
 
@@ -937,24 +1230,54 @@ class RagService:
         retrieval_scores = [r.score for r in results]
         confidence_score: float | None = None
         confidence_metrics: ConfidenceMetrics | None = None
+        answerability_metrics: AnswerabilityMetrics | None = None
         if self._confidence_check_enabled:
-            confidence_metrics = assess_result_confidence(results, min_score=self._min_score)
+            # Base relevance confidence (0.50*mean + 0.30*hit_ratio + 0.20*peak)
+            # is kept unchanged and exposed for telemetry.
+            confidence_metrics = assess_result_confidence(
+                results, min_score=self._min_score, query=question
+            )
             confidence_score = confidence_metrics.confidence
-            if confidence_score < self._confidence_threshold:
+            # The strict evidence-aware answerability decision.  For a closed
+            # (specific-entity/fact) query, generation is allowed only when the
+            # query's required content terms are present in the evidence; this
+            # overrides a high cosine that merely reflects generic similarity.
+            # Strong entity evidence may also authorise generation when the raw
+            # cosine falls below the calibration floor (fixing false fallback).
+            # `confidence_score` intentionally stays the raw base confidence so
+            # the unchanged confidence metric remains available for telemetry.
+            answerability_metrics = assess_answerability(
+                question,
+                results,
+                min_score=self._min_score,
+            )
+            base_allowed = (
+                confidence_score >= self._confidence_threshold
+                or answerability_metrics.reason == "strong_entity_evidence"
+            )
+            generation_allowed = answerability_metrics.allowed and base_allowed
+            if not generation_allowed:
                 logger.warning(
-                    "rag_confidence_low score=%.4f threshold=%.4f tenant=%s "
-                    "website=%s session=%s result_count=%d",
+                    "rag_answerability_blocked base_confidence=%.4f "
+                    "answerability=%.4f lexical_coverage=%.4f "
+                    "query_type=%s evidence_strength=%s category=%s reason=%s "
+                    "tenant=%s website=%s session=%s result_count=%d",
                     confidence_score,
-                    self._confidence_threshold,
+                    answerability_metrics.answerability,
+                    answerability_metrics.lexical_coverage,
+                    answerability_metrics.query_type.value,
+                    answerability_metrics.evidence_strength.value,
+                    answerability_metrics.category,
+                    answerability_metrics.reason,
                     tenant_id,
                     website_id,
                     session.session_id,
                     len(results),
                 )
-                history_task.cancel()
-                async for event in self._emit_fallback(
+                async for event in self._fallback_events(
                     tenant_id=tenant_id,
                     website_id=website_id,
+                    history_task=history_task,
                     session=session,
                     started=started,
                     vector_queries=1,
@@ -964,13 +1287,14 @@ class RagService:
                     confidence_metrics=confidence_metrics,
                 ):
                     yield event
-                record_chat_failure(reason="confidence_low")
                 return
 
         t_context = time.perf_counter()
         async with chat_stage("retrieval.context"):
             context_items, sources, opt_metrics = self._build_context(
-                results, max_context_chars=adaptive_max_context_chars
+                results,
+                max_context_chars=adaptive_max_context_chars,
+                query=question,
             )
         context_ms = (time.perf_counter() - t_context) * 1000.0
         # Context-empty guard: min_score filtering can drop every retrieved
@@ -980,10 +1304,10 @@ class RagService:
         # prompt compliance to avoid hallucination, so emit the safe
         # fallback instead — the model is never called without context.
         if not context_items:
-            history_task.cancel()
-            async for event in self._emit_fallback(
+            async for event in self._fallback_events(
                 tenant_id=tenant_id,
                 website_id=website_id,
+                history_task=history_task,
                 session=session,
                 started=started,
                 vector_queries=1,
@@ -993,7 +1317,6 @@ class RagService:
                 confidence_metrics=confidence_metrics,
             ):
                 yield event
-            record_chat_failure(reason="context_empty")
             return
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -1096,7 +1419,7 @@ class RagService:
             elif hasattr(self._generation, "name"):
                 provider_name = self._generation.name
         except Exception as exc:
-            history_task.cancel()
+            await self._stop_history_task(history_task)
             logger.exception("answer generation failed (session=%s)", session.session_id)
             yield _error_event(_error_code(exc), _safe_message(exc))
             record_chat_failure(reason="generation_error")
@@ -1254,38 +1577,18 @@ class RagService:
             if metrics is not None:
                 fallback_attempts = metrics.fallback_attempts
 
-        done_data: dict[str, Any] = {
-            "message_id": assistant.id,
-            "session_id": session.session_id,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "total_tokens": assistant.total_tokens,
-            "estimated_cost": assistant.estimated_cost,
-            "model_name": model_name,
-            "response_time_ms": int(response_time * 1000),
-            "created_at": assistant.created_at.isoformat(),
-            "prompt_version": self._prompt_version,
-            # True when the safe fallback replaced the answer (empty
-            # knowledge base, retrieval miss, low confidence, or a blank
-            # generation).
-            "fallback": substituted_fallback,
-            # Confidence telemetry is always emitted (mirrors the fallback
-            # path); the timing block below duplicates it for perf logs.
-            "confidence_score": (
-                round(confidence_score, 4) if confidence_score is not None else None
-            ),
-            "confidence_minimum_score": (
-                confidence_metrics.minimum_score if confidence_metrics is not None else None
-            ),
-            "confidence_average_score": (
-                confidence_metrics.average_score if confidence_metrics is not None else None
-            ),
-            "confidence_rejected_chunks_count": (
-                confidence_metrics.rejected_chunks_count if confidence_metrics is not None else None
-            ),
-        }
-        if faithfulness_score is not None:
-            done_data["faithfulness_score"] = round(faithfulness_score, 3)
+        done_data = self._build_done_data(
+            assistant=assistant,
+            session=session,
+            usage=usage,
+            model_name=model_name,
+            response_time=response_time,
+            substituted_fallback=substituted_fallback,
+            confidence_score=confidence_score,
+            confidence_metrics=confidence_metrics,
+            answerability_metrics=answerability_metrics,
+            faithfulness_score=faithfulness_score,
+        )
         if self._timing_enabled:
             done_data["timing"] = {
                 "embedding_ms": round(embedding_ms, 2),
@@ -1351,77 +1654,62 @@ class RagService:
                     opt_metrics.removed_chunks if opt_metrics is not None else None
                 ),
             }
-            logger.info(
-                "rag_timing",
-                extra={
-                    "request_id": get_request_id(),
-                    "tenant_id": tenant_id,
-                    "website_id": website_id,
-                    "session_id": session.session_id,
-                    "provider": provider_name,
-                    "embedding_cache": "hit" if embedding_cache_hit else "miss",
-                    "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
-                    "embedding_ms": round(embedding_ms, 2),
-                    "retrieval_ms": round(retrieval_ms, 2),
-                    "load_chunks_ms": round(load_chunks_ms, 2),
-                    "context_ms": round(context_ms, 2),
-                    "history_ms": round(history_ms, 2),
-                    "generation_ms": round(generation_ms, 2),
-                    "generation_consumed_ms": round(generation_consumed_ms, 2),
-                    "delta_overhead_ms": round(delta_overhead_ms, 2),
-                    "delta_count": delta_count,
-                    "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
-                    "persist_ms": round(persist_ms, 2),
-                    "website_lookup_ms": round(website_lookup_ms, 2),
-                    "session_resolution_ms": round(session_resolution_ms, 2),
-                    "user_message_persist_ms": round(user_message_persist_ms, 2),
-                    "prompt_construction_ms": round(prompt_construction_ms, 2),
-                    "rerank_ms": round(rerank_ms, 2),
-                    "rerank_embedding_ms": round(rerank_embedding_ms, 2),
-                    "rerank_input_count": rerank_input_count,
-                    "total_ms": round(total_ms, 2),
-                    "context_chars": context_chars,
-                    "estimated_prompt_tokens": estimated_prompt_tokens,
-                    "fallback_attempts": fallback_attempts,
-                    "retrieval_method": retrieval_metrics.retrieval_method,
-                    "vector_result_count": retrieval_metrics.vector_result_count,
-                    "keyword_result_count": retrieval_metrics.keyword_result_count,
-                    "final_result_count": retrieval_metrics.final_result_count,
-                    "reranked": self._reranker is not None,
-                    "hybrid_candidate_count": hybrid_candidate_count,
-                    "adaptive_max_context_chars": adaptive_max_context_chars,
-                    "confidence_score": (
-                        round(confidence_score, 4) if confidence_score is not None else None
-                    ),
-                    "confidence_minimum_score": (
-                        confidence_metrics.minimum_score if confidence_metrics is not None else None
-                    ),
-                    "confidence_average_score": (
-                        confidence_metrics.average_score if confidence_metrics is not None else None
-                    ),
-                    "confidence_rejected_chunks_count": (
-                        confidence_metrics.rejected_chunks_count
-                        if confidence_metrics is not None
-                        else None
-                    ),
-                    "original_context_chars": (
-                        opt_metrics.original_chars if opt_metrics is not None else None
-                    ),
-                    "optimized_context_chars": (
-                        opt_metrics.optimized_chars if opt_metrics is not None else None
-                    ),
-                    "removed_chunks_count": (
-                        opt_metrics.removed_chunks if opt_metrics is not None else None
-                    ),
-                    "faithfulness_score": (
-                        round(faithfulness_score, 3) if faithfulness_score is not None else None
-                    ),
-                },
+            self._log_rag_timing(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session=session,
+                embedding_ms=embedding_ms,
+                retrieval_ms=retrieval_ms,
+                load_chunks_ms=load_chunks_ms,
+                context_ms=context_ms,
+                history_ms=history_ms,
+                generation_ms=generation_ms,
+                generation_consumed_ms=generation_consumed_ms,
+                delta_overhead_ms=delta_overhead_ms,
+                delta_count=delta_count,
+                ttft_ms=ttft_ms,
+                persist_ms=persist_ms,
+                website_lookup_ms=website_lookup_ms,
+                session_resolution_ms=session_resolution_ms,
+                user_message_persist_ms=user_message_persist_ms,
+                prompt_construction_ms=prompt_construction_ms,
+                rerank_ms=rerank_ms,
+                rerank_embedding_ms=rerank_embedding_ms,
+                rerank_input_count=rerank_input_count,
+                total_ms=total_ms,
+                provider_name=provider_name,
+                model_name=model_name,
+                estimated_cost=assistant.estimated_cost,
+                embedding_cache_hit=embedding_cache_hit,
+                retrieval_cache_hit=retrieval_cache_hit,
+                context_chars=context_chars,
+                estimated_prompt_tokens=estimated_prompt_tokens,
+                fallback_attempts=fallback_attempts,
+                retrieval_metrics=retrieval_metrics,
+                hybrid_candidate_count=hybrid_candidate_count,
+                adaptive_max_context_chars=adaptive_max_context_chars,
+                confidence_score=confidence_score,
+                confidence_metrics=confidence_metrics,
+                opt_metrics=opt_metrics,
+                faithfulness_score=faithfulness_score,
             )
         yield {"event": "done", "data": done_data}
 
         # Record Prometheus metrics for the completed turn.
         record_chat_latency(time.monotonic() - started)
+        # Per-stage RAG pipeline latency (baseline instrumentation) — feeds
+        # the percentile histograms. Durations only, never content.
+        cache_status = "hit" if embedding_cache_hit else "miss"
+        record_rag_stage_latency("embedding", embedding_ms / 1000.0, cache_status=cache_status)
+        cache_status = "hit" if retrieval_cache_hit else "miss"
+        record_rag_stage_latency("vector_search", retrieval_ms / 1000.0, cache_status=cache_status)
+        record_rag_stage_latency("load_chunks", load_chunks_ms / 1000.0)
+        record_rag_stage_latency("rerank", rerank_ms / 1000.0)
+        record_rag_stage_latency("context", context_ms / 1000.0)
+        record_rag_stage_latency("history", history_ms / 1000.0)
+        record_rag_stage_latency("generation", generation_ms / 1000.0)
+        record_rag_stage_latency("persist", persist_ms / 1000.0)
+        record_rag_stage_latency("total", total_ms / 1000.0)
         if provider_name:
             record_llm_request(provider=provider_name)
             record_llm_latency(provider=provider_name, duration_seconds=generation_ms / 1000.0)
@@ -1538,10 +1826,15 @@ class RagService:
                 )
                 raw = None
             if raw is not None:
+                # RAG-PERF-03 (F-01): deserializing the corpus (json.loads +
+                # KnowledgeChunk construction + VectorSearchResult wrapping) is
+                # CPU-bound and was running on the asyncio event loop. Offload
+                # it to a worker thread; the Redis read above stays async I/O.
+                # Exception types are preserved by `_parse_lexical_corpus`, so
+                # a malformed cache value still degrades to the DB path below
+                # (same logging, same semantics).
                 try:
-                    payload = json.loads(raw)
-                    chunks = [KnowledgeChunk(**item) for item in payload["chunks"]]
-                    return [VectorSearchResult(chunk=chunk, score=0.5) for chunk in chunks]
+                    return await asyncio.to_thread(_parse_lexical_corpus, raw)
                 except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                     logger.warning(
                         "lexical_corpus_cache_invalid tenant=%s website=%s", tenant_id, website_id
@@ -1583,6 +1876,7 @@ class RagService:
         results: list[VectorSearchResult],
         *,
         max_context_chars: int | None = None,
+        query: str | None = None,
     ) -> tuple[
         list[ContextItem],
         list[dict[str, Any]],
@@ -1619,7 +1913,7 @@ class RagService:
         seen_text: set[tuple[str, str]] = set()
 
         for result in results:
-            if not usable(result, dense_floor=self._min_score):
+            if not usable(result, dense_floor=self._min_score, query=query):
                 # Dense and RRF scores have different scales. Only an
                 # explicit dense score or reranker-confirmed exact lexical
                 # evidence can admit a chunk below the dense floor.
@@ -1634,7 +1928,9 @@ class RagService:
             seen_text.add(text_key)
             text = chunk.chunk_text
             if len(text) > self._max_chars_per_chunk:
-                text = text[: self._max_chars_per_chunk]
+                # RAG-06: cut at the last word boundary so the final chunk in
+                # context never ends mid-word with a garbled tail.
+                text = truncate_at_word_boundary(text, self._max_chars_per_chunk)
             candidate_items.append(
                 ContextItem(
                     url=url,
@@ -1705,7 +2001,9 @@ class RagService:
             text = item.text
             if budget is not None and budget >= 0:
                 if len(text) > budget:
-                    text = text[:budget]
+                    # RAG-06: avoid cutting the final word in half; the total
+                    # character budget (per item) is still honored.
+                    text = truncate_at_word_boundary(text, budget)
                     budget = 0
                 else:
                     budget -= len(text)
@@ -1770,17 +2068,172 @@ class RagService:
         yield {"event": "message", "data": {"delta": UNKNOWN_ANSWER_FALLBACK}}
         yield {
             "event": "done",
-            "data": {
-                "message_id": assistant.id,
-                "session_id": session.session_id,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "response_time_ms": int(response_time * 1000),
-                "created_at": assistant.created_at.isoformat(),
-                "prompt_version": self._prompt_version,
-                "fallback": True,
-                "confidence_score": (
+            "data": self._build_done_data(
+                assistant=assistant,
+                session=session,
+                usage=GenerationUsage(),
+                model_name="",
+                response_time=response_time,
+                substituted_fallback=True,
+                confidence_score=(
                     confidence_metrics.confidence if confidence_metrics is not None else None
+                ),
+                confidence_metrics=confidence_metrics,
+                answerability_metrics=None,
+                faithfulness_score=None,
+            ),
+        }
+
+    def _build_done_data(
+        self,
+        *,
+        assistant: ChatMessage,
+        session: ChatSession,
+        usage: Any,
+        model_name: str,
+        response_time: float,
+        substituted_fallback: bool,
+        confidence_score: float | None,
+        confidence_metrics: ConfidenceMetrics | None,
+        answerability_metrics: AnswerabilityMetrics | None,
+        faithfulness_score: float | None,
+    ) -> dict[str, Any]:
+        """Build the terminal ``done`` SSE payload (BE-Q09 pipeline stage)."""
+        done_data: dict[str, Any] = {
+            "message_id": assistant.id,
+            "session_id": session.session_id,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "total_tokens": assistant.total_tokens,
+            "estimated_cost": assistant.estimated_cost,
+            "model_name": model_name,
+            "response_time_ms": int(response_time * 1000),
+            "created_at": assistant.created_at.isoformat(),
+            "prompt_version": self._prompt_version,
+            # True when the safe fallback replaced the answer (empty
+            # knowledge base, retrieval miss, low confidence, or a blank
+            # generation).
+            "fallback": substituted_fallback,
+            # Confidence telemetry is always emitted (mirrors the fallback
+            # path); the timing block below duplicates it for perf logs.
+            "confidence_score": (
+                round(confidence_score, 4) if confidence_score is not None else None
+            ),
+            "confidence_minimum_score": (
+                confidence_metrics.minimum_score if confidence_metrics is not None else None
+            ),
+            "confidence_average_score": (
+                confidence_metrics.average_score if confidence_metrics is not None else None
+            ),
+            "confidence_rejected_chunks_count": (
+                confidence_metrics.rejected_chunks_count if confidence_metrics is not None else None
+            ),
+            "answerability_score": (
+                round(answerability_metrics.answerability, 4)
+                if answerability_metrics is not None
+                else None
+            ),
+            "answerability_lexical_coverage": (
+                round(answerability_metrics.lexical_coverage, 4)
+                if answerability_metrics is not None
+                else None
+            ),
+            "answerability_query_type": (
+                answerability_metrics.query_type.value
+                if answerability_metrics is not None
+                else None
+            ),
+            "answerability_reason": (
+                answerability_metrics.reason if answerability_metrics is not None else None
+            ),
+        }
+        if faithfulness_score is not None:
+            done_data["faithfulness_score"] = round(faithfulness_score, 3)
+        return done_data
+
+    def _log_rag_timing(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        session: ChatSession,
+        embedding_ms: float,
+        retrieval_ms: float,
+        load_chunks_ms: float,
+        context_ms: float,
+        history_ms: float,
+        generation_ms: float,
+        generation_consumed_ms: float,
+        delta_overhead_ms: float,
+        delta_count: int,
+        ttft_ms: float | None,
+        persist_ms: float,
+        website_lookup_ms: float,
+        session_resolution_ms: float,
+        user_message_persist_ms: float,
+        prompt_construction_ms: float,
+        rerank_ms: float,
+        rerank_embedding_ms: float,
+        rerank_input_count: int,
+        total_ms: float,
+        provider_name: str | None,
+        model_name: str,
+        estimated_cost: float,
+        embedding_cache_hit: bool,
+        retrieval_cache_hit: bool,
+        context_chars: int,
+        estimated_prompt_tokens: int,
+        fallback_attempts: int,
+        retrieval_metrics: RetrievalMetricsInfo,
+        hybrid_candidate_count: int,
+        adaptive_max_context_chars: int,
+        confidence_score: float | None,
+        confidence_metrics: ConfidenceMetrics | None,
+        opt_metrics: OptimizationMetrics | None,
+        faithfulness_score: float | None,
+    ) -> None:
+        """Emit the opt-in per-stage RAG performance log (BE-Q09 pipeline stage)."""
+        logger.info(
+            "rag_timing",
+            extra={
+                "request_id": get_request_id(),
+                "tenant_id": tenant_id,
+                "website_id": website_id,
+                "session_id": session.session_id,
+                "provider": provider_name,
+                "embedding_cache": "hit" if embedding_cache_hit else "miss",
+                "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
+                "embedding_ms": round(embedding_ms, 2),
+                "retrieval_ms": round(retrieval_ms, 2),
+                "load_chunks_ms": round(load_chunks_ms, 2),
+                "context_ms": round(context_ms, 2),
+                "history_ms": round(history_ms, 2),
+                "generation_ms": round(generation_ms, 2),
+                "generation_consumed_ms": round(generation_consumed_ms, 2),
+                "delta_overhead_ms": round(delta_overhead_ms, 2),
+                "delta_count": delta_count,
+                "ttft_ms": round(ttft_ms, 2) if ttft_ms is not None else None,
+                "persist_ms": round(persist_ms, 2),
+                "website_lookup_ms": round(website_lookup_ms, 2),
+                "session_resolution_ms": round(session_resolution_ms, 2),
+                "user_message_persist_ms": round(user_message_persist_ms, 2),
+                "prompt_construction_ms": round(prompt_construction_ms, 2),
+                "rerank_ms": round(rerank_ms, 2),
+                "rerank_embedding_ms": round(rerank_embedding_ms, 2),
+                "rerank_input_count": rerank_input_count,
+                "total_ms": round(total_ms, 2),
+                "context_chars": context_chars,
+                "estimated_prompt_tokens": estimated_prompt_tokens,
+                "fallback_attempts": fallback_attempts,
+                "retrieval_method": retrieval_metrics.retrieval_method,
+                "vector_result_count": retrieval_metrics.vector_result_count,
+                "keyword_result_count": retrieval_metrics.keyword_result_count,
+                "final_result_count": retrieval_metrics.final_result_count,
+                "reranked": self._reranker is not None,
+                "hybrid_candidate_count": hybrid_candidate_count,
+                "adaptive_max_context_chars": adaptive_max_context_chars,
+                "confidence_score": (
+                    round(confidence_score, 4) if confidence_score is not None else None
                 ),
                 "confidence_minimum_score": (
                     confidence_metrics.minimum_score if confidence_metrics is not None else None
@@ -1793,8 +2246,20 @@ class RagService:
                     if confidence_metrics is not None
                     else None
                 ),
+                "original_context_chars": (
+                    opt_metrics.original_chars if opt_metrics is not None else None
+                ),
+                "optimized_context_chars": (
+                    opt_metrics.optimized_chars if opt_metrics is not None else None
+                ),
+                "removed_chunks_count": (
+                    opt_metrics.removed_chunks if opt_metrics is not None else None
+                ),
+                "faithfulness_score": (
+                    round(faithfulness_score, 3) if faithfulness_score is not None else None
+                ),
             },
-        }
+        )
 
 
 def _safe_message(exc: Exception) -> str:

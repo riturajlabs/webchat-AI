@@ -613,7 +613,7 @@ async def test_vector_only_flow_unchanged_by_candidate_limit() -> None:
         env,
         tenant_id=TENANT,
         website_id=WEBSITE,
-        text="Pro plan details.",
+        text="Pro plans details.",
         chunk_index=0,
     )
     await make_chunk(

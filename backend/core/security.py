@@ -5,6 +5,7 @@ See docs/07-Architecture-Decisions.md ADR-003 for the token strategy.
 
 import hashlib
 import hmac
+import ipaddress
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -19,8 +20,10 @@ from backend.core.errors import InvalidTokenError, TokenExpiredError
 
 TokenPurpose = Literal["access", "email_verify", "password_reset", "widget_session"]
 
-# ADR-003: Argon2id, memory 19 MiB, time 2, parallelism 1.
-_argon2 = PasswordHasher(memory_cost=19 * 1024, time_cost=2, parallelism=1)
+# ADR-003: Argon2id, memory 46 MiB, time 3, parallelism 1. These parameters
+# are tuned above OWASP's Argon2id minimums (37 MiB / t=3) to harden the
+# password cache against GPU-assisted offline attacks (SEC-H02).
+_argon2 = PasswordHasher(memory_cost=46 * 1024, time_cost=3, parallelism=1)
 
 # SHA-256 for opaque refresh tokens (ADR-003: hashed in DB, never stored raw).
 _SHA256 = hashlib.sha256
@@ -118,8 +121,36 @@ def decode_email_verification_token(token: str) -> str:
     return str(_decode(token, "email_verify")["sub"])
 
 
-def create_password_reset_token(user_id: str, pwd_token_version: int) -> str:
-    """Create the signed password-reset JWT (ADR-001, versioned)."""
+def password_reset_context_hash(ip_address: str | None) -> str | None:
+    """Return an opaque hash of the client's coarse network (SEC-M02).
+
+    Used to bind a password-reset token to the network that requested it so a
+    stolen token cannot be redeemed from an arbitrary location. The output is a
+    hash of the /24 (IPv4) or /48 (IPv6) prefix, which tolerates a user's IP
+    changing between the request and the click while still rejecting a token
+    used from a different network. Returns None for unknown/unparseable input.
+    """
+    if not ip_address or ip_address == "unknown":
+        return None
+    try:
+        addr = ipaddress.ip_address(ip_address.strip())
+    except ValueError:
+        return None
+    if addr.version == 4:
+        coarse = str(ipaddress.IPv4Network(f"{addr}/24", strict=False).network_address)
+    else:
+        coarse = str(ipaddress.IPv6Network(f"{addr}/48", strict=False).network_address)
+    return hashlib.sha256(f"pwd-reset-ctx:{coarse}".encode()).hexdigest()
+
+
+def create_password_reset_token(
+    user_id: str, pwd_token_version: int, *, context_hash: str | None = None
+) -> str:
+    """Create the signed password-reset JWT (ADR-001, versioned).
+
+    `context_hash` optionally binds the token to the requesting network
+    (SEC-M02); when present it must match at redemption time.
+    """
     settings = get_settings()
     payload = {
         "sub": user_id,
@@ -127,13 +158,19 @@ def create_password_reset_token(user_id: str, pwd_token_version: int) -> str:
         "pwd_token_version": pwd_token_version,
         "jti": new_id(),
     }
+    if context_hash:
+        payload["ctx"] = context_hash
     return _encode(payload, settings.password_reset_token_expire_minutes * 60)
 
 
-def decode_password_reset_token(token: str) -> tuple[str, int]:
-    """Validate a password-reset JWT; returns (user_id, token_version)."""
+def decode_password_reset_token(token: str) -> tuple[str, int, str | None]:
+    """Validate a password-reset JWT; returns (user_id, version, context_hash)."""
     payload = _decode(token, "password_reset")
-    return str(payload["sub"]), int(payload["pwd_token_version"])
+    return (
+        str(payload["sub"]),
+        int(payload["pwd_token_version"]),
+        payload.get("ctx"),
+    )
 
 
 def create_widget_session_token(

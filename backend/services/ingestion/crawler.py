@@ -9,9 +9,11 @@ the `documents` collection with a SHA-256 content checksum (the Phase 5 change
 detector).
 """
 
+import asyncio
 import hashlib
 import heapq
 import logging
+import resource
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -35,6 +37,14 @@ logger = logging.getLogger("webchat_ai")
 _MAX_RECORDED_ERRORS = 50
 
 INSUFFICIENT_CONTENT_REASON = "Insufficient content"
+
+
+def _current_rss_mb() -> int:
+    """Current process resident set size in MiB (best effort)."""
+    try:
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
+    except (AttributeError, OSError, ValueError):
+        return 0
 
 
 class FetchError(Exception):
@@ -91,11 +101,18 @@ class CrawlSession:
         self._on_extracting = on_extracting
         self._settings = settings or get_settings()
         self.errors: list[CrawlJobError] = []
+        # Errors dropped once the in-memory error buffer reached its cap; the
+        # worker can surface the overflow count so diagnosis is not blind
+        # beyond the 50 buffered entries (Phase 7, INGEST P3).
+        self.dropped_errors: int = 0
         # URLs successfully persisted during run(); consumed by post-crawl
         # reconciliation so pages removed from the site can be purged (R-02).
         self.stored_urls: list[str] = []
         # Open Graph / Twitter preview image captured from the seed (home) page.
         self.preview_image: str | None = None
+        # INGEST-04: set when the crawl was stopped early because the process
+        # RSS exceeded the configured ceiling, so callers can surface it.
+        self.memory_pressure_aborted: bool = False
 
     async def run(self) -> int:
         """Crawl the site and persist cleaned pages. Returns pages stored."""
@@ -103,6 +120,18 @@ class CrawlSession:
         if seed is None:
             raise InvalidUrlError("The website URL is not crawlable.")
         await self._guard.validate_async(seed)
+        # INGEST-01: the browser-backed fetcher must be released even when a
+        # page errors past the per-page recovery (clean_html/extract/upsert
+        # failures propagate to the worker). Without the finally a leaked
+        # Chromium context survives until process exit, tipping the worker
+        # toward its browser/memory budget on wide or malformed sites.
+        try:
+            return await self._run(seed)
+        finally:
+            await self._fetcher.close()
+
+    async def _run(self, seed: str) -> int:
+        """Crawl loop body; ``run()`` guarantees the fetcher is closed."""
         seed_host = self._site_host(seed)
         if self._robots is None:
             self._robots = await self._fetch_robots(seed)
@@ -122,7 +151,30 @@ class CrawlSession:
             await self._on_progress(0, max_pages)
 
         while queue and stored < max_pages:
+            # INGEST-04: abort gracefully when worker RSS exceeds the ceiling,
+            # so a wide/memory-hungry site cannot OOM the worker. Disabled when
+            # `crawl_max_rss_mb` is 0 (default).
+            if self._over_memory_ceiling():
+                self.memory_pressure_aborted = True
+                self._record_error(
+                    self._seed_url,
+                    "Crawl stopped: worker memory exceeded the configured ceiling.",
+                )
+                logger.warning(
+                    "Crawl aborted: worker RSS %d MiB exceeds crawl_max_rss_mb=%d "
+                    "(tenant=%s website=%s pages_stored=%d)",
+                    _current_rss_mb(),
+                    self._settings.crawl_max_rss_mb,
+                    self._tenant_id,
+                    self._website_id,
+                    stored,
+                )
+                break
             _, depth, _, url = heapq.heappop(queue)
+            # INGEST-03: evict the popped URL from the frontier set so its size
+            # tracks the frontier width, not the total candidate count found
+            # over the whole crawl (unbounded growth on wide sites).
+            queued.discard(url)
             normalized = normalize_crawl_url(url, url) or url
             if normalized in visited:
                 continue
@@ -132,6 +184,10 @@ class CrawlSession:
             try:
                 if self._on_fetching is not None:
                     await self._on_fetching(normalized)
+                # INGEST-02: honour the robots.txt crawl-delay between fetches
+                # to the same host instead of firing pages back-to-back.
+                if self._robots.crawl_delay:
+                    await asyncio.sleep(self._robots.crawl_delay)
                 page = await self._fetcher.fetch(normalized)
             except (FetchError, InvalidUrlError) as exc:
                 self._record_error(normalized, str(exc))
@@ -199,10 +255,20 @@ class CrawlSession:
                         heapq.heappush(queue, (-score, depth + 1, seq, candidate))
                         queued.add(candidate)
 
-        await self._fetcher.close()
         return stored
 
     # ------------------------------------------------------------ internals
+
+    def _over_memory_ceiling(self) -> bool:
+        """True when process RSS (MiB) exceeds the configured ceiling.
+
+        A ceiling of 0 (default) disables the check entirely, preserving the
+        historical behaviour.
+        """
+        ceiling_mb = self._settings.crawl_max_rss_mb
+        if ceiling_mb <= 0:
+            return False
+        return _current_rss_mb() > ceiling_mb
 
     async def _fetch_robots(self, seed: str) -> RobotsTxt:
         """Fetch and parse robots.txt through the same SSRF-guarded fetcher."""
@@ -216,6 +282,15 @@ class CrawlSession:
 
     def _record_error(self, url: str, message: str) -> None:
         if len(self.errors) >= _MAX_RECORDED_ERRORS:
+            # Phase 7 (INGEST P3): the error buffer is bounded, but drops must
+            # be visible rather than silent so diagnosis past the cap is not
+            # impossible.
+            self.dropped_errors += 1
+            logger.warning(
+                "Crawl error buffer full (%d); dropping error for %s",
+                _MAX_RECORDED_ERRORS,
+                url,
+            )
             return
         self.errors.append(CrawlJobError(url=url, message=message))
 

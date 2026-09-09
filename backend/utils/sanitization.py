@@ -3,6 +3,7 @@
 Provides reusable helpers for safe string handling across the backend:
   - `safe_regex()` — escape user input before passing to MongoDB ``$regex``.
   - `sanitize_text()` — strip control characters and collapse whitespace.
+  - `truncate_at_word_boundary()` — cap length without cutting mid-word.
 
 These are general-purpose building blocks; domain-specific sanitization (e.g.
 LLM prompt injection defense) lives in its own module (``prompts/rag.py``,
@@ -35,3 +36,20 @@ def sanitize_text(value: str, *, max_length: int = 5000) -> str:
     cleaned = _CONTROL_CHARS.sub("", value)
     cleaned = " ".join(cleaned.split())
     return cleaned[:max_length]
+
+
+def truncate_at_word_boundary(text: str, limit: int) -> str:
+    """Cap *text* at *limit* characters without splitting the last word.
+
+    Cuts at the last whitespace inside the limit so the returned text cannot
+    end mid-word with a garbled tail (RAG-06).  When the limit falls inside a
+    single unbroken token, falls back to a plain character cut so the caller
+    never receives truncated-at-word-boundary empty context for a valid
+    positive limit.
+    """
+    if limit < 0 or len(text) <= limit:
+        return text
+    boundary = text.rfind(" ", 0, limit)
+    if boundary > 0:
+        return text[:boundary]
+    return text[:limit]

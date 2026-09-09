@@ -15,7 +15,9 @@ from backend.core.errors import (
 from backend.core.security import (
     create_access_token,
     create_password_reset_token,
+    decode_password_reset_token,
     hash_refresh_token,
+    password_reset_context_hash,
     utcnow,
 )
 from backend.models.audit_log import (
@@ -592,6 +594,68 @@ async def test_reset_password_reused_link_rejected() -> None:
         )
 
 
+async def test_forgot_password_binds_token_to_requesting_network() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await env.service.forgot_password(
+        email="alice@example.com", ip_address="203.0.113.7", user_agent=None
+    )
+    token = token_from_url(env.mail.sent[-1])
+    user_id, version, ctx = decode_password_reset_token(token)
+    assert ctx == password_reset_context_hash("203.0.113.7")
+
+
+async def test_reset_password_rejects_token_from_different_network() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await env.service.forgot_password(
+        email="alice@example.com", ip_address="203.0.113.7", user_agent=None
+    )
+    token = token_from_url(env.mail.sent[-1])
+
+    with pytest.raises(InvalidTokenError, match="device/network"):
+        await env.service.reset_password(
+            token=token,
+            new_password="NewStr0ng!Pass",
+            ip_address="198.51.100.42",
+            user_agent=None,
+        )
+
+
+async def test_reset_password_accepts_token_from_same_coarse_network() -> None:
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    await env.service.forgot_password(
+        email="alice@example.com", ip_address="203.0.113.7", user_agent=None
+    )
+    token = token_from_url(env.mail.sent[-1])
+    # Different host on the same /24 still redeems.
+    await env.service.reset_password(
+        token=token,
+        new_password="NewStr0ng!Pass",
+        ip_address="203.0.113.200",
+        user_agent=None,
+    )
+
+
 async def test_rbac_role_resolved_from_membership() -> None:
     env = build_auth_env()
     await env.service.register(
@@ -820,6 +884,61 @@ async def test_resend_verification_is_silent_for_verified_account() -> None:
 
     assert len(env.mail.sent) == 1
     assert env.audit.logs[-1].action == AUDIT_EMAIL_VERIFIED  # unchanged
+
+
+# ------------------------------------------------ token-leakage regression
+
+
+async def test_verification_email_log_does_not_contain_token(caplog) -> None:
+    """SEC: the verification email log must never include the full URL, which
+    contains a signed JWT.  An attacker with log access could extract the
+    token and verify the victim's email.
+    """
+    import logging
+
+    env = build_auth_env()
+    with caplog.at_level(logging.INFO, logger="webchat_ai"):
+        await env.service.register(
+            name="Alice",
+            email="alice@example.com",
+            password=VALID_PASSWORD,
+            ip_address=None,
+            user_agent=None,
+        )
+    # The log must mention "Sending verification email" but must NOT contain
+    # the token-bearing URL.
+    verification_logs = [
+        r for r in caplog.records if "verification email" in r.getMessage().lower()
+    ]
+    assert len(verification_logs) >= 1, "expected at least one verification email log"
+    for record in verification_logs:
+        msg = record.getMessage()
+        assert "token=" not in msg, f"Log record leaked verification URL with token: {msg}"
+        assert "/verify-email?" not in msg, f"Log record leaked verification URL: {msg}"
+
+
+async def test_forgot_password_log_does_not_contain_token(caplog) -> None:
+    """SEC: the password reset log must never include the reset URL/token."""
+    import logging
+
+    env = build_auth_env()
+    await env.service.register(
+        name="Alice",
+        email="alice@example.com",
+        password=VALID_PASSWORD,
+        ip_address=None,
+        user_agent=None,
+    )
+    with caplog.at_level(logging.INFO, logger="webchat_ai"):
+        await env.service.forgot_password(
+            email="alice@example.com", ip_address=None, user_agent=None
+        )
+    reset_logs = [r for r in caplog.records if "password reset" in r.getMessage().lower()]
+    assert len(reset_logs) >= 1, "expected at least one password reset log"
+    for record in reset_logs:
+        msg = record.getMessage()
+        assert "token=" not in msg, f"Log record leaked reset URL with token: {msg}"
+        assert "/reset-password?" not in msg, f"Log record leaked reset URL: {msg}"
 
 
 # ---------------------------------------------------------------- lockout tests

@@ -127,23 +127,60 @@ async def test_config_cache_falls_back_to_db_on_store_error() -> None:
 
     class _Boom:
         async def get(self, key: str) -> str | None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def setex(self, key: str, seconds: int, value: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def incr(self, key: str) -> int:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def expire(self, key: str, seconds: int) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def delete(self, key: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
     service._store = _Boom()
     config = await service.get_public_config("widget-1")
     assert config.widget_id == "widget-1"
+
+
+async def test_config_cache_ignores_corrupt_entry_and_uses_db() -> None:
+    widgets, tenants, _, store, service = _widget_env()
+    _seed_widget(widgets, tenants)
+
+    await service.get_public_config("widget-1")
+    store.data["wk:config:widget-1"] = "{not valid json"
+
+    config = await service.get_public_config("widget-1")
+    assert config.widget_id == "widget-1"
+
+
+async def test_config_cache_surfaces_non_redis_errors() -> None:
+    """Only infra failures fail open; programming bugs must surface (BE-Q07)."""
+    widgets, tenants, _, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+
+    class _Boom:
+        async def get(self, key: str) -> str | None:
+            raise RuntimeError("programming bug")
+
+        async def setex(self, key: str, seconds: int, value: str) -> None:
+            raise RuntimeError("programming bug")
+
+        async def incr(self, key: str) -> int:
+            raise RuntimeError("programming bug")
+
+        async def expire(self, key: str, seconds: int) -> None:
+            raise RuntimeError("programming bug")
+
+        async def delete(self, key: str) -> None:
+            raise RuntimeError("programming bug")
+
+    service._store = _Boom()
+    with pytest.raises(RuntimeError):
+        await service.get_public_config("widget-1")
 
 
 async def test_invalidate_public_config_drops_cached_entry() -> None:
@@ -162,19 +199,19 @@ async def test_invalidate_public_config_survives_store_failure() -> None:
 
     class _Boom:
         async def get(self, key: str) -> str | None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def setex(self, key: str, seconds: int, value: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def incr(self, key: str) -> int:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def expire(self, key: str, seconds: int) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def delete(self, key: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
     service._store = _Boom()
     # Best-effort invalidation: never raises.
@@ -275,19 +312,19 @@ async def test_message_cap_fails_open_on_store_error() -> None:
 
     class _Boom:
         async def get(self, key: str) -> str | None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def setex(self, key: str, seconds: int, value: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def incr(self, key: str) -> int:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def expire(self, key: str, seconds: int) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
         async def delete(self, key: str) -> None:
-            raise RuntimeError("redis down")
+            raise ConnectionError("redis down")
 
     service._store = _Boom()
     await service.check_message_cap(widget_id="widget-1", visitor_id="v1", session_id="session-1")

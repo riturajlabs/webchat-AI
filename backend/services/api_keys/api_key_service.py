@@ -14,6 +14,7 @@ from datetime import datetime
 from backend.core.errors import (
     AccountSuspendedError,
     ApiKeyNotFoundError,
+    EmailNotVerifiedError,
     InvalidCredentialsError,
 )
 from backend.core.security import (
@@ -82,6 +83,11 @@ class ApiKeyService:
         user_agent: str | None,
         expires_at: datetime | None = None,
     ) -> CreateApiKeyResult:
+        # SEC-L02: minting credentials is a sensitive write - require a
+        # verified email so an attacker registering with someone else's
+        # address cannot issue billing-capable keys for that account.
+        if not principal.email_verified:
+            raise EmailNotVerifiedError("Verify your email before creating API keys.")
         raw_secret = generate_api_key()
         key = ApiKey.new(
             tenant_id=principal.tenant_id,

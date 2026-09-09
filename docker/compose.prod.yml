@@ -64,6 +64,11 @@ services:
   dashboard:
     image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-dashboard:${IMAGE_TAG:-latest}
     init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      # Next.js standalone server writes its build cache here at runtime.
+      - /app/apps/dashboard/.next/cache:size=128m,mode=1777
     logging:
       <<: *log-json
     deploy:
@@ -75,6 +80,13 @@ services:
   widget:
     image: ${IMAGE_REGISTRY:-ghcr.io}/${IMAGE_NAMESPACE:-your-org}/webchat-ai-widget:${IMAGE_TAG:-latest}
     init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      # nginx master/worker need writable logs, cache and runtime dirs.
+      - /var/cache/nginx:size=32m,mode=1777
+      - /var/log/nginx:size=32m,mode=1777
+      - /var/run:size=8m,mode=1777
     logging:
       <<: *log-json
     deploy:

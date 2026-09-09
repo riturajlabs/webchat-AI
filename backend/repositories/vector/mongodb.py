@@ -23,7 +23,6 @@ Search-capability handling (three cases):
 
 import asyncio
 import logging
-from math import sqrt
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -32,6 +31,7 @@ from backend.core.embedding_identity import EmbeddingIdentity, ensure_embedding_
 from backend.core.errors import EmbeddingCompatibilityError
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.repositories.vector.base import VectorRepository, VectorSearchResult
+from backend.utils.vector_math import cosine_similarity
 
 logger = logging.getLogger("webchat_ai")
 
@@ -462,19 +462,8 @@ def _atlas_only_error(exc: Exception) -> bool:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Cosine similarity between two equal-length vectors (0.0 on zero norm)."""
-    if len(a) != len(b) or not a:
-        return 0.0
-    dot = 0.0
-    norm_a = 0.0
-    norm_b = 0.0
-    for x, y in zip(a, b, strict=True):
-        dot += x * y
-        norm_a += x * x
-        norm_b += y * y
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (sqrt(norm_a) * sqrt(norm_b))
+    """Cosine similarity (BE-Q14): delegate to the shared vector helper."""
+    return cosine_similarity(a, b)
 
 
 __all__ = ["MongoVectorRepository"]

@@ -1,0 +1,101 @@
+# Prometheus alerting rules for WebChat AI (Phase 6, OBS-03).
+#
+# Every series name here must be exported by the application's `/metrics`
+# endpoint (backend/core/metrics.py). tests/test_alert_rules.py validates this
+# so a rename in the metrics registry fails CI instead of silently disabling an
+# alert. Wire this file into your Prometheus server with:
+#
+#   rule_files:
+#     - /etc/prometheus/alerts.yml
+#
+# Thresholds are starting points tuned for a single production tenant; review
+# them after the first weeks of real traffic.
+
+groups:
+  - name: webchat-ai-api
+    rules:
+      - alert: Http5xxRateHigh
+        expr: |
+          sum by (path) (rate(http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum by (path) (rate(http_requests_total[5m])), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of requests to {{ $labels.path }} are returning 5xx"
+
+      - alert: ChatFailuresSpike
+        expr: rate(chat_failures_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained chat failures ({{ $value }} failures/s)"
+
+      - alert: LlmFailuresSpike
+        expr: rate(llm_failures_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM generation failures sustained ({{ $value }} failures/s)"
+
+      - alert: AiProviderFailuresSpike
+        expr: rate(ai_provider_failures_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI provider failures sustained ({{ $value }} failures/s)"
+
+      - alert: RagFallbackDominates
+        expr: |
+          sum(rate(rag_fallback_total[5m]))
+          / clamp_min(sum(rate(rag_retrieval_total[5m])) + sum(rate(rag_fallback_total[5m])), 1)
+          > 0.8
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 80% of chat turns are falling back to the safe answer"
+
+      - alert: RagEmptyRetrievals
+        expr: rate(rag_empty_results_total[5m]) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAG retrievals returning zero chunks ({{ $value }} retrievals/s)"
+
+      - alert: ChatLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(chat_latency_seconds_bucket[5m]))) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 chat latency above 20s ({{ $value }}s)"
+
+      - alert: LlmLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(llm_latency_seconds_bucket[5m]))) > 30
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 LLM generation latency above 30s ({{ $value }}s)"
+
+      - alert: MongoQueriesSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(mongodb_query_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 MongoDB command duration above 1s ({{ $value }}s)"
+
+      - alert: CrawlFailuresSustained
+        expr: rate(crawl_failed_total[5m]) > 0.1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Crawl jobs failing ({{ $value }} failures/s)"

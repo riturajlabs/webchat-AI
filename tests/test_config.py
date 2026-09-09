@@ -26,8 +26,8 @@ def test_production_accepts_32_byte_jwt_secret() -> None:
         enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -162,8 +162,8 @@ def test_production_accepts_groq_as_generation_provider() -> None:
         enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -203,8 +203,8 @@ def test_production_accepts_cdn_widget_script_url() -> None:
         enable_docs=False,
         widget_script_url="https://assets.example.com/widget.js",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -248,8 +248,8 @@ def test_production_accepts_public_widget_api_base_url() -> None:
         widget_script_url="https://assets.example.com/widget.js",
         widget_api_base_url="https://api.example.com",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -295,6 +295,31 @@ def test_latency_settings_are_fail_fast_by_default() -> None:
     assert settings.chat_retrieval_cache_size == 512
     assert settings.chat_context_max_chars == 20000
     assert settings.chat_context_min_score == 0.25
+
+
+# --- Hybrid search candidate limit (D2 naming/semantics contract) ---
+
+
+def test_hybrid_candidate_limit_default_and_semantics() -> None:
+    """D2: the hybrid candidate limit caps keyword output + RRF pool, not corpus.
+
+    ``hybrid_search_candidate_limit`` is documented (and used by
+    ``RagService._hybrid_candidate_limit``) as the shared cap for (1) the
+    keyword-search output and (2) the RRF candidate pool size. It must NOT be
+    interpreted as a corpus-load cap: the full tenant/website corpus is always
+    loaded (``list_chunks_light(limit=0)``) so keyword recall is never cut off.
+    This test locks the default and the contract's meaning.
+    """
+    settings = Settings(_env_file=None)
+    assert settings.hybrid_search_candidate_limit == 50
+    assert settings.enable_hybrid_search is True
+    assert settings.hybrid_rrf_k == 60
+
+
+def test_hybrid_candidate_limit_configurable() -> None:
+    """D2: the candidate limit is operator-configurable via the setting."""
+    settings = Settings(_env_file=None, hybrid_search_candidate_limit=20)
+    assert settings.hybrid_search_candidate_limit == 20
 
 
 # --- Phase 9: configurable SSE idle timeout ---
@@ -375,8 +400,8 @@ def test_production_allows_keyless_embedding_provider() -> None:
         enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -399,8 +424,8 @@ def test_production_allows_partial_missing_fallback_key() -> None:
         enable_docs=False,
         widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
         payment_provider="stripe",
-        stripe_secret_key="sk_test",
-        stripe_webhook_secret="whsec_test",
+        stripe_secret_key="sk_test_" + "a" * 24,
+        stripe_webhook_secret="whsec_" + "b" * 24,
         cors_origins=["https://app.example.com"],
         allowed_hosts=["app.example.com"],
         mongo_username="test-user",
@@ -422,8 +447,8 @@ _PRODUCTION_BASE = dict(
     enable_docs=False,
     widget_script_url="https://cdn.example.com/webchat-widget.iife.min.js",
     payment_provider="stripe",
-    stripe_secret_key="sk_test",
-    stripe_webhook_secret="whsec_test",
+    stripe_secret_key="sk_test_" + "a" * 24,
+    stripe_webhook_secret="whsec_" + "b" * 24,
     cors_origins=["https://app.example.com"],
     allowed_hosts=["app.example.com"],
     mongo_username="test-user",
@@ -514,8 +539,8 @@ _LOCAL_PROD_BASE = dict(
     widget_script_url="http://localhost:8080/webchat-widget.iife.min.js",
     widget_api_base_url="http://localhost:8000",
     payment_provider="stripe",
-    stripe_secret_key="sk_test",
-    stripe_webhook_secret="whsec_test",
+    stripe_secret_key="sk_test_" + "a" * 24,
+    stripe_webhook_secret="whsec_" + "b" * 24,
     cors_origins=["http://localhost:3000"],
     allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0", "::1"],
 )
@@ -722,3 +747,48 @@ def test_local_production_test_allows_insecure_cookies() -> None:
     # and the loopback URL relaxations). Real production still rejects it.
     settings = Settings(**_local_prod(cookie_secure=False))
     assert settings.cookie_secure is False
+
+
+# --- SEC-C03: Stripe keys must be real, not arbitrary strings/placeholders ---
+
+
+@pytest.mark.parametrize(
+    "secret_key",
+    [
+        "YOUR_API_KEY",
+        "change_me",
+        "sk_example",
+        "sk_test_placeholder",
+        "not-a-stripe-key",
+        "abc",
+    ],
+)
+def test_production_rejects_non_stripe_secret_keys(secret_key: str) -> None:
+    with pytest.raises(ValueError, match="STRIPE_SECRET_KEY"):
+        Settings(**_prod(stripe_secret_key=secret_key))
+
+
+@pytest.mark.parametrize(
+    "webhook_secret",
+    [
+        "YOUR_API_KEY",
+        "change_me",
+        "whsec_placeholder",
+        "not-a-webhook-secret",
+        "abc",
+    ],
+)
+def test_production_rejects_non_stripe_webhook_secrets(webhook_secret: str) -> None:
+    with pytest.raises(ValueError, match="STRIPE_WEBHOOK_SECRET"):
+        Settings(**_prod(stripe_webhook_secret=webhook_secret))
+
+
+def test_production_accepts_real_stripe_key_formats() -> None:
+    settings = Settings(
+        **_prod(
+            stripe_secret_key="sk_live_" + "a" * 24,
+            stripe_webhook_secret="whsec_" + "b" * 24,
+        )
+    )
+    assert settings.stripe_secret_key.startswith("sk_live_")
+    assert settings.stripe_webhook_secret.startswith("whsec_")

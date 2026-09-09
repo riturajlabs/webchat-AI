@@ -1,8 +1,8 @@
 """Authentication endpoints (Phase 2, ADR-003).
 
 Cookie strategy:
-  refresh_token  HttpOnly; Secure; SameSite=Lax; Path=/api/auth
-  csrf_token     NOT HttpOnly; Secure; SameSite=Lax; Path=/
+  refresh_token  HttpOnly; Secure; SameSite=Strict; Path=/api/auth
+  csrf_token     NOT HttpOnly; Secure; SameSite=Strict; Path=/
 Only the refresh/logout endpoints are cookie-authenticated and therefore carry
 the double-submit CSRF check; bearer-token endpoints (/api/auth/me and beyond)
 are immune to CSRF by design.
@@ -19,6 +19,7 @@ from backend.api.deps import (
     get_account_service,
     get_auth_service,
     login_limiter,
+    profile_update_limiter,
     refresh_limiter,
     register_limiter,
     resend_verification_limiter,
@@ -56,7 +57,7 @@ def _set_session_cookies(response: Response, refresh_token: str, csrf_token: str
         refresh_token,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite="strict",
         path="/api/auth",
         max_age=max_age,
     )
@@ -65,7 +66,7 @@ def _set_session_cookies(response: Response, refresh_token: str, csrf_token: str
         csrf_token,
         httponly=False,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite="strict",
         path="/",
         max_age=max_age,
     )
@@ -255,6 +256,7 @@ async def update_me(
     body: UpdateProfileRequest,
     principal: Annotated[Principal, Depends(current_user)],
     auth: Annotated[AuthService, Depends(get_auth_service)],
+    _: Annotated[None, Depends(profile_update_limiter)],
 ) -> UserOut:
     """Update editable profile fields (name, avatar_url) for the signed-in user."""
     fields: dict[str, str | None] = {}

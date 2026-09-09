@@ -31,7 +31,11 @@ def build_website_env(usage=None) -> WebsiteEnv:
 
 
 def make_principal(
-    *, tenant_id: str = "tenant-a", user_id: str = "user-a", role: str = "owner"
+    *,
+    tenant_id: str = "tenant-a",
+    user_id: str = "user-a",
+    role: str = "owner",
+    email_verified: bool = True,
 ) -> Principal:
     """A principal whose tenant/user id can be reused across fake repositories."""
     return Principal(
@@ -40,7 +44,7 @@ def make_principal(
         role=role,
         name="Alice",
         email="alice@example.com",
-        email_verified=True,
+        email_verified=email_verified,
         status="active",
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )

@@ -1,7 +1,7 @@
 """Unit tests for the ApiKeyService business logic (docs/05 §12)."""
 
 import pytest
-from backend.core.errors import ApiKeyNotFoundError
+from backend.core.errors import ApiKeyNotFoundError, EmailNotVerifiedError
 from backend.core.security import hash_api_key
 from backend.models.api_key import API_KEY_PREFIX, API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED
 from backend.models.audit_log import AUDIT_API_KEY_CREATED, AUDIT_API_KEY_REVOKED
@@ -46,6 +46,23 @@ async def test_create_api_key_audits_event() -> None:
     assert env.audit.logs[-1].tenant_id == principal.tenant_id
     assert env.audit.logs[-1].user_id == principal.user_id
     assert env.audit.logs[-1].ip_address == "1.2.3.4"
+
+
+async def test_create_api_key_rejects_unverified_email() -> None:
+    # SEC-L02: minting credentials is a sensitive write and requires a
+    # verified email so an attacker cannot issue keys for a victim's account.
+    env = build_api_keys_env()
+    principal = make_principal(email_verified=False)
+
+    with pytest.raises(EmailNotVerifiedError):
+        await env.service.create_api_key(
+            principal=principal,
+            name="Production",
+            ip_address="1.2.3.4",
+            user_agent="pytest",
+        )
+    assert env.keys.keys == {}
+    assert env.audit.logs == []
 
 
 async def test_list_api_keys_returns_only_active_owned_keys() -> None:

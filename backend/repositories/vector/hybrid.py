@@ -72,7 +72,14 @@ def reciprocal_rank_fusion(
 
     fused = [
         VectorSearchResult(chunk=chunk_map[cid].chunk, score=score)
-        for cid, score in sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        for cid, score in sorted(
+            rrf_scores.items(),
+            # Descending RRF score; ties are broken by the chunk's strongest
+            # source score so that a genuinely stronger match from either
+            # retrieval stage never loses an arbitrary insertion-order race.
+            key=lambda x: (x[1], chunk_map[x[0]].score),
+            reverse=True,
+        )
     ]
     return fused
 
@@ -197,12 +204,70 @@ def tokenize(text: str) -> list[str]:
     return [_normalize_token(w) for w in words if w not in _STOP_WORDS]
 
 
-_COMMON_TOKEN_VARIANTS = {"addmission": "admission", "admisssion": "admission"}
+_COMMON_TOKEN_VARIANTS: dict[str, str] = {
+    "addmission": "admission",
+    "admisssion": "admission",
+    "admission": "admission",
+    "admissions": "admission",
+    "admision": "admission",
+    "fee": "fees",
+    "fees": "fees",
+    "eligibilty": "eligibility",
+    "eligibility": "eligibility",
+    "curriculum": "syllabus",
+    "curriculam": "syllabus",
+    "syllabus": "syllabus",
+    "enrolment": "enrollment",
+    "enrollment": "enrollment",
+    "placement": "placements",
+    "placements": "placements",
+    "course": "courses",
+    "courses": "courses",
+    "program": "programs",
+    "programme": "programs",
+    "programmes": "programs",
+    "programs": "programs",
+    "progam": "programs",
+    "scholarship": "scholarships",
+    "scholarships": "scholarships",
+    "department": "departments",
+    "departments": "departments",
+    "tution": "tuition",
+    "interviewes": "interviews",
+    "securty": "security",
+    "universty": "university",
+    "hosptel": "hostel",
+}
 
 
 def _normalize_token(token: str) -> str:
     """Normalize frequent spelling variants without site-specific vocabulary."""
     return _COMMON_TOKEN_VARIANTS.get(token, token)
+
+
+def normalize_query(query: str) -> str:
+    """Normalize a user query for retrieval without altering stored history.
+
+    Applies lightweight, deterministic transformations:
+    - Token-level spelling variant normalization (``_COMMON_TOKEN_VARIANTS``)
+    - Doubled-letter compression (e.g. "addmission" → "admission")
+
+    The original query is preserved for chat history; only the returned
+    string should be used for retrieval embedding/keyword matching.
+    """
+    words = _WORD_RE.findall(query.lower())
+    normalized: list[str] = []
+    for word in words:
+        w = _normalize_token(word)
+        # Compress doubled letters (e.g. "admission" → "admission") only
+        # when the result is a known variant or the same word.
+        if len(w) > 3 and w[0] == w[1]:
+            compressed = w[1:]
+            variant = _normalize_token(compressed)
+            if variant != compressed or compressed in _COMMON_TOKEN_VARIANTS:
+                w = variant
+        normalized.append(w)
+    return " ".join(normalized)
 
 
 def keyword_search(

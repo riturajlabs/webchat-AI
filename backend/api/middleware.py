@@ -5,6 +5,7 @@ the first-pass baseline; the full hardening audit is Phase 11 (ADR-008).
 """
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import MutableMapping
@@ -42,8 +43,10 @@ _HEADER_NAME = "X-Request-ID"
 class RequestIDMiddleware:
     """Correlate every response with a request ID for log tracing.
 
-    Propagates an inbound `X-Request-ID` when present, otherwise generates a
-    new one and attaches it to the response.
+    Propagates an inbound `X-Request-ID` when it is a valid UUID, otherwise
+    generates a new one and attaches it to the response. A present-but-invalid
+    inbound value is rejected with 400 (SEC-M05) instead of being echoed, so
+    log correlation can never be polluted with attacker-supplied garbage.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -54,7 +57,11 @@ class RequestIDMiddleware:
             await self.app(scope, receive, send)
             return
 
-        request_id = _extract_request_id(scope.get("headers", []))
+        raw_id = _extract_request_id(scope.get("headers", []))
+        if raw_id is None and _has_request_id_header(scope.get("headers", [])):
+            await _send_rejection(send, 400, "X-Request-ID must be a UUID.")
+            return
+        request_id = raw_id if raw_id is not None else str(uuid.uuid4())
         token = request_id_var.set(request_id)
 
         async def send_with_id(message: MutableMapping[str, Any]) -> None:
@@ -341,8 +348,20 @@ class AuthCacheHeadersMiddleware:
         await self.app(scope, receive, send_with_cache_headers)
 
 
-def _extract_request_id(headers: list[tuple[bytes, bytes]]) -> str:
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _has_request_id_header(headers: list[tuple[bytes, bytes]]) -> bool:
+    return any(name.lower() == _HEADER_NAME.lower().encode("latin1") for name, _ in headers)
+
+
+def _extract_request_id(headers: list[tuple[bytes, bytes]]) -> str | None:
     for name, value in headers:
         if name.lower() == _HEADER_NAME.lower().encode("latin1"):
-            return value.decode("latin1")
-    return str(uuid.uuid4())
+            decoded = value.decode("latin1")
+            # SEC-M05: only canonical UUIDs (client + widget forward their own
+            # `crypto.randomUUID()`) are accepted as correlation ids.
+            if _UUID_RE.match(decoded):
+                return decoded
+            return None
+    return None

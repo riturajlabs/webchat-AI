@@ -118,10 +118,14 @@ class AdaptiveProviderRouter:
         now = time.time()
         names = list(self._provider_map.keys())
         health_snapshots: list[tuple[str, ProviderHealth, bool]] = []
+        # Fetch all provider health in a single pipelined Redis round trip
+        # (RAG-PERF-04). Preserves exact fail-open / ordering semantics.
+        name_to_health = await self._health.get_health_many(
+            [provider_health_name("generation", n) for n in names]
+        )
         for name in names:
-            health_name = provider_health_name("generation", name)
-            snapshot = await self._health.get_health(health_name)
-            available = await self._health.is_available(health_name)
+            snapshot = name_to_health[provider_health_name("generation", name)]
+            available = self._health.is_available_from_health(snapshot)
             health_snapshots.append((name, snapshot, available))
 
         healthy: list[tuple[str, float, str]] = []

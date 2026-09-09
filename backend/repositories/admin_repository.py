@@ -8,8 +8,9 @@ by design (00-AI-Development-Rules §7 is enforced at the router boundary for
 tenant-facing data; this surface has no tenant).
 """
 
+import asyncio
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
@@ -104,34 +105,63 @@ class MongoAdminRepository:
         self._admin_audit_logs = db["admin_audit_logs"]
 
     async def platform_stats(self) -> PlatformStats:
-        total_tenants = await self._tenants.count_documents({})
-        active_tenants = await self._tenants.count_documents({"status": "active"})
-        suspended_tenants = await self._tenants.count_documents({"status": "suspended"})
-        total_users = await self._users.count_documents({})
-        active_users = await self._users.count_documents({"status": "active"})
-        suspended_users = await self._users.count_documents({"status": "suspended"})
-
-        usage_doc = await self._first(
-            self._usage.aggregate(
-                [
-                    {
-                        "$group": {
-                            "_id": None,
-                            "conversations": {"$sum": "$counters.chats"},
-                            "messages": {"$sum": "$counters.messages"},
-                            "input_tokens": {"$sum": "$counters.input_tokens"},
-                            "output_tokens": {"$sum": "$counters.output_tokens"},
-                        }
-                    },
-                ]
-            )
+        # PERF-K02: the 10 counts were issued sequentially (10 round trips).
+        # Firing them together collapses the admin overview to a single network
+        # wait; `asyncio.gather` propagates the first failure exactly like the
+        # sequential awaits did (no fail-open behavior change).
+        (
+            total_tenants,
+            active_tenants,
+            suspended_tenants,
+            total_users,
+            active_users,
+            suspended_users,
+            total_crawl_jobs,
+            active_crawl_jobs,
+            failed_crawl_jobs,
+            usage_doc,
+        ) = cast(
+            tuple[
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                int,
+                dict[str, Any] | None,
+            ],
+            await asyncio.gather(
+                self._tenants.count_documents({}),
+                self._tenants.count_documents({"status": "active"}),
+                self._tenants.count_documents({"status": "suspended"}),
+                self._users.count_documents({}),
+                self._users.count_documents({"status": "active"}),
+                self._users.count_documents({"status": "suspended"}),
+                self._crawl_jobs.count_documents({}),
+                self._crawl_jobs.count_documents(
+                    {"status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)}}
+                ),
+                self._crawl_jobs.count_documents({"status": CRAWL_STATUS_FAILED}),
+                self._first(
+                    self._usage.aggregate(
+                        [
+                            {
+                                "$group": {
+                                    "_id": None,
+                                    "conversations": {"$sum": "$counters.chats"},
+                                    "messages": {"$sum": "$counters.messages"},
+                                    "input_tokens": {"$sum": "$counters.input_tokens"},
+                                    "output_tokens": {"$sum": "$counters.output_tokens"},
+                                }
+                            },
+                        ]
+                    )
+                ),
+            ),
         )
-
-        total_crawl_jobs = await self._crawl_jobs.count_documents({})
-        active_crawl_jobs = await self._crawl_jobs.count_documents(
-            {"status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)}}
-        )
-        failed_crawl_jobs = await self._crawl_jobs.count_documents({"status": CRAWL_STATUS_FAILED})
 
         return PlatformStats(
             total_tenants=total_tenants,
@@ -179,19 +209,49 @@ class MongoAdminRepository:
         )
 
     async def collection_counts(self) -> CollectionCounts:
+        # PERF-K04: the 12 per-collection counts were previously issued
+        # sequentially (one round-trip each). Gather them concurrently so the
+        # admin overview never pays ~12x the single-count latency.
+        (
+            users,
+            tenants,
+            websites,
+            widgets,
+            documents,
+            chat_sessions,
+            messages,
+            usage_records,
+            api_keys,
+            subscriptions,
+            audit_logs,
+            admin_audit_logs,
+        ) = await asyncio.gather(
+            self._users.count_documents({}),
+            self._tenants.count_documents({}),
+            self._websites.count_documents({}),
+            self._widgets.count_documents({}),
+            self._documents.count_documents({}),
+            self._sessions.count_documents({}),
+            self._messages.count_documents({}),
+            self._usage.count_documents({}),
+            self._api_keys.count_documents({}),
+            self._subscriptions.count_documents({}),
+            self._audit_logs.count_documents({}),
+            self._admin_audit_logs.count_documents({}),
+        )
         return CollectionCounts(
-            users=await self._users.count_documents({}),
-            tenants=await self._tenants.count_documents({}),
-            websites=await self._websites.count_documents({}),
-            widgets=await self._widgets.count_documents({}),
-            documents=await self._documents.count_documents({}),
-            chat_sessions=await self._sessions.count_documents({}),
-            messages=await self._messages.count_documents({}),
-            usage_records=await self._usage.count_documents({}),
-            api_keys=await self._api_keys.count_documents({}),
-            subscriptions=await self._subscriptions.count_documents({}),
-            audit_logs=await self._audit_logs.count_documents({}),
-            admin_audit_logs=await self._admin_audit_logs.count_documents({}),
+            users=users,
+            tenants=tenants,
+            websites=websites,
+            widgets=widgets,
+            documents=documents,
+            chat_sessions=chat_sessions,
+            messages=messages,
+            usage_records=usage_records,
+            api_keys=api_keys,
+            subscriptions=subscriptions,
+            audit_logs=audit_logs,
+            admin_audit_logs=admin_audit_logs,
         )
 
     @staticmethod

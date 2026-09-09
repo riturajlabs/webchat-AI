@@ -78,6 +78,17 @@ targets managed MongoDB/Redis.
 | `.env.example`             | Full tracked template with safe placeholders; documents all config fields.                                                                        |
 | `.env.production.example`  | Production template that must be parameterized before boot.                                                                                       |
 
+## Development secrets (SEC-L03)
+
+`.env.development` is untracked but has historically carried real AI provider
+keys (Gemini/Groq/OpenRouter). Treat it as a **throwaway, local-only** file:
+
+- Never copy `.env.development` (or its keys) into `.env.production`, CI
+  secrets, or any shared host.
+- Use restricted/test-scoped provider keys in non-production environments so a
+  dev-machine compromise cannot drive billing abuse. Rotate any key that may
+  have been shared or pasted into logs.
+
 ## Production prerequisites
 
 - **MongoDB** — managed (Atlas). Authenticated URI embedded in `MONGODB_URI`, or
@@ -174,6 +185,26 @@ Logs are JSON (`LOG_LEVEL`), bounded (`max-size 10m`, 3 files). Follow a
 service: `docker compose logs -f api`. Container introspection:
 `docker container inspect webchat-api` (read-only FS, `no-new-privileges`,
 `cap_drop: ALL`).
+
+### Prometheus & alerting (OBS-03)
+
+The API exposes Prometheus text format at `/metrics` (root path, no `/api`
+prefix). Ship the reference scraping + alerting configuration from this
+repository:
+
+- `docker/prometheus/prometheus.yml` — scrape config (`metrics_path: /metrics`,
+  target `api:8000` inside the Docker network).
+- `docker/prometheus/alerts.yml` — alert rules (5xx rate, chat/LLM/AI-provider
+  failures, RAG fallback dominance, empty retrievals, latency percentiles,
+  MongoDB p95, crawl failures). Every metric referenced is validated against
+  `backend/core/metrics.py` by `tests/test_alert_rules.py`.
+
+Wire them into your own Prometheus deployment (in/out of the compose stack as
+desired): set `rule_files` to the alerts file, point an Alertmanager to your
+notification channel, and add the scrape job pointing at the API service.
+
+Log records carry `request_id` and, once a request authenticates, `tenant_id`
+so per-tenant incidents can be filtered without touching the payload data.
 
 ## Production checklist
 

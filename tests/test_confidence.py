@@ -1,6 +1,41 @@
 """Tests for the pre-generation RAG confidence scorer."""
 
-from backend.services.chat.confidence import assess_confidence, calculate_confidence
+from datetime import UTC, datetime
+
+from backend.models.knowledge_chunk import KnowledgeChunk
+from backend.repositories.vector.base import VectorSearchResult
+from backend.services.chat.confidence import (
+    assess_confidence,
+    calculate_confidence,
+    usable,
+)
+
+
+def _chunk(text: str, *, title: str = "t") -> KnowledgeChunk:
+    return KnowledgeChunk(
+        id=f"chunk-{title}-{abs(hash(text)) % 10**9}",
+        tenant_id="t",
+        website_id="w",
+        document_id="d",
+        chunk_text=text,
+        chunk_index=1,
+        metadata={},
+        created_at=datetime.now(UTC),
+    )
+
+
+def _vr(text: str, *, score: float = 0.05, **overrides: object) -> VectorSearchResult:
+    """Below-floor result carrying no dense/lexical provenance by default.
+
+    Mirrors the pure (reranker-less) env post-``_strip_lexical_scores`` shape:
+    keyword-only RRF chunks have ``score`` = RRF, ``dense_score``/``lexical_score``
+    detached.
+    """
+    return VectorSearchResult(
+        chunk=_chunk(text),
+        score=score,
+        **overrides,  # type: ignore[arg-type]
+    )
 
 
 class TestCalculateConfidence:
@@ -133,3 +168,73 @@ class TestScoreNormalization:
         strong_cosine = assess_confidence([0.95, 0.9], min_score=0.5)
         rescaled = assess_confidence([1.9, 1.8], min_score=0.5)
         assert (strong_cosine.confidence >= 0.5) == (rescaled.confidence >= 0.5)
+
+
+class TestShortQueryLeniency:
+    """RAG-ACC-03 short-query gate: below-floor chunks may be preserved on
+    independent content-token overlap for queries with few content terms.
+
+    The leniency only applies to the query-aware fast path (``query`` passed);
+    it must never weaken the strict dense-only floor for ordinary queries.
+    """
+
+    def test_requires_query_for_leniency(self) -> None:
+        # Legacy signature / reranker-path gate: below-floor chunk is dropped
+        # even with identical text overlap when no query is supplied.
+        assert not usable(_vr("The BCA admissions are open"), dense_floor=0.25)
+
+    def test_single_token_query_admits_chunk_covering_it(self) -> None:
+        res = _vr("The BCA admissions are open each fall")
+        assert usable(res, dense_floor=0.25, query="Admissions?")
+
+    def test_single_token_query_rejects_chunk_without_the_token(self) -> None:
+        res = _vr("The campus has a library and labs")
+        assert not usable(res, dense_floor=0.25, query="Admissions?")
+
+    def test_two_token_query_requires_both_tokens(self) -> None:
+        # Only {campus} of {campus, hostel} overlaps -> must not qualify.
+        res = _vr("The BCA campus sits near the metro")
+        assert not usable(res, dense_floor=0.25, query="Campus hostel?")
+
+    def test_three_token_query_requires_two_independent_terms(self) -> None:
+        # {fee, scholarship} cover 2 of the 3 content tokens -> admitted.
+        res = _vr("The BCA fee and scholarship details")
+        assert usable(res, dense_floor=0.25, query="Tell me about fees scholarships campus")
+
+    def test_three_token_query_rejects_single_generic_overlap(self) -> None:
+        # Only "bca" overlaps; a generic topic header must not qualify.
+        res = _vr("BCA is a three year undergraduate degree")
+        assert not usable(res, dense_floor=0.25, query="Tell me about fee hostel placement")
+
+    def test_four_plus_token_query_keeps_strict_floor(self) -> None:
+        # Leniency cap at 3 content tokens: an unsupported "Academy B academy"
+        # style long query must never be rescued by token overlap.
+        res = _vr("The BCA program includes fee hostel campus placements")
+        assert not usable(
+            res,
+            dense_floor=0.25,
+            query="Does the BCA Academy have hostel fees placements",
+        )
+
+    def test_above_floor_dense_score_still_admitted_without_leniency(self) -> None:
+        res = _vr("BCA placement policy", score=0.0, dense_score=0.9)
+        assert usable(res, dense_floor=0.25, query="nothing in common here")
+
+    def test_reranker_protection_path_unchanged(self) -> None:
+        # Strong-lexical reranker protection still requires lexical evidence:
+        # with no reranker proof, a 4+-content-token query keeps the strict
+        # floor even when the chunk scores high on the wrong scale.
+        below_floor = _vr("Application deadlines are in march", score=0.05)
+        protected = _vr(
+            "Application deadlines are in march",
+            score=0.05,
+            lexical_score=0.9,
+            lexical_exact=True,
+        )
+        query = "deadline policy summer transfer deadline"
+        assert not usable(below_floor, dense_floor=0.25, query=query)
+        assert usable(protected, dense_floor=0.25, query=query)
+
+    def test_zero_floor_never_freezes_unrelated_chunks(self) -> None:
+        # dense_floor <= 0 keeps legacy behavior: everything admitted.
+        assert usable(_vr("unrelated"), dense_floor=0.0, query="anything")

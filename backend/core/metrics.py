@@ -34,9 +34,11 @@ __all__ = [
     "record_llm_tokens",
     "record_rag_latency",
     "record_rag_empty",
+    "record_rag_stage_latency",
     "record_crawl_started",
     "record_crawl_completed",
     "record_crawl_failed",
+    "record_mongodb_command_duration",
     "render_prometheus",
     "reset_registry",
 ]
@@ -337,6 +339,19 @@ RAG_EMPTY_RESULTS_TOTAL = Counter(
     "RAG retrievals that returned zero chunks.",
 )
 
+# Per-stage RAG pipeline latency (baseline instrumentation). Each observation
+# is a millisecond-to-seconds conversion of one pipeline stage.  Label values
+# are fixed enum-like strings so series cardinality stays bounded:
+#   stage: embedding | vector_search | load_chunks | rerank | context
+#          | history | generation | persist | total
+#   cache_status: hit | miss | ""  (empty when not applicable)
+RAG_STAGE_LATENCY_SECONDS = Histogram(
+    "rag_stage_latency_seconds",
+    "Per-stage RAG pipeline latency in seconds.",
+    ("stage", "cache_status"),
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
+)
+
 CRAWL_STARTED_TOTAL = Counter(
     "crawl_started_total",
     "Crawl jobs started.",
@@ -349,6 +364,13 @@ CRAWL_FAILED_TOTAL = Counter(
     "crawl_failed_total",
     "Crawl jobs that failed.",
     ("reason",),
+)
+
+MONGODB_QUERY_DURATION_SECONDS = Histogram(
+    "mongodb_query_duration_seconds",
+    "MongoDB command duration in seconds (excludes heartbeats), by command.",
+    ("command",),
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
 )
 
 
@@ -449,6 +471,21 @@ def record_rag_empty() -> None:
     RAG_EMPTY_RESULTS_TOTAL.inc()
 
 
+def record_rag_stage_latency(
+    stage: str,
+    duration_seconds: float,
+    *,
+    cache_status: str = "",
+) -> None:
+    """Observe one per-stage RAG pipeline latency sample.
+
+    Stages: embedding, vector_search, load_chunks, rerank, context,
+    history, generation, persist, total.
+    cache_status: "hit", "miss", or "" (not applicable).
+    """
+    RAG_STAGE_LATENCY_SECONDS.observe(duration_seconds, stage=stage, cache_status=cache_status)
+
+
 def record_crawl_started() -> None:
     """Record a crawl job start."""
     CRAWL_STARTED_TOTAL.inc()
@@ -462,6 +499,17 @@ def record_crawl_completed() -> None:
 def record_crawl_failed(reason: str) -> None:
     """Record a crawl job failure."""
     CRAWL_FAILED_TOTAL.inc(reason=reason)
+
+
+def record_mongodb_command_duration(*, command: str, duration_seconds: float) -> None:
+    """Record one MongoDB command's duration (OBS-05).
+
+    Called from a PyMongo `CommandListener`; the registry is thread-safe and
+    the update is a dict lookup + float add, so it never blocks the event loop
+    that issued the command. Heartbeat commands are filtered by the listener,
+    not here.
+    """
+    MONGODB_QUERY_DURATION_SECONDS.observe(duration_seconds, command=command)
 
 
 def render_prometheus() -> str:

@@ -20,6 +20,7 @@ from backend.core.cache import CacheStore, RedisCacheStore
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.errors import InvalidUrlError
+from backend.core.logging import request_id_var, tenant_id_var
 from backend.core.metrics import record_crawl_completed, record_crawl_failed, record_crawl_started
 from backend.core.redis import get_redis
 from backend.core.security import utcnow
@@ -112,6 +113,48 @@ async def _run_crawl_job(
     cache: CacheStore | None = None,
     vector: Any = None,
 ) -> dict[str, Any]:
+    """Correlate worker logs to the job and tenant, then run the crawl (OBS-02).
+
+    The ARQ worker executes each job in its own task (``create_task`` copies
+    the context), so the values cannot leak across jobs; the finally-reset
+    mirrors ``RequestIDMiddleware`` and keeps the call site's context clean.
+    The tenant context is set inside ``_run_crawl_job_impl`` once the job is
+    loaded; capturing it here (even as a no-op) lets us restore it on the way
+    out instead of leaving the job's tenant behind on the caller's context.
+    """
+    request_token = request_id_var.set(f"job:{crawl_job_id}")
+    tenant_token = tenant_id_var.set(tenant_id_var.get())
+    try:
+        return await _run_crawl_job_impl(
+            ctx,
+            crawl_job_id,
+            crawl_jobs=crawl_jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+            enqueue_knowledge=enqueue_knowledge,
+            cache=cache,
+            vector=vector,
+        )
+    finally:
+        request_id_var.reset(request_token)
+        tenant_id_var.reset(tenant_token)
+
+
+async def _run_crawl_job_impl(
+    ctx: dict[str, Any],
+    crawl_job_id: str,
+    *,
+    crawl_jobs: Any,
+    documents: Any,
+    websites: Any,
+    audit: Any,
+    usage: Any = None,
+    enqueue_knowledge: Any = None,
+    cache: CacheStore | None = None,
+    vector: Any = None,
+) -> dict[str, Any]:
     """Core worker logic, testable with fake repositories/fetcher injected.
 
     `ctx["crawler_fetcher"]` may supply a `PageFetcher` (used by tests to
@@ -123,6 +166,7 @@ async def _run_crawl_job(
         return {"status": "not_found"}
     if job.status not in CRAWL_ACTIVE_STATUSES:
         return {"status": job.status}
+    tenant_id_var.set(job.tenant_id)
 
     website = await websites.find_by_id(job.tenant_id, job.website_id)
     if website is None:

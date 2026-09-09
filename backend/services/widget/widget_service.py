@@ -16,7 +16,11 @@ never duplicates pipeline logic.
 
 import logging
 from datetime import datetime, timedelta
+from json import JSONDecodeError
 from typing import Protocol
+
+from pydantic import ValidationError
+from redis.exceptions import RedisError
 
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
@@ -38,6 +42,12 @@ from backend.schemas.widget import WidgetPublicConfig
 from backend.utils.origin import looks_like_browser, origin_allowed, origin_hostname
 
 logger = logging.getLogger("webchat_ai")
+
+# Fail-open is reserved for genuine Redis/network failures in the public cache
+# paths (config reads/writes/invalidation, the message counter). Any other
+# error is a programming bug and must surface instead of silently serving a
+# stale cached config or bypassing a control (audit BE-Q07).
+_REDIS_UNAVAILABLE_ERRORS = (RedisError, OSError)
 
 CONFIG_CACHE_PREFIX = "wk:config:"
 SESSION_VALIDITY_PREFIX = "ws:session:"
@@ -203,20 +213,20 @@ class WidgetService:
         """
         try:
             await self._store.delete(f"{CONFIG_CACHE_PREFIX}{widget_id}")
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("widget config cache invalidation failed for %s", widget_id)
 
     async def _cache_get(self, key: str) -> WidgetPublicConfig | None:
         try:
             raw = await self._store.get(key)
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("widget config cache read failed; falling back to DB")
             return None
         if raw is None:
             return None
         try:
             return WidgetPublicConfig.model_validate_json(raw)
-        except Exception:
+        except (ValidationError, JSONDecodeError):
             logger.warning("stale/invalid widget config cache entry; ignoring")
             return None
 
@@ -225,7 +235,7 @@ class WidgetService:
             await self._store.setex(
                 key, self._settings.widget_config_cache_seconds, config.model_dump_json()
             )
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("widget config cache write failed; DB is authoritative")
 
     # ----------------------------------------------------------- sessions
@@ -366,7 +376,7 @@ class WidgetService:
             count = await self._store.incr(counter_key)
             if count == 1:
                 await self._store.expire(counter_key, MESSAGE_CAP_TTL_SECONDS)
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("widget message counter failed; cap not enforced")
             return
         if count > self._settings.widget_max_messages_per_session:

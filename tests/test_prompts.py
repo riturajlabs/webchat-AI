@@ -72,6 +72,34 @@ def test_render_context_truncates_long_chunks() -> None:
     assert "x" * 101 not in rendered
 
 
+def test_render_context_truncates_at_word_boundary() -> None:
+    # RAG-06: a long chunk must be cut at the last space inside the limit, so
+    # the model never sees a half-word fragment.
+    text = "alpha beta gamma delta epsilon zeta eta theta finalword"
+    items = [ContextItem(url="https://a.example", title="A", heading=None, text=text)]
+    rendered = render_context(items, max_chars_per_chunk=30)
+    # A char-cut of 30 would slice "finalwo..." — the word boundary cut must
+    # not leave that fragment in the rendered context.
+    assert "finalwo" not in rendered
+    assert "alpha beta gamma" in rendered
+
+
+def test_truncate_at_word_boundary_never_splits_words() -> None:
+    from backend.utils.sanitization import truncate_at_word_boundary
+
+    # Long text, limit falls mid-word: cut at the preceding space.
+    text = "one two three four"
+    assert truncate_at_word_boundary(text, 10) == "one two"
+    # Short text is returned unchanged.
+    assert truncate_at_word_boundary(text, 100) == text
+    # No spaces inside the limit: falls back to a plain character cut.
+    assert truncate_at_word_boundary("antidisestablishmentarianism", 10) == "antidisest"
+    # Negative limit never crashes and returns text unchanged.
+    assert truncate_at_word_boundary("short", -1) == "short"
+    # Zero limit returns empty (the limit itself is zero characters).
+    assert truncate_at_word_boundary("short", 0) == ""
+
+
 def test_render_history_formats_turns_oldest_first() -> None:
     rendered = render_history([("user", "hi"), ("assistant", "hello")])
     assert rendered == "Conversation history (most recent last):\n[user] hi\n[assistant] hello"

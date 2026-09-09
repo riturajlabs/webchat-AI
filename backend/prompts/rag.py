@@ -16,20 +16,21 @@ Security properties (docs/02-TRD.md §8 + rules §20):
 
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from backend.core.config import get_settings
 from backend.core.errors import InvalidQuestionError
 from backend.core.privacy import content_hash
 from backend.core.prompt_guard import (
-    detect_injection,
+    InjectionVerdict,
     sanitize_context_chunk,
 )
 from backend.utils.prompt_security import (
     sanitize_history_turn,
     scan_user_input,
 )
+from backend.utils.sanitization import truncate_at_word_boundary
 
 logger = logging.getLogger("webchat_ai")
 
@@ -87,22 +88,32 @@ def get_system_prompt(version: int | None = None) -> str:
         raise ValueError(f"Unknown RAG prompt version: {selected}") from exc
 
 
-def sanitize_question(question: str, *, max_length: int | None = None) -> str:
+def sanitize_question(
+    question: str,
+    *,
+    max_length: int | None = None,
+    on_verdict: Callable[[InjectionVerdict], None] | None = None,
+) -> str:
     """Normalize a user question: strip control chars, collapse whitespace,
     cap length. Raises `InvalidQuestionError` if nothing meaningful remains
-    (prompt-injection defense + input validation, TRD §8)."""
+    (prompt-injection defense + input validation, TRD §8).
+
+    When a detection fires, `on_verdict` is invoked with the verdict produced
+    by the (single) `scan_user_input` pass so consumers (e.g. the RAG abuse
+    tracker, RAG-02) can observe it without re-running detection.
+    """
     limit = max_length if max_length is not None else get_settings().chat_question_max_chars
     cleaned = _CONTROL_CHARS.sub("", question)
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         raise InvalidQuestionError("The question cannot be empty.")
-    verdict = detect_injection(cleaned)
+    # RAG-01: `scan_user_input` already runs `detect_injection` internally and
+    # merges its patterns; a separate `detect_injection` call here would be a
+    # redundant second pass over the same text.
     enhanced = scan_user_input(cleaned)
-    if verdict.detected or enhanced.detected:
-        v_sev = _SEVERITY[verdict.severity]
-        e_sev = _SEVERITY[enhanced.severity]
-        best_severity = verdict.severity if v_sev >= e_sev else enhanced.severity
-        all_patterns = list(dict.fromkeys(verdict.patterns + enhanced.patterns))
+    if enhanced.detected:
+        best_severity = enhanced.severity
+        all_patterns = list(dict.fromkeys(enhanced.patterns))
         logger.warning(
             "prompt_guard injection_detected severity=%s patterns=%s query_hash=%s query_length=%d",
             best_severity,
@@ -110,10 +121,9 @@ def sanitize_question(question: str, *, max_length: int | None = None) -> str:
             content_hash(cleaned),
             len(cleaned),
         )
+        if on_verdict is not None:
+            on_verdict(enhanced)
     return cleaned[:limit]
-
-
-_SEVERITY = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
 def render_context(
@@ -135,7 +145,12 @@ def render_context(
     blocks: list[str] = []
     for index, item in enumerate(items, start=1):
         heading = f" - {item.heading}" if item.heading else ""
-        text = item.text[:limit] if len(item.text) > limit else item.text
+        if item.text:
+            # RAG-06: truncate at the last word boundary so a long chunk never
+            # ends mid-word in the model context (no beuncleard tail).
+            text = truncate_at_word_boundary(item.text, limit)
+        else:
+            text = ""
         text = sanitize_context_chunk(text)
         blocks.append(f"[{index}] {item.title}{heading} ({item.url})\n{text}")
     rendered = "\n\n".join(blocks)

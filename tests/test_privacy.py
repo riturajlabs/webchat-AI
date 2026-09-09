@@ -2,7 +2,7 @@
 
 import hashlib
 
-from backend.core.privacy import content_hash, safe_query_meta
+from backend.core.privacy import content_hash, mask_email, safe_query_meta
 
 
 class TestContentHash:
@@ -52,3 +52,25 @@ class TestSafeQueryMeta:
         meta = safe_query_meta("sensitive question about PII")
         assert "sensitive" not in str(meta)
         assert "PII" not in str(meta)
+
+
+class TestMaskEmail:
+    def test_masks_local_part(self) -> None:
+        result = mask_email("john.doe@example.com")
+        assert result == "jo***@example.com"
+
+    def test_does_not_expose_full_local_part(self) -> None:
+        assert "john.doe" not in mask_email("john.doe@example.com")
+
+    def test_keeps_domain(self) -> None:
+        assert mask_email("a@acme.org").endswith("@acme.org")
+
+    def test_short_local_part(self) -> None:
+        result = mask_email("ab@acme.org")
+        assert result == "ab***@acme.org"
+
+    def test_no_at_sign_masked_fully(self) -> None:
+        assert mask_email("not-an-email") == "***"
+
+    def test_empty_string(self) -> None:
+        assert mask_email("") == "***"

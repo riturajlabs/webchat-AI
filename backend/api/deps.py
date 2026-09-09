@@ -31,6 +31,7 @@ from backend.core.errors import (
     RateLimitExceededError,
     ServiceUnavailableError,
 )
+from backend.core.logging import tenant_id_var
 from backend.core.rate_limit import SlidingWindowRateLimiter
 from backend.core.rbac import ADMIN_ROLES, meets_any
 from backend.core.redis import get_redis
@@ -87,6 +88,7 @@ from backend.services.widget import WidgetConfigService, WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
 from backend.workers.jobs.email import enqueue_email
 from backend.workers.jobs.knowledge import enqueue_process_document
+from backend.workers.timing import chat_stage
 
 if TYPE_CHECKING:
     from backend.core.quota import LLMQuotaService
@@ -472,12 +474,24 @@ def get_sse_access_token(
     return token
 
 
+def _bind_tenant_context(tenant_id: str) -> None:
+    """Expose a principal's tenant to structured logging for this request (OBS-01).
+
+    Runs after authentication, inside the request's task context. The ASGI
+    request task is discarded when the response completes, so the context var
+    can neither leak into sibling requests nor outlive the request.
+    """
+    tenant_id_var.set(tenant_id)
+
+
 async def current_user(
     access_token: Annotated[str, Depends(get_access_token)],
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ) -> Principal:
     """Resolve the authenticated principal for a bearer-token request."""
-    return await auth.authenticate(access_token)
+    principal = await auth.authenticate(access_token)
+    _bind_tenant_context(principal.tenant_id)
+    return principal
 
 
 async def sse_current_user(
@@ -485,7 +499,9 @@ async def sse_current_user(
     auth: Annotated[AuthService, Depends(get_auth_service)],
 ) -> Principal:
     """Resolve the authenticated principal for SSE endpoints (header or cookie)."""
-    return await auth.authenticate(access_token)
+    principal = await auth.authenticate(access_token)
+    _bind_tenant_context(principal.tenant_id)
+    return principal
 
 
 def require_sse_role(*roles: str) -> Callable[[Principal], None]:
@@ -548,12 +564,15 @@ async def current_principal(
     tokens are resolved exactly like `current_user`.
     """
     if access_token.startswith(API_KEY_PREFIX):
-        return await api_keys.authenticate_api_key(
+        principal: Principal | ApiKeyPrincipal = await api_keys.authenticate_api_key(
             raw_secret=access_token,
             ip_address=client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
-    return await auth.authenticate(access_token)
+    else:
+        principal = await auth.authenticate(access_token)
+    _bind_tenant_context(principal.tenant_id)
+    return principal
 
 
 def require_principal_role(*roles: str) -> Callable[[Principal | ApiKeyPrincipal], None]:
@@ -694,7 +713,8 @@ class RateLimitDependency:
         )
         key = f"rl:{request.url.path}:{client_ip(request)}"
         try:
-            allowed = await limiter.consume(key)
+            async with chat_stage("gate.rate_limit"):
+                allowed = await limiter.consume(key)
         except Exception as exc:
             raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
         if not allowed:
@@ -748,6 +768,10 @@ resend_verification_limiter = RateLimitDependency(
 )
 forgot_password_limiter = RateLimitDependency(limit=5, window_seconds=3600, always_enforced=True)
 reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600, always_enforced=True)
+# SEC-M03: profile-update abuse protection (PATCH /api/auth/me). Budgeted so a
+# single account's write endpoint cannot be flooded with DB writes, while
+# legitimate profile edits (rare) never hit the cap.
+profile_update_limiter = RateLimitDependency(limit=60, window_seconds=3600)
 # Phase 3 website-management abuse protection (create/update/delete/list/get).
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).
@@ -804,7 +828,8 @@ async def enforce_api_key_rate_limit(
         window_seconds=60,
     )
     try:
-        allowed = await limiter.consume(f"rl:apikey:{principal.key_id}")
+        async with chat_stage("gate.rate_limit_api_key"):
+            allowed = await limiter.consume(f"rl:apikey:{principal.key_id}")
     except Exception as exc:
         raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
     if not allowed:
@@ -859,7 +884,8 @@ class WidgetRateLimitDependency:
         result = self._key_factory(request)
         key = (await result) if asyncio.iscoroutine(result) else result
         try:
-            allowed = await limiter.consume(str(key))
+            async with chat_stage("gate.rate_limit_widget"):
+                allowed = await limiter.consume(str(key))
         except Exception as exc:
             raise ServiceUnavailableError("Rate limiter is temporarily unavailable.") from exc
         if not allowed:
@@ -1046,6 +1072,8 @@ async def widget_session_claims(
     """
     claims = decode_widget_session_token(access_token)
     request.state.widget_claims = claims
+    tenant_id = str(claims.get("tenant_id") or "-")
+    _bind_tenant_context(tenant_id)
     return claims
 
 

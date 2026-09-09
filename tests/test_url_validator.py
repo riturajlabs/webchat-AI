@@ -29,6 +29,22 @@ def test_normalizes_default_port_away() -> None:
     assert normalize_url("http://example.com:80/") == "http://example.com/"
 
 
+@pytest.mark.parametrize("port", [22, 25, 3306, 5432, 6379])
+def test_rejects_high_risk_management_ports(port: int) -> None:
+    # SEC-M04: SMTP/SSH/DB/Redis ports are never legitimate crawl targets.
+    with pytest.raises(InvalidUrlError, match="not allowed"):
+        normalize_url(f"https://example.com:{port}/")
+
+
+def test_keeps_safe_custom_ports() -> None:
+    assert normalize_url("https://example.com:8443/") == "https://example.com:8443/"
+
+
+def test_rejects_high_risk_port_on_literal_ip() -> None:
+    with pytest.raises(InvalidUrlError, match="not allowed"):
+        normalize_url("https://8.8.8.8:5432/")
+
+
 def test_keeps_custom_port() -> None:
     assert normalize_url("https://example.com:8443/") == "https://example.com:8443/"
 

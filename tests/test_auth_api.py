@@ -64,6 +64,8 @@ def test_register_sets_cookies_and_returns_tokens(client) -> None:
     set_cookie = response.headers.get_list("set-cookie")
     assert any("refresh_token=" in value and "HttpOnly" in value for value in set_cookie)
     assert any("csrf_token=" in value and "HttpOnly" not in value for value in set_cookie)
+    # SEC-L01: session cookies must be SameSite=Strict (CSRF defense-in-depth).
+    assert any("samesite=strict" in value.lower() for value in set_cookie)
 
 
 def test_register_duplicate_email_returns_409(client) -> None:
@@ -248,6 +250,12 @@ def test_delete_me_purges_tenant_and_clears_session(client) -> None:
         "access_token"
     ]
     headers = {"Authorization": f"Bearer {access_token}"}
+    # SEC-L02: destructive writes require a verified email; verify first.
+    verification_token = token_from_url(env.mail.sent[0])
+    assert (
+        test_client.post("/api/auth/verify-email", json={"token": verification_token}).status_code
+        == 200
+    )
 
     response = test_client.delete("/api/auth/me", headers=headers)
     assert response.status_code == 200

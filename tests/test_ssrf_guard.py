@@ -27,6 +27,20 @@ def test_accepts_http_and_https(monkeypatch) -> None:
     assert guard.validate("http://example.com/") == "http://example.com/"
 
 
+@pytest.mark.parametrize("port", [22, 25, 3306, 5432, 6379])
+def test_rejects_high_risk_ports_at_crawl_time(port: int, monkeypatch) -> None:
+    # SEC-M04: the crawler guard re-checks management ports on every URL even
+    # when the host is public.
+    guard = _guard_with_resolution(monkeypatch, _PUBLIC_IPS)
+    with pytest.raises(InvalidUrlError, match="not allowed"):
+        guard.validate(f"https://example.com:{port}/")
+
+
+def test_accepts_safe_non_default_port_at_crawl_time(monkeypatch) -> None:
+    guard = _guard_with_resolution(monkeypatch, _PUBLIC_IPS)
+    assert guard.validate("https://example.com:8443/") == "https://example.com:8443/"
+
+
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://x.example/f", "javascript:1"])
 def test_rejects_non_http_schemes(url: str, monkeypatch) -> None:
     guard = _guard_with_resolution(monkeypatch, _PUBLIC_IPS)

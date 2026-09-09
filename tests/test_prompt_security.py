@@ -138,3 +138,29 @@ class TestInjectionTracker:
         tracker.record("visitor_1", "high")
         assert tracker.is_escalated("visitor_1")
         assert not tracker.is_escalated("visitor_2")
+
+    def test_attempts_outside_window_expire(self) -> None:
+        tracker = InjectionTracker(high_severity_threshold=2, window_seconds=10.0)
+        tracker.record("visitor_1", "high", now=1_000.0)
+        tracker.record("visitor_1", "high", now=1_005.0)
+        assert tracker.is_escalated("visitor_1", now=1_005.0)
+        # All recorded attempts fall outside the window now.
+        assert not tracker.is_escalated("visitor_1", now=1_020.0)
+
+    def test_inactive_visitor_key_pruned(self) -> None:
+        tracker = InjectionTracker(high_severity_threshold=1, window_seconds=10.0)
+        tracker.record("visitor_1", "high", now=1_000.0)
+        assert "visitor_1" in tracker._attempts
+        # Once every attempt falls outside the window, a read cleans up the
+        # now-idle identity so the table cannot grow without bound.
+        assert not tracker.is_escalated("visitor_1", now=1_020.0)
+        assert "visitor_1" not in tracker._attempts
+
+    def test_state_bounded_by_max_visitors(self) -> None:
+        tracker = InjectionTracker(high_severity_threshold=1, max_visitors=3)
+        for index in range(5):
+            tracker.record(f"visitor_{index}", "high", now=float(index))
+        # Only the most recent max_visitors identities are retained.
+        assert len(tracker._attempts) <= 3
+        assert not tracker.is_escalated("visitor_0", now=4.0)
+        assert tracker.is_escalated("visitor_4", now=4.0)

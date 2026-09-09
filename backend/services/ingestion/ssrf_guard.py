@@ -20,7 +20,12 @@ from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from backend.core.errors import InvalidUrlError
-from backend.utils.url_validator import ALLOWED_SCHEMES, is_blocked_ip, validate_hostname
+from backend.utils.url_validator import (
+    ALLOWED_SCHEMES,
+    BLOCKED_PORTS,
+    is_blocked_ip,
+    validate_hostname,
+)
 
 
 @dataclass
@@ -45,6 +50,8 @@ class SsrFGuard:
         if not hostname:
             raise InvalidUrlError("The URL must include a hostname.")
         validate_hostname(hostname)
+        if parsed.port is not None and parsed.port in BLOCKED_PORTS:
+            raise InvalidUrlError(f"Port {parsed.port} is not allowed.")
         host = hostname.lower()
         for ip_string in self.resolve(host):
             if self._is_safe_ip(ip_string):
@@ -63,6 +70,8 @@ class SsrFGuard:
         if not hostname:
             raise InvalidUrlError("The URL must include a hostname.")
         validate_hostname(hostname)
+        if parsed.port is not None and parsed.port in BLOCKED_PORTS:
+            raise InvalidUrlError(f"Port {parsed.port} is not allowed.")
         host = hostname.lower()
         for ip_string in await self.resolve_async(host):
             if self._is_safe_ip(ip_string):

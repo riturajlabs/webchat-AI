@@ -46,6 +46,10 @@ _PRIVATE_NETWORKS = (
 _VALID_HOSTNAME_CHARS = re.compile(r"^[a-z0-9.-]+$")
 _MAX_URL_LENGTH = 2048
 
+# SEC-M04: high-risk management ports that a crawler must never reach even on
+# a public host (SMTP/SSH/DB/Redis services are admin surfaces, not content).
+BLOCKED_PORTS = frozenset({22, 25, 3306, 5432, 6379})
+
 
 def _is_blocked_ip(host: str) -> bool:
     try:
@@ -112,6 +116,9 @@ def normalize_url(raw_url: str) -> str:
         port = parsed.port
     except ValueError:
         raise InvalidUrlError("The URL contains an invalid port.") from None
+    if port in BLOCKED_PORTS:
+        # SEC-M04: never crawl management ports, default or otherwise.
+        raise InvalidUrlError(f"Port {port} is not allowed.")
     if port is not None and port != default_port:
         # Non-default ports are accepted (legit self-hosting), but never
         # the canonical port on private infrastructure, which is already blocked.
@@ -143,7 +150,10 @@ def validate_hostname(hostname: str) -> None:
 
 
 # Tracking parameters stripped from crawl URLs to avoid duplicate pages that
-# differ only in campaign attribution (docs/03 crawl rules, Phase 4).
+# differ only in campaign attribution (docs/03 crawl rules, Phase 4). Phase 7
+# (INGEST P3) adds the Google Analytics linker keys (`_ga`, `_gl`) and the
+# `fb_*` signature family (e.g. `fb_action_ids`, `fb_source`), which were
+# previously kept and produced duplicate pages on shared/social links.
 _TRACKING_PARAMS = {
     "utm_source",
     "utm_medium",
@@ -159,7 +169,14 @@ _TRACKING_PARAMS = {
     "source",
     "mc_cid",
     "mc_eid",
+    "_ga",
+    "_gl",
 }
+
+
+def _is_tracking_param(raw_key: str) -> bool:
+    key = raw_key.lower()
+    return key in _TRACKING_PARAMS or key.startswith("fb_")
 
 
 def normalize_crawl_url(raw_url: str, base_url: str) -> str | None:
@@ -179,7 +196,7 @@ def normalize_crawl_url(raw_url: str, base_url: str) -> str | None:
     query = "&".join(
         part
         for part in parsed.query.split("&")
-        if part and part.split("=", 1)[0].lower() not in _TRACKING_PARAMS
+        if part and not _is_tracking_param(part.split("=", 1)[0])
     )
     path = parsed.path or "/"
     url = f"{parsed.scheme}://{parsed.netloc}{path}"

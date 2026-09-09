@@ -15,6 +15,7 @@ from pymongo.monitoring import (
 )
 
 from backend.core.config import get_settings
+from backend.core.metrics import record_mongodb_command_duration
 from backend.models.website import WEBSITE_STATUS_DELETED
 
 logger = logging.getLogger("webchat_ai")
@@ -131,6 +132,49 @@ class SlowQueryListener(CommandListener):
         logger.info("mongodb_slow_query", extra=extra)
 
 
+class MongoMetricsListener(CommandListener):
+    """Record MongoDB command durations into the metrics registry (OBS-05).
+
+    Always attached to the Motor client (unlike the opt-in slow-query logger),
+    so DB latency is observable even when slow-query logging is disabled.
+    Pure observation: the registry update is a thread-safe dict lookup + float
+    add and can never break the command path. Heartbeat/control commands are
+    skipped so series stay meaningful.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._starts: dict[int, CommandStartedEvent] = {}
+
+    def started(self, event: CommandStartedEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            self._starts[event.operation_id] = event
+
+    def succeeded(self, event: CommandSucceededEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            started = self._starts.pop(event.operation_id, None)
+        self._record(started, event.duration_micros)
+
+    def failed(self, event: CommandFailedEvent) -> None:
+        if event.operation_id is None:
+            return
+        with self._lock:
+            started = self._starts.pop(event.operation_id, None)
+        self._record(started, event.duration_micros)
+
+    def _record(self, started: CommandStartedEvent | None, duration_micros: int) -> None:
+        if started is None or started.command_name in _NOISE_COMMANDS:
+            return
+        record_mongodb_command_duration(
+            command=started.command_name,
+            duration_seconds=duration_micros / 1_000_000.0,
+        )
+
+
 class MongoDB:
     """Lazy singleton around the async Mongo client.
 
@@ -144,7 +188,7 @@ class MongoDB:
     def client(cls) -> AsyncIOMotorClient[Any]:
         if cls._client is None:
             settings = get_settings()
-            listeners: list[CommandListener] = []
+            listeners: list[CommandListener] = [MongoMetricsListener()]
             if settings.mongodb_slow_query_threshold_ms > 0:
                 listeners.append(SlowQueryListener(settings.mongodb_slow_query_threshold_ms))
             cls._client = AsyncIOMotorClient[Any](
@@ -275,6 +319,12 @@ class MongoDB:
         await db["chat_sessions"].create_index("session_id", unique=True)
         await db["chat_sessions"].create_index("tenant_id")
         await db["chat_sessions"].create_index([("tenant_id", 1), ("website_id", 1)])
+        # PERF-K05: conversation listing filters on (tenant, website) then sorts
+        # by `last_activity`. The compound index covers the sort so MongoDB
+        # can stream the result instead of doing an in-memory filesort.
+        await db["chat_sessions"].create_index(
+            [("tenant_id", 1), ("website_id", 1), ("last_activity", -1)]
+        )
         await db["chat_sessions"].create_index(
             "expires_at", expireAfterSeconds=_CHAT_SESSION_TTL_SECONDS
         )

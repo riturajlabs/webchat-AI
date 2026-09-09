@@ -17,6 +17,21 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def mask_email(email: str) -> str:
+    """Redact a user email address for log output (BE-Q15).
+
+    Keeps a short, non-identifying prefix plus the sending domain so
+    operators can still eyeball which mailbox flow failed without exposing
+    the full PII address.  Addresses without a valid ``@`` separator are
+    masked in full.
+    """
+    if "@" not in email:
+        return "***"
+    local, _, domain = email.partition("@")
+    prefix = local[:2] if len(local) > 2 else local
+    return f"{prefix}***@{domain}"
+
+
 def safe_query_meta(text: str) -> dict[str, object]:
     """Return a dict safe for inclusion in structured log calls.
 
@@ -33,4 +48,4 @@ def safe_query_meta(text: str) -> dict[str, object]:
     return {"query_hash": content_hash(text), "query_length": len(text)}
 
 
-__all__ = ["content_hash", "safe_query_meta"]
+__all__ = ["content_hash", "mask_email", "safe_query_meta"]

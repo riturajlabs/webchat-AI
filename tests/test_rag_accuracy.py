@@ -248,7 +248,7 @@ async def test_reranker_in_done_timing_event() -> None:
     await make_website(env, tenant_id=TENANT, website_id=WEBSITE, knowledge_chunks=1)
     await make_chunk(env, tenant_id=TENANT, website_id=WEBSITE, text="Knowledge.")
     env.rag._timing_enabled = True
-    events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="test")
+    events = await _stream(env, tenant_id=TENANT, website_id=WEBSITE, question="knowledge")
     done = _done_event(events)
     timing = done["data"].get("timing")
     assert timing is not None
@@ -1024,7 +1024,7 @@ async def test_confidence_low_scores_fallback() -> None:
         env,
         tenant_id=CONF_TENANT,
         website_id=CONF_WEB,
-        text="We offer Pro and Team plans.",
+        text="The campus library opens at 8am daily.",
         chunk_index=0,
     )
 

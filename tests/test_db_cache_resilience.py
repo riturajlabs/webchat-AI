@@ -71,6 +71,18 @@ async def test_cache_set_never_raises_when_redis_down() -> None:
     assert await store.delete_by_prefix("rag", "k") == 0
 
 
+async def test_cache_surfaces_non_redis_failures() -> None:
+    """BE-Q03: only infra failures degrade to a miss; bugs must surface."""
+
+    class _Boom:
+        async def get(self, *_: Any, **__: Any) -> None:  # noqa: ANN401
+            raise RuntimeError("programming bug")
+
+    store = RedisCacheStore(_Boom(), prefix="webchat_ai")
+    with pytest.raises(RuntimeError):
+        await store.get("rag", "k")
+
+
 def test_mongodb_client_is_singleton(monkeypatch: pytest.MonkeyPatch) -> None:
     """MongoDB.client() memoizes the Motor client (connection-pool reuse).
 

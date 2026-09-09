@@ -16,7 +16,7 @@ user's or tenant's data.
 import logging
 from dataclasses import dataclass
 
-from backend.core.errors import InvalidCredentialsError
+from backend.core.errors import EmailNotVerifiedError, InvalidCredentialsError
 from backend.models.audit_log import AUDIT_ACCOUNT_DELETED, AuditLog
 from backend.repositories import (
     AuditLogRepository,
@@ -70,6 +70,12 @@ class AccountService:
         if user.tenant_id != principal.tenant_id:
             # Defense in depth: never purge a tenant the principal does not own.
             raise InvalidCredentialsError("Invalid or expired session.")
+
+        # SEC-L02: destructive account writes require a verified email so an
+        # attacker registering with someone else's address cannot destroy data
+        # he does not own.
+        if not principal.email_verified:
+            raise EmailNotVerifiedError("Verify your email before deleting your account.")
 
         await self._purge.purge_user_sessions(user.id)
         await self._purge.purge_tenant(user.tenant_id)

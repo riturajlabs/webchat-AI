@@ -14,6 +14,12 @@ from pymongo import DESCENDING
 
 from backend.models.tenant import Tenant
 
+# SEC-H05: bounded length for the admin search term so an unbounded string can
+# never be turned into a `$regex` against the tenants collection. The admin
+# route already applies `max_length=100`; this is defense-in-depth for any
+# other caller of the data-access layer.
+MAX_TENANT_SEARCH_LENGTH = 100
+
 
 class TenantRepository(Protocol):
     """Data access for the `tenants` collection."""
@@ -91,6 +97,16 @@ class MongoTenantRepository:
     def _query(*, search: str | None, plan: str | None, status: str | None) -> dict[str, Any]:
         query: dict[str, Any] = {}
         if search:
+            if len(search) > MAX_TENANT_SEARCH_LENGTH:
+                raise ValueError(f"Search term exceeds {MAX_TENANT_SEARCH_LENGTH} characters.")
+            # PERF-K03: this is deliberately a case-insensitive substring
+            # `$regex` (find "Acme" inside "Acme Corporation"), bounded by
+            # MAX_TENANT_SEARCH_LENGTH. MongoDB text indexes only serve the
+            # `$text` operator and *cannot* accelerate `$regex`; migrating to
+            # `$text` would change matching from substring to word-based and
+            # silently alter admin search behavior. The admin surface is the
+            # only caller and the 100-char cap keeps the scan bounded, so no
+            # text index is created here.
             query["company_name"] = {"$regex": re.escape(search), "$options": "i"}
         if plan:
             query["plan"] = plan

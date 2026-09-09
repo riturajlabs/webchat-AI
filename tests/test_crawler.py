@@ -179,6 +179,22 @@ async def test_records_fetch_failures_and_continues(guard) -> None:
     assert any(e.url == "https://acme.example/about" for e in session.errors)
 
 
+async def test_closes_fetcher_when_crawl_raises(guard) -> None:
+    """INGEST-01: an unexpected mid-crawl failure still releases the browser.
+
+    Only per-page *recoverable* errors (FetchError/InvalidUrlError) are caught
+    inside the loop; clean_html/extract/upsert failures propagate to the worker.
+    The fetcher (Chromium context) must be closed on that path too, otherwise a
+    leaked context survives until process exit.
+    """
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    fetcher.fail("https://acme.example/about", RuntimeError("browser crashed"))
+    session = _session(fetcher, guard)
+    with pytest.raises(RuntimeError, match="browser crashed"):
+        await session.run()
+    assert fetcher.closed is True
+
+
 async def test_skips_pages_without_extractable_content(guard) -> None:
     fetcher = FakePageFetcher(
         {SEED: "<html><head><title>X</title></head><body><script>void 0</script></body></html>"}
@@ -213,11 +229,46 @@ async def test_skips_pages_exceeding_response_size_limit(guard) -> None:
     )
 
 
+async def test_aborts_under_memory_pressure(guard, monkeypatch) -> None:
+    """INGEST-04: the crawl aborts gracefully once worker RSS exceeds the ceiling."""
+    import backend.services.ingestion.crawler as crawler_mod
+
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    # RSS reads as far above the 10 MiB ceiling, so the crawl aborts up-front.
+    monkeypatch.setattr(crawler_mod, "_current_rss_mb", lambda: 100)
+    session = CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=FakeDocumentRepository(),
+        guard=guard,
+        settings=_settings_with(max_rss_mb=10),
+    )
+    stored = await session.run()
+    assert stored == 0
+    assert session.memory_pressure_aborted is True
+    assert any("memory" in e.message for e in session.errors)
+
+
+async def test_memory_ceiling_disabled_by_default(guard, monkeypatch) -> None:
+    """With crawl_max_rss_mb=0 the memory check never triggers."""
+    import backend.services.ingestion.crawler as crawler_mod
+
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    monkeypatch.setattr(crawler_mod, "_current_rss_mb", lambda: 10**9)
+    session = _session(fetcher, guard, settings=_settings_with(max_rss_mb=0))
+    stored = await session.run()
+    assert stored == 2
+    assert session.memory_pressure_aborted is False
+
+
 def _settings_with(
     *,
     max_pages: int | None = None,
     max_depth: int | None = None,
     max_html_bytes: int | None = None,
+    max_rss_mb: int | None = None,
 ):
     """A settings stub carrying only the crawl knobs the session reads."""
     from backend.core.config import Settings
@@ -229,4 +280,6 @@ def _settings_with(
         values["crawl_max_depth"] = max_depth
     if max_html_bytes is not None:
         values["crawl_max_html_bytes"] = max_html_bytes
+    if max_rss_mb is not None:
+        values["crawl_max_rss_mb"] = max_rss_mb
     return Settings(_env_file=None, **values)

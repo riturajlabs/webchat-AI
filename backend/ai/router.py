@@ -276,6 +276,7 @@ class FallbackEmbeddingClient:
         self._usage = EmbeddingUsage()
         self._active_provider: str | None = None
         self._fallback_count = 0
+        self.name: str = "fallback"
 
     @property
     def usage(self) -> EmbeddingUsage:
@@ -285,6 +286,10 @@ class FallbackEmbeddingClient:
     def active_provider(self) -> str | None:
         """Name of the provider that served the most recent request."""
         return self._active_provider
+
+    async def health(self) -> bool:
+        """Cheap readiness probe: the chain is healthy when it has providers."""
+        return bool(self._providers)
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity:
@@ -355,6 +360,7 @@ class FallbackEmbeddingClient:
             ensure_vector_dimensions(name, vectors, expected_dimensions)
             self._usage = provider.usage
             self._active_provider = name
+            self.name = name
             record_provider_success(ROLE_EMBEDDING, name)
             if _timing_enabled():
                 logger.info(

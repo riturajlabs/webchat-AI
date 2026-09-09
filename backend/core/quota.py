@@ -23,15 +23,23 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from redis.exceptions import RedisError
+
 from backend.core.config import Settings, get_settings
 from backend.core.errors import AIQuotaExceededError
 from backend.core.metrics import record_llm_quota_exceeded
 from backend.core.redis import get_redis
+from backend.workers.timing import chat_stage
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis as AsyncRedisClient
 
 logger = logging.getLogger("webchat_ai")
+
+# Fail-open is reserved for genuine Redis/network failures. Any other error is
+# a programming bug and must surface instead of silently leaving the quota
+# control unenforced (audit BE-Q06).
+_REDIS_UNAVAILABLE_ERRORS = (RedisError, OSError)
 
 _DAILY_KEY = "llm:quota:tok:daily:{tenant}:{date}"
 _MONTHLY_KEY = "llm:quota:tok:monthly:{tenant}:{month}"
@@ -90,35 +98,49 @@ class LLMQuotaService:
         req_limit = settings.llm_request_limit_per_minute
         if daily_limit <= 0 and monthly_limit <= 0 and req_limit <= 0:
             return
-        try:
-            redis = await self._redis_client()
-        except Exception:  # pragma: no cover - redis unavailable
-            logger.warning("llm_quota_check_redis_unavailable tenant=%s", tenant_id)
-            return
-        try:
-            if daily_limit > 0:
-                used = int(await redis.get(self._daily_key(tenant_id)) or 0)
-                if used >= daily_limit:
-                    record_llm_quota_exceeded("daily")
-                    raise AIQuotaExceededError(AIQuotaExceededError.message)
-            if monthly_limit > 0:
-                used = int(await redis.get(self._monthly_key(tenant_id)) or 0)
-                if used >= monthly_limit:
-                    record_llm_quota_exceeded("monthly")
-                    raise AIQuotaExceededError(AIQuotaExceededError.message)
-            if req_limit > 0:
-                # Atomic INCR-then-check: eliminates the TOCTOU race where
-                # concurrent requests read the same count and all pass.
-                new_count = await redis.incr(self._req_key(tenant_id))
-                await redis.expire(self._req_key(tenant_id), _REQ_TTL_SECONDS)
-                if new_count > req_limit:
-                    record_llm_quota_exceeded("request")
-                    raise AIQuotaExceededError(AIQuotaExceededError.message)
-        except AIQuotaExceededError:
-            raise
-        except Exception:  # pragma: no cover - redis read error
-            logger.warning("llm_quota_check_error tenant=%s", tenant_id)
-            return
+        async with chat_stage("gate.quota_check"):
+            try:
+                redis = await self._redis_client()
+            except _REDIS_UNAVAILABLE_ERRORS:  # pragma: no cover - redis unavailable
+                logger.warning("llm_quota_check_redis_unavailable tenant=%s", tenant_id)
+                return
+            try:
+                if daily_limit > 0 or monthly_limit > 0:
+                    # One round trip instead of two: read both budgets together.
+                    daily_used, monthly_used = (
+                        int(v or 0)
+                        for v in (
+                            await redis.mget(
+                                self._daily_key(tenant_id),
+                                self._monthly_key(tenant_id),
+                            )
+                            or [None, None]
+                        )
+                    )
+                    if daily_limit > 0 and daily_used >= daily_limit:
+                        record_llm_quota_exceeded("daily")
+                        raise AIQuotaExceededError(AIQuotaExceededError.message)
+                    if monthly_limit > 0 and monthly_used >= monthly_limit:
+                        record_llm_quota_exceeded("monthly")
+                        raise AIQuotaExceededError(AIQuotaExceededError.message)
+                if req_limit > 0:
+                    # Atomic INCR-then-check: eliminates the TOCTOU race where
+                    # concurrent requests read the same count and all pass.
+                    # Increment and expiry go out in one pipeline round trip.
+                    new_count = 0
+                    async with redis.pipeline(transaction=False) as pipe:
+                        pipe.incr(self._req_key(tenant_id))
+                        pipe.expire(self._req_key(tenant_id), _REQ_TTL_SECONDS)
+                        results = await pipe.execute()
+                    new_count = int(results[0])
+                    if new_count > req_limit:
+                        record_llm_quota_exceeded("request")
+                        raise AIQuotaExceededError(AIQuotaExceededError.message)
+            except AIQuotaExceededError:
+                raise
+            except _REDIS_UNAVAILABLE_ERRORS:  # pragma: no cover - redis read error
+                logger.warning("llm_quota_check_error tenant=%s", tenant_id)
+                return
 
     async def record(self, tenant_id: str, input_tokens: int, output_tokens: int) -> None:
         """Best-effort: add a turn's token usage to the tenant's running totals."""
@@ -132,7 +154,7 @@ class LLMQuotaService:
             return
         try:
             redis = await self._redis_client()
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             return
         try:
             if daily:
@@ -141,7 +163,7 @@ class LLMQuotaService:
             if monthly:
                 await redis.incrby(self._monthly_key(tenant_id), total)
                 await redis.expire(self._monthly_key(tenant_id), _MONTHLY_TOKEN_TTL_SECONDS)
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("llm_quota_record_error tenant=%s", tenant_id)
 
     async def reset(self, tenant_id: str) -> None:
@@ -153,5 +175,5 @@ class LLMQuotaService:
                 self._monthly_key(tenant_id),
                 self._req_key(tenant_id),
             )
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("llm_quota_reset_error tenant=%s", tenant_id)

@@ -79,6 +79,26 @@ def test_tokenize_normalizes_common_spelling_variants() -> None:
     assert tokenize("Can I take addmission?") == ["admission"]
 
 
+def test_tokenize_canonicalizes_morphology_and_typos() -> None:
+    # Morphology: singular/plural forms collapse to a shared canonical so an
+    # exact-term keyword match fires both directions (query "courses" against a
+    # chunk that says "course", and vice versa).
+    assert tokenize("Which course is available?") == ["courses", "available"]
+    assert tokenize("program enrolment") == ["programs", "enrollment"]
+    assert "scholarships" in tokenize("the scholarship covers full fees")
+    assert "admission" in tokenize("admissions are open")
+    assert "admissions" not in tokenize("admissions are open")
+    assert tokenize("the department") == ["departments"]
+    # Spelling variants from the RAG-ACC-02 typo set collapse to the same forms.
+    assert tokenize("BCA progam syllabus") == ["bca", "programs", "syllabus"]
+    assert tokenize("BCA curriculam") == ["bca", "syllabus"]
+    assert tokenize("tution hour") == ["tuition", "hour"]
+    assert tokenize("cyber securty") == ["cyber", "security"]
+    assert tokenize("universty admission") == ["university", "admission"]
+    assert tokenize("hosptel for students") == ["hostel", "students"]
+    assert tokenize("mock interviewes") == ["mock", "interviews"]
+
+
 # ---------------------------------------------------------------------------
 # Reciprocal Rank Fusion
 # ---------------------------------------------------------------------------
@@ -145,6 +165,34 @@ def test_rrf_score_positive() -> None:
     fused = reciprocal_rank_fusion([r1])
     for result in fused:
         assert result.score > 0.0
+
+
+def test_rrf_tie_break_by_strongest_source_score() -> None:
+    """Equal RRF scores must order by the chunk's strongest source score,
+    never by arbitrary insertion/corpus order."""
+    vector = [_make_result("placement", "placement", 0.6), _make_result("hostel", "hostel", 0.6)]
+    keyword = [_make_result("hostel", "hostel", 0.9), _make_result("placement", "placement", 0.5)]
+    fused = reciprocal_rank_fusion([vector, keyword])
+    # Both sit at identical RRF positions; the chunk with the strongest raw
+    # evidence (hostel's keyword 0.9 > placement's lexical 0.5/vector 0.6)
+    # must win the tie.
+    ids = [r.chunk.id for r in fused]
+    assert ids[0] == "hostel"
+    assert ids[1] == "placement"
+
+
+def test_rrf_tie_break_does_not_override_distinct_rrf_scores() -> None:
+    """A chunk with a summed-RRF lead keeps its position even when another
+    candidate carries a higher raw score — the tie-break applies only to
+    genuinely equal fused scores."""
+    stronger = _make_result("a", "text a", 0.9)
+    r1 = [stronger, _make_result("b", "text b", 0.1)]
+    r2 = [_make_result("b", "text b", 0.1)]
+    fused = reciprocal_rank_fusion([r1, r2])
+    # b is present in both rankings (0.1 lexical + 0.1 vector) -> summed RRF
+    # lead over a, which ranks in a single strong position.
+    assert fused[0].chunk.id == "b"
+    assert fused[1].chunk.id == "a"
 
 
 # ---------------------------------------------------------------------------

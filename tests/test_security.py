@@ -28,6 +28,19 @@ def test_password_hash_roundtrip() -> None:
     assert verify_password("Str0ng!Pass", "not-a-hash") is False
 
 
+def test_argon2_parameters_meet_owasp_minimums() -> None:
+    # SEC-H02: the encoded hash embeds the cost parameters used at hashing
+    # time. Assert we hardened above OWASP's Argon2id minimums (m=37 MiB,
+    # t=3, p=1) so a regression in the parameters cannot silently pass.
+    password_hash = hash_password("Str0ng!Pass")
+    # Format: $argon2id$v=19$m=X,t=Y,p=Z$<salt>$<hash>
+    params = password_hash.split("$")[3]
+    fields = {part.split("=")[0]: part.split("=")[1] for part in params.split(",")}
+    assert int(fields["m"]) >= 46 * 1024
+    assert int(fields["t"]) >= 3
+    assert int(fields["p"]) == 1
+
+
 def test_access_token_roundtrip() -> None:
     token, ttl = create_access_token("user-1", "tenant-1", "owner")
     assert ttl == 15 * 60

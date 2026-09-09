@@ -30,8 +30,9 @@ def test_response_includes_request_id() -> None:
 
 def test_request_id_preserved_from_client() -> None:
     _, client = _build_client()
-    response = client.get("/ping", headers={"X-Request-ID": "trace-42"})
-    assert response.headers["x-request-id"] == "trace-42"
+    request_id = "3b9f6c4a-2c1a-4d8e-9b7a-1a2b3c4d5e6f"
+    response = client.get("/ping", headers={"X-Request-ID": request_id})
+    assert response.headers["x-request-id"] == request_id
 
 
 def test_security_headers_present() -> None:

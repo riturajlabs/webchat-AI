@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from collections import defaultdict
 
 from backend.core.prompt_guard import InjectionVerdict, detect_injection
@@ -231,6 +233,13 @@ class InjectionTracker:
     When a single visitor triggers multiple HIGH-severity detections
     within the tracking window, the caller can escalate to a temporary
     block or increased rate-limiting.
+
+    Process-local by design: state lives for the lifetime of the process
+    and is keyed by visitor identity, so it never spans tenants/processes.
+    A single lock serializes access (the RAG path may run under FastAPI's
+    threadpool as well as the event loop), and storage is bounded to
+    ``max_visitors`` active identities so an attacker cannot grow memory
+    without bound.
     """
 
     def __init__(
@@ -238,32 +247,50 @@ class InjectionTracker:
         *,
         high_severity_threshold: int = 5,
         window_seconds: float = 300.0,
+        max_visitors: int = 10_000,
     ) -> None:
         self._threshold = high_severity_threshold
         self._window = window_seconds
+        self._max_visitors = max_visitors
         # visitor_id -> list of timestamps
         self._attempts: dict[str, list[float]] = defaultdict(list)
+        self._lock = threading.Lock()
 
     def record(self, visitor_id: str, severity: str, *, now: float | None = None) -> None:
         """Record an injection attempt for *visitor_id*."""
         if severity != "high":
             return
-        ts = now if now is not None else __import__("time").monotonic()
-        self._attempts[visitor_id].append(ts)
-        # Prune old entries outside the window
-        cutoff = ts - self._window
-        self._attempts[visitor_id] = [t for t in self._attempts[visitor_id] if t > cutoff]
+        ts = now if now is not None else time.monotonic()
+        with self._lock:
+            self._attempts[visitor_id].append(ts)
+            # Prune old entries outside the window; the just-recorded attempt
+            # always stays, and `_evict_oldest` keeps the table bounded.
+            cutoff = ts - self._window
+            self._attempts[visitor_id] = [t for t in self._attempts[visitor_id] if t > cutoff]
+            if len(self._attempts) > self._max_visitors:
+                self._evict_oldest()
 
     def is_escalated(self, visitor_id: str, *, now: float | None = None) -> bool:
         """Return True if the visitor has exceeded the escalation threshold."""
-        ts = now if now is not None else __import__("time").monotonic()
+        ts = now if now is not None else time.monotonic()
         cutoff = ts - self._window
-        recent = [t for t in self._attempts.get(visitor_id, []) if t > cutoff]
-        return len(recent) >= self._threshold
+        with self._lock:
+            recent = [t for t in self._attempts.get(visitor_id, []) if t > cutoff]
+            # Drop the identity once it has no in-window attempts, so idle
+            # visitors do not accumulate in the table indefinitely.
+            if not recent:
+                self._attempts.pop(visitor_id, None)
+            return len(recent) >= self._threshold
 
     def reset(self, visitor_id: str) -> None:
         """Clear tracking for a visitor (e.g. after a cooldown expires)."""
-        self._attempts.pop(visitor_id, None)
+        with self._lock:
+            self._attempts.pop(visitor_id, None)
+
+    def _evict_oldest(self) -> None:
+        """Drop the visitor whose most recent attempt is the oldest."""
+        oldest = min(self._attempts, key=lambda vid: max(self._attempts[vid]))
+        del self._attempts[oldest]
 
 
 __all__ = [

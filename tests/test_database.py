@@ -223,6 +223,12 @@ async def test_init_indexes_declares_chat_session_indexes(monkeypatch) -> None:
     assert any(
         keys == (("tenant_id", 1), ("website_id", 1)) and not unique for (keys, unique) in indexes
     )
+    # PERF-K05: covering index for the (tenant, website) filter + last_activity
+    # sort used by conversation listing (avoids an in-memory filesort).
+    assert any(
+        keys == (("tenant_id", 1), ("website_id", 1), ("last_activity", -1)) and not unique
+        for (keys, unique) in indexes
+    )
     ttl = [kwargs for keys, kwargs in db["chat_sessions"].indexes if "expireAfterSeconds" in kwargs]
     assert ttl == [{"expireAfterSeconds": CHAT_SESSION_TTL}]
 

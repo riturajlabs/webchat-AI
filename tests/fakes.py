@@ -1,5 +1,6 @@
 """In-memory fakes for repositories and mail delivery used in auth tests."""
 
+import asyncio
 from datetime import datetime
 
 from backend.ai.gemini import GenerationUsage
@@ -2230,3 +2231,46 @@ class FakeBrokenCacheStore:
 
     async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
         raise ConnectionError("Redis unavailable")
+
+
+class BlockingWriteCacheStore(FakeCacheStore):
+    """In-memory cache whose ``set`` blocks until released.
+
+    Simulates a slow/held Redis write so tests can observe the write-behind
+    window: the embedding call must return before the SET completes while the
+    single-flight key stays claimed (BE-Q01).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered: asyncio.Event | None = None
+        self.release: asyncio.Event | None = None
+
+    async def set(
+        self,
+        namespace: str,
+        key: str,
+        value: str,
+        *,
+        ttl: int | None = None,
+    ) -> None:
+        self.set_calls.append((namespace, key, ttl))
+        if self.entered is not None:
+            self.entered.set()
+        if self.release is not None:
+            await self.release.wait()
+        self._data[f"{namespace}:{key}"] = value
+
+
+class WriteFailureCacheStore(FakeCacheStore):
+    """In-memory cache whose ``set`` always raises — tests the fail-open path."""
+
+    async def set(
+        self,
+        namespace: str,
+        key: str,
+        value: str,
+        *,
+        ttl: int | None = None,
+    ) -> None:
+        raise ConnectionError("Redis write failed")

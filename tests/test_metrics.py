@@ -14,6 +14,7 @@ from backend.core.metrics import (
     record_llm_latency,
     record_llm_request,
     record_llm_tokens,
+    record_mongodb_command_duration,
     record_rag_empty,
     record_rag_latency,
     render_prometheus,
@@ -109,6 +110,24 @@ class TestCrawlMetrics:
         output = render_prometheus()
         assert 'crawl_failed_total{reason="invalid_url"} 1' in output
         assert 'crawl_failed_total{reason="exception"} 1' in output
+
+
+class TestMongoMetrics:
+    def test_mongodb_query_duration_records_command(self) -> None:
+        record_mongodb_command_duration(command="find", duration_seconds=0.25)
+        record_mongodb_command_duration(command="find", duration_seconds=1.5)
+        output = render_prometheus()
+        assert 'mongodb_query_duration_seconds_bucket{command="find", le="0.5"} 1' in output
+        assert 'mongodb_query_duration_seconds_bucket{command="find", le="2.5"} 2' in output
+        assert 'mongodb_query_duration_seconds_sum{command="find"} 1.75' in output
+        assert 'mongodb_query_duration_seconds_count{command="find"} 2' in output
+
+    def test_mongodb_query_duration_separates_commands(self) -> None:
+        record_mongodb_command_duration(command="find", duration_seconds=0.1)
+        record_mongodb_command_duration(command="aggregate", duration_seconds=3.0)
+        output = render_prometheus()
+        assert 'mongodb_query_duration_seconds_count{command="find"} 1' in output
+        assert 'mongodb_query_duration_seconds_count{command="aggregate"} 1' in output
 
 
 class TestRenderPrometheus:

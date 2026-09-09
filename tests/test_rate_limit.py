@@ -98,6 +98,23 @@ async def test_dependency_fails_closed_when_store_unavailable(monkeypatch) -> No
     get_settings.cache_clear()
 
 
+async def test_profile_update_limiter_guards_patch_me(monkeypatch) -> None:
+    # SEC-M03: PATCH /api/auth/me must be budgeted so profile writes cannot be
+    # flooded (DB write amplification). The limiter key is per-method+path+IP.
+    import backend.api.deps as deps
+
+    get_settings.cache_clear()
+    store = FakeRateLimitStore()
+    monkeypatch.setattr(deps, "get_redis", lambda: store)
+    request = _fake_request("/api/auth/me")
+    request.method = "PATCH"
+    for _ in range(deps.profile_update_limiter.limit):
+        await deps.profile_update_limiter(request)
+    with pytest.raises(RateLimitExceededError):
+        await deps.profile_update_limiter(request)
+    get_settings.cache_clear()
+
+
 async def test_widget_ip_limiter_budgets_per_ip_per_endpoint(monkeypatch) -> None:
     """Production hardening: the per-IP widget budget backs up the entity-keyed
     limits, which a hostile client can rotate via `visitor_id` / widget_id."""

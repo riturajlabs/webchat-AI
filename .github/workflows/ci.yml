@@ -126,6 +126,53 @@ jobs:
           print('production env template passes config.py validators')
           "
 
+  # DB migrations against a real MongoDB (CI-02). The schema entrypoint
+  # (`python -m backend.migrations`) only ever runs at deploy time, so a broken
+  # migration or missing index could previously reach production undetected.
+  # This job applies it to a throwaway local MongoDB on every push/PR - failing
+  # fast on an unreachable DB, an index-creation error, or a non-idempotent
+  # migration (the retry below must stay a no-op exit 0).
+  migrations:
+    name: DB migrations (real MongoDB)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    permissions:
+      contents: read
+    env:
+      # Dev-like defaults keep the production credential validators out of the
+      # way (the real production env template is already validated above).
+      ENVIRONMENT: development
+      MONGODB_URI: mongodb://localhost:27017
+      MONGODB_DB: webchat_ai_ci_migrations
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Apply migrations
+        run: uv run python -m backend.migrations
+
+      - name: Verify migrations are idempotent (deploy retry is safe)
+        run: uv run python -m backend.migrations
+
   docker:
     name: Docker (build cached · scan with Trivy)
     runs-on: ubuntu-latest

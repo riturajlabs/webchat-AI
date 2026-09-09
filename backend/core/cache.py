@@ -10,8 +10,14 @@ import logging
 from typing import Protocol
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger("webchat_ai")
+
+# Fail-open is reserved for genuine infrastructure failures (Redis/network).
+# Non-Redis errors (programming bugs) propagate instead of being silently
+# mistaken for a cache miss (audit BE-Q03).
+_REDIS_UNAVAILABLE_ERRORS = (RedisError, OSError)
 
 
 class CacheStore(Protocol):
@@ -46,7 +52,7 @@ class RedisCacheStore:
         try:
             value: str | None = await self._redis.get(self._key(namespace, key))
             return value
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("Redis cache GET failed (namespace=%s)", namespace, exc_info=True)
             return None
 
@@ -64,13 +70,13 @@ class RedisCacheStore:
                 await self._redis.setex(full_key, ttl, value)
             else:
                 await self._redis.set(full_key, value)
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("Redis cache SET failed (namespace=%s)", namespace, exc_info=True)
 
     async def delete(self, namespace: str, key: str) -> None:
         try:
             await self._redis.delete(self._key(namespace, key))
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning("Redis cache DEL failed (namespace=%s)", namespace, exc_info=True)
 
     async def delete_by_prefix(self, namespace: str, prefix: str) -> int:
@@ -90,7 +96,7 @@ class RedisCacheStore:
                     deleted += await self._redis.delete(*keys)
                 if cursor == 0:
                     break
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning(
                 "Redis cache DEL_BY_PREFIX failed (namespace=%s prefix=%s)",
                 namespace,

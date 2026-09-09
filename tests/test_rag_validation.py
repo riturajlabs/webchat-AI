@@ -290,7 +290,7 @@ class TestRetrievalCacheInvalidation:
 
     async def test_cache_entries_are_tenant_scoped(self) -> None:
         env = build_chat_env(cache=FakeCacheStore())
-        await make_website(env, tenant_id=TENANT, website_id=WEBSITE)
+        website = await make_website(env, tenant_id=TENANT, website_id=WEBSITE)
         await make_chunk(
             env,
             tenant_id=TENANT,
@@ -304,7 +304,13 @@ class TestRetrievalCacheInvalidation:
         urls = _source_urls(events)
         assert len(urls) >= 1
 
-        raw = await env.cache.get("retrieval", f"{TENANT}:{WEBSITE}:pricing")
+        # RAG-07: the retrieval cache key is scoped by corpus version (the
+        # website `updated_at`) as well as tenant+website+question, so each
+        # entry stands alone instead of serving cross-tenant/cross-corpus hits.
+        raw = await env.cache.get(
+            "retrieval",
+            f"{TENANT}:{WEBSITE}:{website.updated_at.isoformat()}:pricing",
+        )
         assert raw is not None
         entry = json.loads(raw)
         assert entry["embedding_identity"]["provider"] == "fake"

@@ -37,6 +37,10 @@ from tests.fakes import (
 WIDGET_ID = "widget-1"
 TENANT_ID = "tenant-a"
 WEBSITE_ID = "web-1"
+# SEC-M01: session-mining API enforces UUID visitor ids (SDK contract).
+VISITOR_ID = "3f0c5f6a-2c1a-4d8e-9b7a-1a2b3c4d5e6f"
+# SEC-M05: inbound X-Request-ID must be a UUID to be echoed/correlated.
+TRACE_REQUEST_ID = "4c7e8d5b-9f1a-4b2c-8d3e-6f7a8b9c0d1e"
 
 
 def _build_widget_service(
@@ -232,7 +236,7 @@ async def test_widget_sessions_mints_token(client) -> None:
     # send one on cross-origin POSTs.
     response = test_client.post(
         "/api/widget/v1/sessions",
-        json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+        json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
         headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 200
@@ -241,11 +245,35 @@ async def test_widget_sessions_mints_token(client) -> None:
     assert body["expires_at"]
 
 
+async def test_widget_sessions_rejects_non_uuid_visitor_id(client) -> None:
+    # SEC-M01: visitor_id must be a canonical UUID (SDK contract). Arbitrary
+    # strings that could rotate around per-visitor rate-limit windows are 422.
+    test_client, _, _, _ = client
+    for bad in ("visitor-1", "v", "a" * 128, "3f0c5f6a-2c1a-4d8e", "           "):
+        response = test_client.post(
+            "/api/widget/v1/sessions",
+            json={"widget_id": WIDGET_ID, "visitor_id": bad},
+            headers={"Origin": "https://customer.example"},
+        )
+        assert response.status_code == 422, bad
+
+
+async def test_widget_sessions_accepts_uuid_visitor_id(client) -> None:
+    test_client, _, _, _ = client
+    response = test_client.post(
+        "/api/widget/v1/sessions",
+        json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
+        headers={"Origin": "https://customer.example"},
+    )
+    assert response.status_code == 200
+    assert response.json()["session_token"]
+
+
 async def test_widget_sessions_rejects_unknown_widget(client) -> None:
     test_client, _, _, _ = client
     response = test_client.post(
         "/api/widget/v1/sessions",
-        json={"widget_id": "nope", "visitor_id": "visitor-1"},
+        json={"widget_id": "nope", "visitor_id": VISITOR_ID},
         headers={"Origin": "https://customer.example"},
     )
     assert response.status_code == 404
@@ -264,7 +292,7 @@ async def test_widget_sessions_rejects_disabled_widget(monkeypatch) -> None:
     with _app_with_service(service, chat_env) as test_client:
         response = test_client.post(
             "/api/widget/v1/sessions",
-            json={"widget_id": WIDGET_ID, "visitor_id": "visitor-1"},
+            json={"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID},
             headers={"Origin": "https://customer.example"},
         )
     assert response.status_code == 403
@@ -291,7 +319,7 @@ async def _ready_website(chat_env) -> None:
     return website
 
 
-def _chat_headers(visitor_id: str = "visitor-1") -> dict[str, str]:
+def _chat_headers(visitor_id: str = VISITOR_ID) -> dict[str, str]:
     token, _ = create_widget_session_token(
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
@@ -333,14 +361,14 @@ async def test_widget_chat_done_event_carries_client_request_id(client) -> None:
     response = test_client.post(
         "/api/widget/v1/chat",
         json={"question": "What plans do you offer?"},
-        headers={**_chat_headers(), "X-Request-ID": "trace-e2e-done"},
+        headers={**_chat_headers(), "X-Request-ID": TRACE_REQUEST_ID},
     )
 
     assert response.status_code == 200
     # Existing middleware behavior: the client-supplied id is echoed back.
-    assert response.headers["x-request-id"] == "trace-e2e-done"
+    assert response.headers["x-request-id"] == TRACE_REQUEST_ID
     grouped = _event_map(_sse_events(response.text))
-    assert grouped["done"][0]["request_id"] == "trace-e2e-done"
+    assert grouped["done"][0]["request_id"] == TRACE_REQUEST_ID
 
 
 async def test_widget_chat_error_event_carries_client_request_id(client) -> None:
@@ -351,21 +379,21 @@ async def test_widget_chat_error_event_carries_client_request_id(client) -> None
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
         website_id="other-website",
-        visitor_id="visitor-1",
+        visitor_id=VISITOR_ID,
     )
     response = test_client.post(
         "/api/widget/v1/chat",
         json={"question": "Hi"},
         headers={
             "Authorization": f"Bearer {foreign_token}",
-            "X-Request-ID": "trace-e2e-error",
+            "X-Request-ID": TRACE_REQUEST_ID,
         },
     )
 
     assert response.status_code == 200
     grouped = _event_map(_sse_events(response.text))
     assert grouped["error"][0]["code"] == "WIDGET_NOT_FOUND"
-    assert grouped["error"][0]["request_id"] == "trace-e2e-error"
+    assert grouped["error"][0]["request_id"] == TRACE_REQUEST_ID
 
 
 async def test_widget_chat_requires_bearer_token(client) -> None:
@@ -382,7 +410,7 @@ async def test_widget_chat_rejects_foreign_website_token(client) -> None:
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
         website_id="other-website",
-        visitor_id="visitor-1",
+        visitor_id=VISITOR_ID,
     )
     response = test_client.post(
         "/api/widget/v1/chat",
@@ -438,7 +466,7 @@ async def test_widget_chat_pre_stream_error_ends_with_failed_done(client) -> Non
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
         website_id="other-website",
-        visitor_id="visitor-1",
+        visitor_id=VISITOR_ID,
     )
     response = test_client.post(
         "/api/widget/v1/chat",
@@ -598,7 +626,7 @@ async def test_widget_sessions_http_429_over_ip_burst_budget(monkeypatch, client
     monkeypatch.setattr(deps, "get_redis", lambda: store)
     test_client, _, _, _ = client
 
-    payload = {"widget_id": WIDGET_ID, "visitor_id": "visitor-burst"}
+    payload = {"widget_id": WIDGET_ID, "visitor_id": VISITOR_ID}
     headers = {"Origin": "https://customer.example"}
     for _ in range(2):
         response = test_client.post("/api/widget/v1/sessions", json=payload, headers=headers)
@@ -721,10 +749,31 @@ async def test_widget_cors_for_origin_listed_in_cors_origins(client) -> None:
     _cors_assertions(widget)
 
 
+async def test_dashboard_cors_restricts_wildcard_methods_and_headers(client) -> None:
+    # SEC-H04: the dashboard CORS policy must never answer with wildcard
+    # allow-methods/allow-headers - only the verbs/headers the API uses.
+    test_client, _, _, _ = client
+    response = test_client.options(
+        "/api/health",
+        headers={
+            "Origin": "https://localhost:3000",
+            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Headers": "authorization,content-type,x-csrf-token",
+        },
+    )
+    allowed_methods = response.headers.get("access-control-allow-methods", "")
+    allowed_headers = response.headers.get("access-control-allow-headers", "")
+    assert "*" not in allowed_methods
+    assert "*" not in allowed_headers
+    assert "OPTIONS" in allowed_methods
+    assert "PATCH" in allowed_methods
+    assert "x-csrf-token" in allowed_headers.lower()
+
+
 # ------------------------------------------------------------- feedback
 
 
-def _feedback_headers(visitor_id: str = "visitor-1") -> dict[str, str]:
+def _feedback_headers(visitor_id: str = VISITOR_ID) -> dict[str, str]:
     token, _ = create_widget_session_token(
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
@@ -818,7 +867,7 @@ async def test_widget_feedback_rejects_foreign_website_token(client) -> None:
         widget_id=WIDGET_ID,
         tenant_id=TENANT_ID,
         website_id="other-website",
-        visitor_id="visitor-1",
+        visitor_id=VISITOR_ID,
     )
     result = test_client.post(
         "/api/widget/v1/feedback",

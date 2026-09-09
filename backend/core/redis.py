@@ -7,6 +7,12 @@ from redis.asyncio import Redis
 
 from backend.core.config import get_settings
 
+# Phase 7 (DB-04): cap the shared client pool so a connection thundering herd
+# cannot exhaust the Redis server. 50 is generous for the API + worker + ARQ
+# queue workloads of a single deployment while still bounding resource use.
+# Worker jobs build their own ARQ pool from the same bound (workers/redis.py).
+REDIS_MAX_CONNECTIONS = 50
+
 _redis: Redis | None = None
 
 
@@ -15,7 +21,11 @@ def get_redis() -> Redis:
     global _redis
     if _redis is None:
         settings = get_settings()
-        _redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        _redis = Redis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            max_connections=REDIS_MAX_CONNECTIONS,
+        )
     return _redis
 
 

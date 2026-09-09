@@ -1,7 +1,8 @@
-"""Unit tests for AccountService account-deletion cascade logic."""
+"""Unit tests for AccountService account-deletion cascade logic (SEC-L02 gate)."""
 
 import pytest
-from backend.core.errors import InvalidCredentialsError
+from backend.core.errors import EmailNotVerifiedError, InvalidCredentialsError
+from backend.core.security import utcnow
 from backend.models.audit_log import AUDIT_ACCOUNT_DELETED
 from backend.models.user import User
 from backend.services.account import AccountService
@@ -41,6 +42,21 @@ async def _register(env) -> User:
         ip_address="1.2.3.4",
         user_agent="pytest",
     )
+    await env.users.set_email_verified(result.user.id, utcnow())
+    user = await env.users.find_by_id(result.user.id)
+    assert user is not None
+    return user
+
+
+async def _register_unverified(env) -> User:
+    result = await env.service.register(
+        name="Eve",
+        email="eve@example.com",
+        password=VALID_PASSWORD,
+        ip_address="1.2.3.4",
+        user_agent="pytest",
+    )
+    assert result.user.email_verified is False
     return result.user
 
 
@@ -104,6 +120,24 @@ async def test_delete_account_rejects_tenant_mismatch() -> None:
             principal=forged,
             ip_address=None,
             user_agent=None,
+        )
+    assert purge.purged_tenants == []
+    assert purge.purged_user_sessions == []
+
+
+async def test_delete_account_rejects_unverified_email() -> None:
+    # SEC-L02: destroying an account is a sensitive write and requires a
+    # verified email (an attacker using someone else's address cannot purge).
+    env = build_auth_env()
+    purge = FakeTenantPurgeRepository()
+    service = _build_service(env, purge)
+    user = await _register_unverified(env)
+
+    with pytest.raises(EmailNotVerifiedError):
+        await service.delete_account(
+            principal=_principal(user),
+            ip_address="1.2.3.4",
+            user_agent="pytest",
         )
     assert purge.purged_tenants == []
     assert purge.purged_user_sessions == []

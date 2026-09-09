@@ -26,6 +26,12 @@ MAX_VISITOR_ID_LENGTH = 128
 MAX_QUESTION_LENGTH = 2000
 MAX_SESSION_ID_LENGTH = 128
 
+# SEC-M01: the widget SDK mints visitor ids with `crypto.randomUUID()` (see
+# apps/widget/src/core/visitor.ts), so a canonical UUID is the real widget
+# contract. Enforcing it here stops arbitrary/oversized visitor ids from
+# reaching per-visitor rate-limit keys and session continuity lookups.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
 # Phase 11.5 widget builder field limits (dashboard customization API).
 MAX_WELCOME_MESSAGE_LENGTH = 500
 MAX_PLACEHOLDER_LENGTH = 120
@@ -306,13 +312,25 @@ class CreateWidgetSessionRequest(BaseModel):
     """Body of the public session-minting endpoint.
 
     `visitor_id` is the anonymous id from the `wc_visitor` cookie - never PII
-    (ADR-004). A malicious client may omit or spoof it; the API treats it as a
+    (ADR-004). The SDK always sends a UUID (apps/widget/src/core/visitor.ts).
+    A malicious client may omit or spoof it; the API treats it as a
     best-effort identity for per-visitor rate limits and 24-hour session
-    continuity, not as authentication.
+    continuity, not as authentication. SEC-M01: the id must be a canonical
+    UUID when provided, so oversized/arbitrary values can neither rotate
+    around rate-limit windows nor pad session keys.
     """
 
     widget_id: str = Field(min_length=1, max_length=MAX_WIDGET_ID_LENGTH)
     visitor_id: str | None = Field(default=None, min_length=1, max_length=MAX_VISITOR_ID_LENGTH)
+
+    @field_validator("visitor_id")
+    @classmethod
+    def _validate_visitor_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _UUID_RE.match(value):
+            raise ValueError("visitor_id must be a UUID (string of 8-4-4-4-12 hex digits)")
+        return value
 
 
 class WidgetSessionResponse(BaseModel):

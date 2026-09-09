@@ -256,6 +256,8 @@ class EmbeddingUsage:
 class EmbeddingClient(Protocol):
     """Async embedding interface. Never raises raw SDK errors."""
 
+    name: str
+
     @property
     def usage(self) -> EmbeddingUsage:
         """Aggregate usage so far (Phase 9 fallback reads the serving provider)."""

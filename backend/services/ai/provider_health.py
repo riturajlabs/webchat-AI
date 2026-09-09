@@ -16,8 +16,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 logger = logging.getLogger("webchat_ai")
+
+# Fail-open is reserved for genuine Redis/network failures (and a corrupt or
+# stale JSON payload, which is treated as "no data"). Any other error is a
+# programming bug and must surface instead of silently leaving the router on
+# its static fallback chain or skipping cooldown bookkeeping (audit BE-Q08).
+_REDIS_UNAVAILABLE_ERRORS = (RedisError, OSError, json.JSONDecodeError)
 
 # ── Status constants ────────────────────────────────────────────────────────
 
@@ -92,8 +99,48 @@ class ProviderHealthStore:
         """
         try:
             raw = await self._redis.get(_health_key(provider_name))
-            if raw is None:
-                return self._default_health(provider_name)
+        except _REDIS_UNAVAILABLE_ERRORS:
+            logger.warning(
+                "provider health GET failed (provider=%s); using default",
+                provider_name,
+                exc_info=True,
+            )
+            return self._default_health(provider_name)
+        return self._parse_health_raw(provider_name, raw)
+
+    async def get_health_many(self, provider_names: list[str]) -> dict[str, ProviderHealth]:
+        """Fetch health for several providers in a single pipelined round trip.
+
+        Returns a dict keyed by provider name (as passed in). When Redis is
+        unavailable or any individual key is missing/malformed, that provider
+        receives the healthy default so the static fallback chain is preserved
+        (identical fail-open semantics to ``get_health``).
+        """
+        if not provider_names:
+            return {}
+        results: dict[str, ProviderHealth] = {}
+        try:
+            pipe = self._redis.pipeline(transaction=False)
+            for name in provider_names:
+                pipe.get(_health_key(name))
+            raw_values = await pipe.execute()
+        except _REDIS_UNAVAILABLE_ERRORS:
+            logger.warning(
+                "provider health pipelined GET failed; using defaults for %d providers",
+                len(provider_names),
+                exc_info=True,
+            )
+            raw_values = [None] * len(provider_names)
+
+        for name, raw in zip(provider_names, raw_values, strict=True):
+            results[name] = self._parse_health_raw(name, raw)
+        return results
+
+    def _parse_health_raw(self, provider_name: str, raw: str | None) -> ProviderHealth:
+        """Build a ProviderHealth from a raw Redis value (fail-open)."""
+        if raw is None:
+            return self._default_health(provider_name)
+        try:
             data = json.loads(raw)
             return ProviderHealth(
                 provider=provider_name,
@@ -106,7 +153,7 @@ class ProviderHealthStore:
                 consecutive_failures=int(data.get("consecutive_failures", 0)),
                 last_success=data.get("last_success"),
             )
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning(
                 "provider health GET failed (provider=%s); using default",
                 provider_name,
@@ -117,6 +164,14 @@ class ProviderHealthStore:
     async def is_available(self, provider_name: str) -> bool:
         """True when a provider may be tried (not in active cooldown)."""
         health = await self.get_health(provider_name)
+        return self.is_available_from_health(health)
+
+    def is_available_from_health(self, health: ProviderHealth) -> bool:
+        """True when a provider may be tried, using an already-fetched snapshot.
+
+        This avoids a redundant Redis GET when the caller already holds
+        the health snapshot (e.g. the adaptive router).
+        """
         if health.status != STATUS_COOLDOWN:
             return True
         if health.cooldown_until is None:
@@ -157,7 +212,7 @@ class ProviderHealthStore:
                 _health_key(provider_name),
                 json.dumps(state),
             )
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning(
                 "provider health record_success failed (provider=%s)",
                 provider_name,
@@ -199,7 +254,7 @@ class ProviderHealthStore:
                 cooldown_secs,
                 new_failures,
             )
-        except Exception:
+        except _REDIS_UNAVAILABLE_ERRORS:
             logger.warning(
                 "provider health record_failure failed (provider=%s)",
                 provider_name,

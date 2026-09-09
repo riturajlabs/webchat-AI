@@ -19,6 +19,7 @@ from backend.core.errors import (
     InvalidTokenError,
     TokenReuseError,
 )
+from backend.core.privacy import mask_email
 from backend.core.rbac import ROLE_SUPER_ADMIN
 from backend.core.security import (
     create_access_token,
@@ -30,6 +31,7 @@ from backend.core.security import (
     generate_refresh_token,
     hash_password,
     hash_refresh_token,
+    password_reset_context_hash,
     utcnow,
     verify_password,
 )
@@ -411,7 +413,11 @@ class AuthService:
         user = await self._users.find_by_email(email.lower().strip())
         if user is None:
             return  # do not reveal whether the account exists
-        token = create_password_reset_token(user.id, user.pwd_token_version)
+        token = create_password_reset_token(
+            user.id,
+            user.pwd_token_version,
+            context_hash=password_reset_context_hash(ip_address),
+        )
         reset_url = f"{self._settings.public_base_url}/reset-password?token={token}"
         try:
             await self._mail(
@@ -424,15 +430,15 @@ class AuthService:
                 )
             )
             logger.info(
-                "Password reset email dispatched for user %s (to=%s)",
+                "Password reset email dispatched for user %s (email_masked=%s)",
                 user.id,
-                user.email,
+                mask_email(user.email),
             )
         except Exception as exc:
             logger.exception(
-                "Failed to send password reset email for user %s (to=%s): %s",
+                "Failed to send password reset email for user %s (email_masked=%s): %s",
                 user.id,
-                user.email,
+                mask_email(user.email),
                 exc,
             )
         await self._audit.create(
@@ -449,10 +455,15 @@ class AuthService:
         self, *, token: str, new_password: str, ip_address: str | None, user_agent: str | None
     ) -> None:
         validate_password_policy(new_password)
-        user_id, token_version = decode_password_reset_token(token)
+        user_id, token_version, context_hash = decode_password_reset_token(token)
         user = await self._users.find_by_id(user_id)
         if user is None or token_version != user.pwd_token_version:
             raise InvalidTokenError("This reset link is invalid or has already been used.")
+        # SEC-M02: a reset token bound to the requesting network must be
+        # redeemed from that same coarse network. Unbound tokens (created
+        # directly, e.g. in tests/legacy) are accepted as-is.
+        if context_hash and context_hash != password_reset_context_hash(ip_address):
+            raise InvalidTokenError("This reset link is invalid for this device/network.")
 
         await self._users.update_password(
             user.id, hash_password(new_password), user.pwd_token_version + 1, utcnow()
@@ -515,9 +526,9 @@ class AuthService:
         normalized = user.email.strip().casefold()
         if normalized in admin_emails:
             logger.info(
-                "Role resolved as super_admin for user %s (email=%s)",
+                "Role resolved as super_admin for user %s (email_masked=%s)",
                 user.id,
-                user.email,
+                mask_email(user.email),
             )
             return ROLE_SUPER_ADMIN
 
@@ -573,11 +584,12 @@ class AuthService:
     async def _send_verification_email(self, user: User) -> None:
         token = create_email_verification_token(user.id)
         verify_url = f"{self._settings.public_base_url}/verify-email?token={token}"
+        # The verification URL contains a signed JWT; never log it to avoid
+        # leaking the token into log aggregation systems.
         logger.info(
-            "Sending verification email: recipient=%s, sender=%s, url=%s",
-            user.email,
+            "Sending verification email: recipient=%s, sender=%s",
+            mask_email(user.email),
             self._settings.email_from,
-            verify_url,
         )
         try:
             await self._mail(
@@ -591,7 +603,7 @@ class AuthService:
             )
             logger.info(
                 "Verification email dispatched successfully: recipient=%s, user_id=%s",
-                user.email,
+                mask_email(user.email),
                 user.id,
             )
         except Exception as exc:
@@ -600,7 +612,7 @@ class AuthService:
             # is visible in API logs; the user can resend from the dashboard.
             logger.exception(
                 "Verification email FAILED: recipient=%s, user_id=%s, error=%s",
-                user.email,
+                mask_email(user.email),
                 user.id,
                 exc,
             )

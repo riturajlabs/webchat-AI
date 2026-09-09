@@ -6,9 +6,11 @@ patched so no real DNS/network is touched.
 """
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
+from backend.core.logging import get_request_id, get_tenant_id
 from backend.models.audit_log import AUDIT_CRAWL_COMPLETED, AUDIT_CRAWL_FAILED
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
@@ -796,3 +798,61 @@ async def test_worker_cache_invalidation_is_best_effort(patch_dns) -> None:
     )
 
     assert result["status"] == "completed"
+
+
+class _ContextProbe(logging.Handler):
+    """Capture request/tenant context observed on records during a job run."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.INFO)
+        self.request_ids: list[str] = []
+        self.tenant_ids: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:  # noqa: A003
+        self.request_ids.append(get_request_id())
+        self.tenant_ids.append(get_tenant_id())
+
+
+async def test_worker_logs_carry_job_id_and_tenant_context(patch_dns, caplog) -> None:
+    """Worker logs are correlated to the crawl job and tenant (OBS-02/OBS-01)."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    probe = _ContextProbe()
+    target = logging.getLogger("webchat_ai")
+    target.addHandler(probe)
+    try:
+        result = await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+    finally:
+        target.removeHandler(probe)
+
+    assert result["status"] == "completed"
+    assert probe.request_ids, "expected at least one log record during the job"
+    assert all(rid == f"job:{job.id}" for rid in probe.request_ids)
+    assert all(tid == job.tenant_id for tid in probe.tenant_ids)
+    # The context is scoped to the job invocation and reset afterwards.
+    assert get_request_id() == "-"
+    assert get_tenant_id() == "-"
+
+
+async def test_worker_skipped_job_resets_request_context(patch_dns) -> None:
+    ctx, _, jobs, documents, websites, audit, usage = await _env()
+
+    await _run_crawl_job(
+        ctx,
+        "missing",
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert get_request_id() == "-"
+    assert get_tenant_id() == "-"

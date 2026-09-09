@@ -39,6 +39,27 @@ _INSECURE_PRODUCTION_JWT_MARKERS = frozenset(
     }
 )
 
+# Placeholder / example markers that must never validate as a real Stripe key
+# in production regardless of formatting (SEC-C03).
+_STRIPE_PLACEHOLDER_MARKERS = frozenset(
+    {
+        "change_me",
+        "changeme",
+        "your_api_key",
+        "your_key",
+        "your_stripe",
+        "example",
+        "placeholder",
+        "yyyy",
+        "xxxx",
+    }
+)
+
+# Real Stripe secret API keys always begin with `sk_live_`/`sk_test_`; webhook
+# signing secrets always begin with `whsec_`.
+_STRIPE_SECRET_KEY_PREFIXES = ("sk_live_", "sk_test_")
+_STRIPE_WEBHOOK_SECRET_PREFIX = "whsec_"
+
 
 class Settings(BaseSettings):
     """Central settings object. Values come from environment variables or a
@@ -56,9 +77,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = False
     log_level: str = "INFO"
-    # Gate OpenAPI docs and schema endpoints. Disabled in production by
-    # validator; production must explicitly set ENABLE_DOCS=false.
-    enable_docs: bool = True
+    # Gate OpenAPI docs and schema endpoints. Disabled by default so a
+    # production-safe posture is the zero-config choice; development/test
+    # environments can explicitly set ENABLE_DOCS=true. config.py still fails
+    # fast if it is left true in production.
+    enable_docs: bool = False
 
     # Explicit local-production-testing mode. When True, `environment` stays
     # "production" (so all production code paths - JSON logs, Resend mail, real
@@ -321,10 +344,15 @@ class Settings(BaseSettings):
     crawl_max_content_bytes: int = 200_000
     crawl_max_concurrent: int = 2
     crawl_browser_user_agent: str = "WebChatAI-Crawler/1.0"
-    # Chrome's sandbox needs a non-root runtime; the dev/worker image runs as
-    # root so `--no-sandbox` is the default. Keep `false` behind a non-root
-    # production image (00-AI-Development-Rules §11).
-    crawl_no_sandbox: bool = True
+    # Chrome's sandbox needs a non-root runtime. The production posture is to
+    # run with Chromium sandboxing enabled (default false = sandbox on). Set
+    # CRAWL_NO_SANDBOX=true only when the runtime genuinely cannot sandbox
+    # (e.g. a specific container/base-image constraint); never the default.
+    crawl_no_sandbox: bool = False
+    # INGEST-04: optional worker RSS ceiling (MiB). When the process RSS exceeds
+    # this, the crawl aborts gracefully instead of letting the worker OOM on a
+    # wide or memory-hungry site. Default 0 = disabled (current behaviour).
+    crawl_max_rss_mb: int = 0
 
     # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
     # Versioned answer prompt selected from backend/prompts/rag.py.
@@ -498,11 +526,12 @@ class Settings(BaseSettings):
     embedding_cache_size: int = 256
     embedding_cache_ttl_seconds: int = 3600
     # Retrieval cache (cross-process via Redis): repeat questions - same
-    # website, same normalized text - reuse the embedding AND the vector-search
-    # results for `chat_retrieval_cache_ttl_seconds`, skipping both the
-    # embedding provider and the search query. Answers are NEVER cached:
-    # generation still runs so every turn is a fresh answer. Set size 0 or
-    # TTL 0 to disable.
+    # website, same normalized text - reuse the FULL retrieval result (the
+    # final post-hybrid, post-rerank ranking) for
+    # `chat_retrieval_cache_ttl_seconds`, skipping the embedding provider, the
+    # vector search, the lexical-corpus load and the keyword/RRF + rerank pass.
+    # Answers are NEVER cached: generation still runs so every turn is a fresh
+    # answer. Set size 0 or TTL 0 to disable.
     # Recommendation: 512 entries with 15-minute TTL balances hit rate vs.
     # freshness. Monitor hit rate to adjust.
     chat_retrieval_cache_ttl_seconds: int = 900
@@ -743,6 +772,28 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are required in production."
                 )
+            if self.payment_provider.lower() == "stripe" and not self.local_production_test:
+                # SEC-C03: reject placeholder/example values and enforce the
+                # real Stripe key prefixes so an arbitrary non-empty string
+                # never passes as a production credential.
+                secret_key = (self.stripe_secret_key or "").strip().lower()
+                if not str(self.stripe_secret_key or "").startswith(
+                    _STRIPE_SECRET_KEY_PREFIXES
+                ) or any(marker in secret_key for marker in _STRIPE_PLACEHOLDER_MARKERS):
+                    raise ValueError(
+                        "STRIPE_SECRET_KEY must be a real Stripe secret API key "
+                        "(sk_live_/sk_test_ prefix), not a placeholder or example value."
+                    )
+                if not str(self.stripe_webhook_secret or "").startswith(
+                    _STRIPE_WEBHOOK_SECRET_PREFIX
+                ) or any(
+                    marker in (self.stripe_webhook_secret or "").strip().lower()
+                    for marker in _STRIPE_PLACEHOLDER_MARKERS
+                ):
+                    raise ValueError(
+                        "STRIPE_WEBHOOK_SECRET must be a real Stripe webhook signing "
+                        "secret (whsec_ prefix), not a placeholder or example value."
+                    )
             if self.payment_provider.lower() == "razorpay" and (
                 not self.razorpay_key_id
                 or not self.razorpay_key_secret

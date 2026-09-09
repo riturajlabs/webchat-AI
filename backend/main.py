@@ -170,8 +170,16 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # SEC-H04: no wildcard methods/headers - only the verbs and headers the
+        # API surface actually uses. OPTIONS is added for preflight handling.
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Request-ID",
+            "X-Requested-With",
+            "X-CSRF-Token",
+        ],
     )
     # WidgetCORS is registered after (thus wraps/runs before) the dashboard
     # CORSMiddleware: `/api/widget/*` gets public `ACAO: *`, and its preflights
