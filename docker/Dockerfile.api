@@ -47,11 +47,14 @@ EXPOSE 8000
 # Redis partition never causes an orchestrator to restart a healthy process.
 # Use /api/health/ready for readiness gating instead (it fails closed 503).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/live', timeout=4)"
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-8000}/api/health/live', timeout=4)"
 
 USER appuser
 
 # Run as many uvicorn workers as UVICORN_WORKERS (default 1). The compose file
 # forwards it; keep it at 1 per container unless DB-pool/serving profiling
 # justifies more (vertical scaling via compose deploy.limits is preferred).
-CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers \"${UVICORN_WORKERS:-1}\""]
+# Set accepted hostname to all available IPs. On Railway the container port
+# is injected via the PORT env var (with a safe local default of 8000);
+# --worker-class is preserved from UVICORN_WORKERS.
+CMD ["sh", "-c", "exec uvicorn backend.main:app --host 0.0.0.0 --port \"${PORT:-8000}\" --workers \"${UVICORN_WORKERS:-1}\""]
