@@ -138,14 +138,39 @@ class CrawlSession:
 
         max_pages = self._settings.crawl_max_pages
         max_depth = self._settings.crawl_max_depth
-        # Priority frontier ordered by `(-score, depth, seq)` so content-rich
-        # candidates are fetched before navigation/hub pages, while ties (equal
-        # scores) break toward lower depth then earlier discovery -- keeping the
-        # traversal deterministic and BFS-like (ING-01).
+        # Frontier ordering is (band, priority, depth, seq): the seed stays in
+        # band 0 so the homepage and its preview image/meta are always stored
+        # first; explicitly-configured authoritative paths sit in band 1 so they
+        # are crawled before any discovered candidate (band 2), whose content
+        # score then orders it. This guarantees top-level pages are not starved
+        # by high-fanout course/event URLs consuming the page budget (ING-01).
         seq = 0
-        queue: list[tuple[int, int, int, str]] = [(0, 0, seq, seed)]
+        queue: list[tuple[int, int, int, int, str]] = [(0, 0, 0, seq, seed)]
         visited: set[str] = set()
         queued: set[str] = set()
+        # Seed explicitly-configured authoritative paths (e.g. "/admissions",
+        # "/courses") ahead of anything discovered so high-fanout course/event
+        # URLs cannot consume the page budget first. They are resolved against
+        # the seed origin and still pass the regular same-host, hostname, and
+        # robots checks when popped.
+        for path in self._settings.crawl_priority_url_paths:
+            priority_url = normalize_crawl_url(path, seed)
+            if (
+                priority_url is None
+                or priority_url == seed
+                or priority_url in visited
+                or priority_url in queued
+            ):
+                continue
+            if self._site_host(priority_url) != seed_host:
+                continue
+            try:
+                validate_hostname(urlparse(priority_url).hostname or "")
+            except InvalidUrlError:
+                continue
+            seq += 1
+            heapq.heappush(queue, (1, 0, 0, seq, priority_url))
+            queued.add(priority_url)
         stored = 0
         if self._on_progress is not None:
             await self._on_progress(0, max_pages)
@@ -170,7 +195,7 @@ class CrawlSession:
                     stored,
                 )
                 break
-            _, depth, _, url = heapq.heappop(queue)
+            _, _, depth, _, url = heapq.heappop(queue)
             # INGEST-03: evict the popped URL from the frontier set so its size
             # tracks the frontier width, not the total candidate count found
             # over the whole crawl (unbounded growth on wide sites).
@@ -252,7 +277,7 @@ class CrawlSession:
                             link_density=len(extracted.links),
                             content_length=len(content),
                         )
-                        heapq.heappush(queue, (-score, depth + 1, seq, candidate))
+                        heapq.heappush(queue, (2, -score, depth + 1, seq, candidate))
                         queued.add(candidate)
 
         return stored

@@ -229,6 +229,85 @@ async def test_skips_pages_exceeding_response_size_limit(guard) -> None:
     )
 
 
+async def test_seeds_priority_url_paths_ahead_of_discovered_links(guard) -> None:
+    """Configured authoritative paths are crawled before the page budget runs out.
+
+    A link-dense homepage with many course links plus explicit priority paths
+    (/admissions, /courses-apply) must store the priority pages first, even when
+    the budget is tight enough that some discovered links are never reached.
+    """
+    links = "".join(f'<a href="/course/page-{i}">Course {i}</a>' for i in range(60))
+    pages = {
+        SEED: ("<html><body><main><h1>Home</h1><p>home body</p>" + links + "</main></body></html>"),
+        "https://acme.example/admissions": (
+            "<html><body><main><h1>Admissions</h1>"
+            "<p>admission process body</p></main></body></html>"
+        ),
+        "https://acme.example/courses-apply": (
+            "<html><body><main><h1>Apply</h1><p>apply body</p></main></body></html>"
+        ),
+    }
+    for i in range(30):
+        pages[f"https://acme.example/course/page-{i}"] = (
+            "<html><body><main><h1>Page</h1><p>course body. </p></main></body></html>"
+        )
+    fetcher = FakePageFetcher(pages)
+    session = CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=FakeDocumentRepository(),
+        guard=guard,
+        settings=_settings_with(max_pages=3, priority_paths=["/admissions", "/courses-apply"]),
+    )
+    stored = await session.run()
+    assert stored == 3
+    urls = [d.url for d in session._documents.documents.values()]
+    assert urls[0] == SEED
+    assert "https://acme.example/admissions" in urls
+    assert "https://acme.example/courses-apply" in urls
+    # Both priority pages come before any discovered course page.
+    course_0 = "https://acme.example/course/page-0"
+    assert (
+        "https://acme.example/admissions" in urls and "https://acme.example/courses-apply" in urls
+    )
+    if course_0 in urls:
+        assert urls.index("https://acme.example/admissions") < urls.index(course_0)
+
+
+async def test_priority_url_paths_are_same_origin_only(guard) -> None:
+    """Off-origin priority paths are rejected; priority paths dedupe against the seed."""
+    pages = {
+        SEED: (
+            "<html><body><main><h1>Home</h1><p>home body</p>"
+            '<a href="/about">About</a></main></body></html>'
+        ),
+        "https://acme.example/about": SAMPLE_ABOUT,
+    }
+    # /about is both a priority path and a discovered link; the seed itself is a
+    # priority path that must not be re-queued.
+    fetcher = FakePageFetcher(pages)
+    session = CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=FakeDocumentRepository(),
+        guard=guard,
+        settings=_settings_with(
+            max_pages=5,
+            priority_paths=["/about", "", "https://evil.example/x", SEED],
+        ),
+    )
+    stored = await session.run()
+    assert stored == 2
+    assert {d.url for d in session._documents.documents.values()} == {
+        SEED,
+        "https://acme.example/about",
+    }
+
+
 async def test_aborts_under_memory_pressure(guard, monkeypatch) -> None:
     """INGEST-04: the crawl aborts gracefully once worker RSS exceeds the ceiling."""
     import backend.services.ingestion.crawler as crawler_mod
@@ -269,6 +348,7 @@ def _settings_with(
     max_depth: int | None = None,
     max_html_bytes: int | None = None,
     max_rss_mb: int | None = None,
+    priority_paths: list[str] | None = None,
 ):
     """A settings stub carrying only the crawl knobs the session reads."""
     from backend.core.config import Settings
@@ -282,4 +362,6 @@ def _settings_with(
         values["crawl_max_html_bytes"] = max_html_bytes
     if max_rss_mb is not None:
         values["crawl_max_rss_mb"] = max_rss_mb
+    if priority_paths is not None:
+        values["crawl_priority_url_paths"] = priority_paths
     return Settings(_env_file=None, **values)

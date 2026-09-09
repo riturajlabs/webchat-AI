@@ -493,6 +493,22 @@ def test_allowed_hosts_accepts_comma_separated_string() -> None:
     assert settings.allowed_hosts == ["app.example.com", "api.example.com"]
 
 
+def test_crawl_priority_url_paths_accepts_comma_separated_string() -> None:
+    settings = Settings(
+        _env_file=None,
+        crawl_priority_url_paths="/admissions,/courses, /faculty",
+    )
+    assert settings.crawl_priority_url_paths == ["/admissions", "/courses", "/faculty"]
+
+
+def test_crawl_priority_url_paths_accepts_json_array() -> None:
+    settings = Settings(
+        _env_file=None,
+        crawl_priority_url_paths='["/admissions", "/courses"]',
+    )
+    assert settings.crawl_priority_url_paths == ["/admissions", "/courses"]
+
+
 def test_production_rejects_empty_allowed_hosts() -> None:
     with pytest.raises(ValueError, match="ALLOWED_HOSTS"):
         Settings(**_prod(allowed_hosts=[]))

@@ -219,6 +219,7 @@ x-backend-env: &backend-env
   CRAWL_MAX_CONCURRENT: ${CRAWL_MAX_CONCURRENT-2}
   CRAWL_BROWSER_USER_AGENT: ${CRAWL_BROWSER_USER_AGENT-WebChatAI-Crawler/1.0}
   CRAWL_NO_SANDBOX: ${CRAWL_NO_SANDBOX-true}
+  CRAWL_PRIORITY_URL_PATHS: ${CRAWL_PRIORITY_URL_PATHS-}
 
   # Payments (from .env when present; safe dev fallbacks otherwise).
   PAYMENT_PROVIDER: ${PAYMENT_PROVIDER-mock}

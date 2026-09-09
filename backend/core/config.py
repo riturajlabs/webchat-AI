@@ -353,6 +353,13 @@ class Settings(BaseSettings):
     # this, the crawl aborts gracefully instead of letting the worker OOM on a
     # wide or memory-hungry site. Default 0 = disabled (current behaviour).
     crawl_max_rss_mb: int = 0
+    # Authoritative top-level page paths (e.g. "/admissions", "/courses") that
+    # must be crawled before the page budget is consumed by high-fanout
+    # course/event URLs. Resolved against the website origin and seeded into the
+    # crawl frontier with maximum priority. Accepts a comma-separated string or a
+    # JSON array from the environment. Relative paths only; they are kept
+    # same-origin with the website, so SSRF/hostname/robots rules still apply.
+    crawl_priority_url_paths: Annotated[list[str], NoDecode] = []
 
     # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
     # Versioned answer prompt selected from backend/prompts/rag.py.
@@ -587,6 +594,27 @@ class Settings(BaseSettings):
                         f"list, got: {value!r}"
                     ) from None
             return [host.strip() for host in value.split(",") if host.strip()]
+        return value
+
+    @field_validator("crawl_priority_url_paths", mode="before")
+    @classmethod
+    def _parse_crawl_priority_url_paths(cls, value: object) -> object:
+        """Accept a comma-separated string or a JSON array for priority paths.
+
+        Mirrors ``_parse_allowed_hosts``: `NoDecode` keeps the raw environment
+        value so a plain comma-separated `CRAWL_PRIORITY_URL_PATHS` works.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        "CRAWL_PRIORITY_URL_PATHS must be a JSON array or "
+                        f"comma-separated list, got: {value!r}"
+                    ) from None
+            return [path.strip() for path in value.split(",") if path.strip()]
         return value
 
     @field_validator("redis_url")
