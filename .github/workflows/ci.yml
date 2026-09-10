@@ -273,6 +273,7 @@ jobs:
           format: sarif
           output: trivy-api.sarif
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
@@ -285,6 +286,7 @@ jobs:
           format: sarif
           output: trivy-worker.sarif
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
@@ -297,6 +299,7 @@ jobs:
           format: sarif
           output: trivy-dashboard.sarif
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
@@ -309,6 +312,7 @@ jobs:
           format: sarif
           output: trivy-widget.sarif
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           exit-code: "1"
           ignore-unfixed: true
 
