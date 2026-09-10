@@ -10,6 +10,11 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_CONCURRENT_DOWNLOADS=8 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
+# Consume current Debian Bookworm security updates in the runtime image.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Install dependencies first (cached layer). A flaky PyPI connection resets
