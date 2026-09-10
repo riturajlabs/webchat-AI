@@ -16,7 +16,7 @@ from `data-widget-id` — **no `init()` call required**:
 
 ```html
 <script
-  src="https://cdn.example.com/webchat-widget.iife.min.js"
+  src="https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js"
   data-widget-id="your_widget_id"
   defer
 ></script>
@@ -27,10 +27,10 @@ has run.
 
 ### Script data attributes
 
-| Attribute           | Required | Purpose                                                                                                                                                                                                                                                        |
-| ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data-widget-id`    | yes      | Public widget identifier (dashboard → widget page).                                                                                                                                                                                                            |
-| `data-api-base-url` | no       | Override the API origin, e.g. `https://api.example.com`. The SDK appends `/api/widget/v1`. A fully versioned base (`.../api/widget/v1`) is also accepted. Defaults to the build-time `VITE_WIDGET_API_BASE_URL`, falling back to same-origin `/api/widget/v1`. |
+| Attribute           | Required | Purpose                                                                                                                                                                                                                                                                                  |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-widget-id`    | yes      | Public widget identifier (dashboard → widget page).                                                                                                                                                                                                                                      |
+| `data-api-base-url` | no       | Override the API origin, e.g. `https://webchat-ai-production-7e84.up.railway.app`. The SDK appends `/api/widget/v1`. A fully versioned base (`.../api/widget/v1`) is also accepted. Defaults to the build-time `VITE_WIDGET_API_BASE_URL`, falling back to same-origin `/api/widget/v1`. |
 
 ### API base resolution
 
@@ -85,7 +85,7 @@ import { mount } from '@webchat/widget';
 
 const controller = mount({
   widgetId: 'your_widget_id',
-  apiBaseUrl: 'https://api.example.com/api/widget/v1',
+  apiBaseUrl: 'https://webchat-ai-production-7e84.up.railway.app/api/widget/v1',
   host: document.querySelector('#my-chat'), // optional; a <webchat-widget> is appended otherwise
 });
 ```
@@ -168,7 +168,7 @@ The widget fetches from `apiBaseUrl` and opens the chat over SSE. If your site
 uses a Content-Security-Policy, allow the API origin:
 
 ```
-connect-src 'self' https://api.example.com;
+connect-src 'self' https://webchat-ai-production-7e84.up.railway.app;
 ```
 
 A blocked `connect-src` surfaces as an error banner in the widget.

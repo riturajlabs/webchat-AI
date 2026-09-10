@@ -1,8 +1,14 @@
 # WebChat AI - full stack (MongoDB + Redis + Mailpit + API + Worker + Dashboard + Widget).
 # Select the environment file; compose consumes it and NEVER overrides it:
-#   docker compose --env-file .env.development -f docker/compose.yml up --build
-#   docker compose --env-file .env.production  -f docker/compose.yml up --build
+#   docker compose --env-file .env.development             -f docker/compose.yml up --build
+#   docker compose --env-file .env.production.sandbox      -f docker/compose.yml up --build   # SAFE local prod-STYLE test
 # (or scripts/docker-up.sh).
+#
+# !!! .env.production holds REAL production credentials (MongoDB Atlas / Upstash /
+#     live payments / real AI spend / Resend). It must NEVER be used for local
+#     development or local smoke tests without explicit intent - a worker started
+#     against it consumes the REAL production ARQ queue. Use the sandbox file above
+#     (or .env.development) for anything local.
 #
 # Interpolation uses ${VAR-default} (default only when the variable is UNSET)
 # rather than ${VAR:-default} (default when unset OR EMPTY) so an explicit
@@ -502,11 +508,11 @@ services:
       dockerfile: docker/Dockerfile.widget
       network: host
       args:
-        # Build-time widget API base. Keep EMPTY for local dev AND local
-        # production testing: the bundle must stay loopback-free
-        # (apps/widget/scripts/check-assets.mjs). The widget reaches the API at
-        # runtime via data-api-base-url from WIDGET_API_BASE_URL. Set this to
-        # the HTTPS API origin before the production build (Railway).
+        # Build-time widget API base. Keep EMPTY for local dev (.env.development):
+        # the bundle must stay loopback-free (apps/widget/scripts/check-assets.mjs)
+        # and the widget reaches the API at runtime via data-api-base-url from
+        # WIDGET_API_BASE_URL. A local-production-style run (.env.production)
+        # sets this to the real HTTPS API origin before the build (Railway).
         VITE_WIDGET_API_BASE_URL: ${VITE_WIDGET_API_BASE_URL-}
     container_name: webchat-widget
     networks: [webchat]

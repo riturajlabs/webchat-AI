@@ -12,6 +12,12 @@ sessions/messages in staging (the pipeline persists every turn by design).
 
 Usage:
     uv run python scripts/staging_golden_eval.py [--tenant ID --website ID]
+
+PRODUCTION SAFETY:
+    This eval creates real chat sessions/messages and spends real AI tokens.
+    It targets the REAL stack only when pointed at `.env.production` (default
+    via $STAGING_ENV_FILE) AND the operator passes `--allow-production` (or
+    exports STAGING_ALLOW_PRODUCTION=1). Otherwise it is refused.
 """
 
 from __future__ import annotations
@@ -45,7 +51,26 @@ def _load_env(env_file: Path) -> None:
 # Enable timing telemetry before settings are loaded.
 os.environ.setdefault("PERF_TIMING_LOG_ENABLED", "true")
 
+_PROD_ENV_FILE = _project_root / ".env.production"
+
 _ENV = _project_root / os.environ.get("STAGING_ENV_FILE", ".env.production")
+
+if _ENV.resolve() == _PROD_ENV_FILE.resolve() and (
+    "--allow-production" not in sys.argv and os.environ.get("STAGING_ALLOW_PRODUCTION") != "1"
+):
+    print(
+        f"Refusing to run against the REAL production environment file ({_ENV}). "
+        "This eval creates real chat sessions/messages and spends real AI tokens.",
+        file=sys.stderr,
+    )
+    print(
+        "Re-run with --allow-production (or STAGING_ALLOW_PRODUCTION=1) to "
+        "explicitly opt in to production, or set STAGING_ENV_FILE to a "
+        "sandbox / development env file.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
 _load_env(_ENV)
 
 from backend.api.deps import get_rag_service  # noqa: E402
@@ -360,6 +385,11 @@ def main() -> int:
     parser.add_argument("--website", required=True)
     parser.add_argument("--dataset", default=None, help="path to expanded golden dataset JSON")
     parser.add_argument("--json-out", default=None, help="optional path for raw JSON results")
+    parser.add_argument(
+        "--allow-production",
+        action="store_true",
+        help="explicit opt-in when STAGING_ENV_FILE resolves to the real .env.production",
+    )
     args = parser.parse_args()
 
     collector = _LogCollector()

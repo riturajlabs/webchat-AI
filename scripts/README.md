@@ -14,20 +14,20 @@ data or trigger production operations** — read before running.
 
 ## Verification & release gates
 
-| Script                           | Purpose                                                                           |
-| -------------------------------- | --------------------------------------------------------------------------------- |
-| `check-backend.sh`               | The backend gate: `ruff check .` + `mypy backend` + `pytest`                      |
-| `check-secrets.sh`               | Lightweight secret scanner (grep + git + bash builtins) — run before every commit |
-| `local-production-smoke-test.sh` | 10 smoke checks against a locally-running production stack                        |
-| `check-production-docker.sh`     | Production Docker hardening audit (8 checks)                                      |
-| `check-docker-security.sh`       | Dockerfile/compose hardening compliance                                           |
-| `check-ai-security.sh`           | AI/RAG security & reliability audit                                               |
-| `check-api-security.sh`          | API production hardening audit                                                    |
-| `check-auth-security.sh`         | Auth/session security hardening audit                                             |
-| `check-database-security.sh`     | MongoDB auth/port/credential/posture checks                                       |
-| `check-input-validation.sh`      | Input validation & injection-prevention audit                                     |
-| `check-observability.sh`         | Production observability & monitoring audit                                       |
-| `load-test-report.sh`            | Load-test report (phase 14.8.4)                                                   |
+| Script                           | Purpose                                                                                                                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `check-backend.sh`               | The backend gate: `ruff check .` + `mypy backend` + `pytest`                                                                           |
+| `check-secrets.sh`               | Lightweight secret scanner (grep + git + bash builtins) — run before every commit                                                      |
+| `local-production-smoke-test.sh` | 10 smoke checks against the local stack; defaults to `.env.production.sandbox` (safe), refuses real `.env.production` without `--prod` |
+| `check-production-docker.sh`     | Production Docker hardening audit (8 checks)                                                                                           |
+| `check-docker-security.sh`       | Dockerfile/compose hardening compliance                                                                                                |
+| `check-ai-security.sh`           | AI/RAG security & reliability audit                                                                                                    |
+| `check-api-security.sh`          | API production hardening audit                                                                                                         |
+| `check-auth-security.sh`         | Auth/session security hardening audit                                                                                                  |
+| `check-database-security.sh`     | MongoDB auth/port/credential/posture checks                                                                                            |
+| `check-input-validation.sh`      | Input validation & injection-prevention audit                                                                                          |
+| `check-observability.sh`         | Production observability & monitoring audit                                                                                            |
+| `load-test-report.sh`            | Load-test report (phase 14.8.4)                                                                                                        |
 
 ## RAG evaluation & debugging
 

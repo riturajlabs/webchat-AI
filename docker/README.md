@@ -32,11 +32,16 @@ docker compose --env-file .env.development -f docker/compose.yml up --build
 
 ## Production
 
-Production uses **immutable, SHA-tagged GHCR images** pulled by the compose
-stack — it is not a local build. See
+The **current production** system runs on **Vercel** (Dashboard, Widget) and
+**Railway** (API, Worker) with managed MongoDB/Redis — it does **not** use the
+Docker images below for deployment.
+
+The Docker images remain a **CI validation / security gate** (built and scanned
+with Trivy in `ci.yml` / `cd.yml`) and an **optional self-hosting** path via
+Docker Compose + `scripts/deploy.sh`. Production uses immutable, SHA-tagged
+GHCR images only when self-hosting; see
 [`docs/deployment/README.md`](../docs/deployment/README.md) for the full
-deployment documentation (secret management, `deploy.sh` workflow, rollout,
-rollback, health probes, Prometheus wiring, troubleshooting).
+architecture, environment contracts, and the Docker Compose self-hosting runbook.
 
 The four production images:
 

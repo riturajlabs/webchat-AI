@@ -4,6 +4,12 @@
 Dry-run is the default. Execution uses the persisted website embedding lock,
 processes only the requested tenant/site documents, and relies on the
 processor's insert-first ``replace_by_document`` operation.
+
+PRODUCTION SAFETY:
+    The env file defaults to ``.env.development`` (local docker services).
+    Running against the real ``.env.production`` requires an explicit
+    ``--allow-production`` flag and is otherwise refused (this script
+    re-chunks and re-embeds a website's corpus, spending AI tokens).
 """
 
 from __future__ import annotations
@@ -47,6 +53,29 @@ def _load_env(path: Path) -> None:
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
+
+
+def _is_prod_env_file(env_file: Path) -> bool:
+    return (
+        env_file.name == ".env.production"
+        or env_file.resolve() == (_PROJECT_ROOT / ".env.production").resolve()
+    )
+
+
+def _refuse_implicit_production(env_file: Path, *, allow_production: bool) -> None:
+    if allow_production or not _is_prod_env_file(env_file):
+        return
+    print(
+        f"Refusing to run against the REAL production environment file ({env_file}). "
+        "This script re-chunks and re-embeds a website corpus (AI token spend).",
+        file=sys.stderr,
+    )
+    print(
+        "If you really intend to mutate production data, re-run with "
+        "--allow-production --env-file .env.production.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 
 def validate_target(website: Any, *, tenant_id: str, website_id: str) -> None:
@@ -161,8 +190,14 @@ def main() -> int:
     parser.add_argument("--tenant-id", default=TENANT_ID)
     parser.add_argument("--website-id", default=WEBSITE_ID)
     parser.add_argument("--execute", action="store_true")
-    parser.add_argument("--env-file", default=str(_PROJECT_ROOT / ".env.production"))
+    parser.add_argument("--env-file", default=str(_PROJECT_ROOT / ".env.development"))
+    parser.add_argument(
+        "--allow-production",
+        action="store_true",
+        help="explicit opt-in to run against the real .env.production file",
+    )
     args = parser.parse_args()
+    _refuse_implicit_production(Path(args.env_file), allow_production=args.allow_production)
     _load_env(Path(args.env_file))
     try:
         report = asyncio.run(

@@ -37,7 +37,10 @@ Usage:
 Defaults:
     --uri   $MONGODB_URI or mongodb://localhost:27017
     --db    $MONGODB_DB  or webchat_ai
-    Env (identity settings, Redis) loads from .env.production unless overridden.
+    Env (identity settings, Redis) loads from .env.development unless
+    overridden. Running against the real `.env.production` requires an
+    explicit `--allow-production` flag and is otherwise refused (this script
+    DELETES and REBUILDS a website's corpus).
 """
 
 from __future__ import annotations
@@ -55,7 +58,29 @@ import pymongo
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
+_PROD_ENV_FILE = _project_root / ".env.production"
+
 from backend.core.config import get_settings  # noqa: E402
+
+
+def _is_prod_env_file(env_file: Path) -> bool:
+    return env_file.name == ".env.production" or env_file.resolve() == _PROD_ENV_FILE.resolve()
+
+
+def _refuse_implicit_production(env_file: Path, *, allow_production: bool) -> None:
+    if allow_production or not _is_prod_env_file(env_file):
+        return
+    print(
+        f"Refusing to run against the REAL production environment file ({env_file}). "
+        "This script DELETES and REBUILDS a website's knowledge chunks.",
+        file=sys.stderr,
+    )
+    print(
+        "If you really intend to mutate production data, re-run with "
+        "--allow-production --env-file .env.production.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 
 def _load_env(env_file: Path) -> None:
@@ -293,12 +318,18 @@ def main() -> int:
     parser.add_argument("--db", default=None, help="defaults to $MONGODB_DB or webchat_ai")
     parser.add_argument(
         "--env-file",
-        default=str(_project_root / ".env.production"),
-        help="env file to load for settings (default: .env.production)",
+        default=str(_project_root / ".env.development"),
+        help="env file to load for settings (default: .env.development)",
+    )
+    parser.add_argument(
+        "--allow-production",
+        action="store_true",
+        help="explicit opt-in to run against the real .env.production file",
     )
     parser.add_argument("--timeout", type=int, default=1800, help="drain wait budget in seconds")
     parser.add_argument("--poll-interval", type=int, default=15, help="seconds between polls")
     args = parser.parse_args()
+    _refuse_implicit_production(Path(args.env_file), allow_production=args.allow_production)
     _load_env(Path(args.env_file))
     uri = args.uri or os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
     db_name = args.db or os.environ.get("MONGODB_DB", "webchat_ai")

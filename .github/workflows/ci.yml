@@ -189,13 +189,24 @@ jobs:
 
       - name: Require NEXT_PUBLIC_API_URL (production-style build)
         # The dashboard bundle inlines NEXT_PUBLIC_API_URL into the client at
-        # build time. It must come from the GitHub repository variable (same
-        # canonical source CD uses). We fail fast and loudly if it is missing —
-        # never silently fall back to localhost (the build-time guard rejects it
+        # build time. In the current Vercel + Railway architecture this is the
+        # Dashboard origin (e.g. https://webchat-ai-dashboard.vercel.app) —
+        # browser requests stay same-origin and the Next.js rewrite proxies
+        # /api/* to Railway. We fail fast and loudly if it is missing — never
+        # silently fall back to localhost (the build-time guard rejects it
         # anyway; this gives a clear, actionable error first).
         if: ${{ vars.NEXT_PUBLIC_API_URL == '' }}
         run: |
-          echo "::error::CI docker build requires the repository variable NEXT_PUBLIC_API_URL set to the public HTTPS API origin (e.g. https://api.your-domain.com). Settings > Secrets and variables > Actions > Variables -> NEXT_PUBLIC_API_URL, then re-run."
+          echo "::error::CI docker build requires the repository variable NEXT_PUBLIC_API_URL set to the public Dashboard origin (e.g. https://webchat-ai-dashboard.vercel.app). In the current architecture the Dashboard URL is used because browser requests are same-origin and Next.js proxies /api/* to Railway via NEXT_PUBLIC_BACKEND_API_URL. Settings > Secrets and variables > Actions > Variables -> NEXT_PUBLIC_API_URL, then re-run."
+          exit 1
+
+      - name: Require VITE_WIDGET_API_BASE_URL (production-style build)
+        # The widget bundle bakes VITE_WIDGET_API_BASE_URL at build time.
+        # In the current architecture this is the Railway API origin
+        # (e.g. https://webchat-ai-production-7e84.up.railway.app).
+        if: ${{ vars.VITE_WIDGET_API_BASE_URL == '' }}
+        run: |
+          echo "::error::CI docker build requires the repository variable VITE_WIDGET_API_BASE_URL set to the public Railway API origin (e.g. https://webchat-ai-production-7e84.up.railway.app). Settings > Secrets and variables > Actions > Variables -> VITE_WIDGET_API_BASE_URL, then re-run."
           exit 1
 
       - name: Build API image (cached)
@@ -226,10 +237,6 @@ jobs:
           file: docker/Dockerfile.dashboard
           tags: webchat-dashboard:ci
           load: true
-          # Same canonical source as CD: the repository variable
-          # NEXT_PUBLIC_API_URL (public HTTPS API origin) is baked into the
-          # Next.js client bundle. WEBCHAT_ALLOW_LOCALHOST_BUILD stays "false"
-          # so the loopback/placeholder build guard is never relaxed.
           build-args: |
             NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
             WEBCHAT_ALLOW_LOCALHOST_BUILD=false
@@ -243,6 +250,8 @@ jobs:
           file: docker/Dockerfile.widget
           tags: webchat-widget:ci
           load: true
+          build-args: |
+            VITE_WIDGET_API_BASE_URL=${{ vars.VITE_WIDGET_API_BASE_URL }}
           cache-from: type=gha,scope=webchat-widget
           cache-to: type=gha,mode=max,scope=webchat-widget
 

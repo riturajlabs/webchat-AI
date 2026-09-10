@@ -1,164 +1,278 @@
 # WebChat AI — Production Deployment
 
-Docker Compose is the production deployment target. Images are built in GitHub
-Actions (CI for validation, CD for publish), scanned with Trivy, tagged with the
-git SHA for immutability, and pulled by `scripts/deploy.sh` onto the deploy host.
+The **current production deployment** is split between **Vercel** and **Railway**,
+with managed MongoDB and Redis. GitHub Actions is the CI / validation / security
+/ build-verification layer; it does **not** deploy the production system.
 
-> Kubernetes is explicitly **out of scope**. There is one deployment path: the
-> Docker Compose stack below.
+Docker Compose remains supported for **local development** and **optional
+self-hosting** (see the Docker Compose section below), but it is no longer the
+primary production deployment path.
 
-## Architecture
+## Current production architecture
 
 ```mermaid
 flowchart LR
-  subgraph CD["GitHub Actions (CI/CD)"]
-    CI["ci.yml — lint · typecheck · test · compose validation · Trivy"]
-    CDPUB["cd.yml / publish — build sha-tagged images"]
-    TRIVY["cd.yml / scan — Trivy HIGH/CRITICAL gate"]
-    DEPLOY["cd.yml / deploy — SSH deploy.sh (manual dispatch)"]
-    CI --> CDPUB --> TRIVY --> DEPLOY
-  end
+    subgraph VERCEL["Vercel"]
+        DASH["Dashboard — Next.js<br/>https://webchat-ai-dashboard.vercel.app"]
+        WIDGET["Widget — bundle<br/>https://webchat-ai-widget.vercel.app"]
+    end
 
-  subgraph GHCR["ghcr.io (immutable tags: sha-<git-sha>)"]
-    API_IMG["webchat-ai-api"]
-    WORKER_IMG["webchat-ai-worker"]
-    DASH_IMG["webchat-ai-dashboard"]
-    WIDGET_IMG["webchat-ai-widget"]
-  end
+    subgraph RAILWAY["Railway"]
+        API["API — FastAPI uvicorn<br/>https://webchat-ai-production-7e84.up.railway.app"]
+        WORKER["Worker — ARQ + crawler<br/>(no public HTTP)"]
+    end
 
-  CDPUB --> GHCR
+    subgraph DATA["Managed data layer"]
+        MONGO[("MongoDB Atlas")]
+        REDIS[("Managed Redis (RESP/TLS)")]
+    end
 
-  subgraph HOST["Deploy host — docker compose (base + compose.prod.yml)"]
-    API["api — uvicorn :8000<br/>read_only + no-new-privileges"]
-    WORKER["worker — ARQ jobs<br/>read_only + no-new-privileges"]
-    DASH["dashboard — Next.js :3000"]
-    WIDGET["widget — nginx :8080"]
-  end
+    subgraph CD["GitHub Actions — CI only"]
+        CI["ci.yml — lint · typecheck · test · compose validation · Docker builds · Trivy"]
+        CDPUB["cd.yml — GHCR publish (validation/security image gate)"]
+        TRIVY["cd.yml / scan — Trivy HIGH/CRITICAL gate"]
+        SELFHOST["cd.yml / deploy — optional SSH + Docker Compose self-hosting"]
+    end
 
-  API_IMG --> API
-  WORKER_IMG --> WORKER
-  DASH_IMG --> DASH
-  WIDGET_IMG --> WIDGET
+    BROWSER["Browser"] -->|"same-origin /api/* → rewritten to Railway"| DASH
+    DASH -->|"NEXT_PUBLIC_BACKEND_API_URL"| API
+    BROWSER -->|"widget bundle"| WIDGET
+    WIDGET -->|"VITE_WIDGET_API_BASE_URL / data-api-base-url"| API
 
-  subgraph EXTERNAL["English / managed services"]
-    MONGO[("MongoDB Atlas")]
-    REDIS[("Managed Redis (RESP/TLS)")]
-    MAILPIT2["Resend (email)"]
-  end
-
-  API --> MONGO
-  WORKER --> MONGO
-  API --> REDIS
-  WORKER --> REDIS
-  API --> MAILPIT2
-
-  BROWSER["Browser"] -->|HTTPS| RP["Reverse proxy"]
-  RP --> DASH
-  RP --> API
-  RP --> WIDGET
-  RP --> API
-
-  style MONGO fill:#0b3d2e
-  style REDIS fill:#3d200b
+    API --> MONGO
+    WORKER --> MONGO
+    API --> REDIS
+    WORKER --> REDIS
 ```
 
-Services started by production deploy: **api, worker, dashboard, widget**. The
-local `mongo` / `redis` / `mailpit` dev services are **not** started — the stack
-targets managed MongoDB/Redis.
+### Responsibilities
 
-## Artifacts
+| Component       | Platform | Responsibility                                                            |
+| --------------- | -------- | ------------------------------------------------------------------------- |
+| Dashboard       | Vercel   | Next.js marketing site + tenant dashboard + same-origin `/api/*` proxy    |
+| Widget          | Vercel   | Hosts `webchat-widget.iife.min.js` production bundle                      |
+| API             | Railway  | FastAPI: auth, RAG, billing, streaming, widget API (`/api/widget/v1`)     |
+| Worker          | Railway  | ARQ jobs: crawling (HTTP-first + Playwright), embeddings, email           |
+| Database        | Managed  | MongoDB Atlas: documents, chunks, vectors, tenant data                    |
+| Cache / Queue   | Managed  | Redis: caching, rate limits, ARQ queue, provider health                   |
+| CI / validation | GitHub   | `ci.yml` + `cd.yml` — quality, security, container scans (no prod deploy) |
 
-| Path                       | Purpose                                                                                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `docker/compose.yml`       | Single env-driven compose file (development + production settings; `${VAR-default}` interpolation so empty values in the env file are preserved). |
-| `docker/compose.prod.yml`  | Production overlay: immutable `image:` refs, `init: true`, read-only root FS (`api`/`worker`), bounded json-file logs.                            |
-| `scripts/deploy.sh`        | `deploy` / `migrate` / `rollback` / `status` with a production preflight (fail-fast on placeholders).                                             |
-| `.github/workflows/ci.yml` | Backend + frontend + infra validation + cached image builds + Trivy SARIF.                                                                        |
-| `.github/workflows/cd.yml` | Publish (GHCR, sha tags) → Trivy gate → deploy (manual dispatch, SSH host).                                                                       |
-| `.env.example`             | Full tracked template with safe placeholders; documents all config fields.                                                                        |
-| `.env.production.example`  | Production template that must be parameterized before boot.                                                                                       |
+### Production URL architecture
 
-## Development secrets (SEC-L03)
+Browser API calls to the Dashboard are **same-origin** under `/api/*`. The
+Next.js rewrite in `apps/dashboard/next.config.ts` proxies them server-side to
+Railway using `NEXT_PUBLIC_BACKEND_API_URL`. The Dashboard build-time origin
+`NEXT_PUBLIC_API_URL` is therefore the **Dashboard** URL, not the API URL.
 
-`.env.development` is untracked but has historically carried real AI provider
-keys (Gemini/Groq/OpenRouter). Treat it as a **throwaway, local-only** file:
+| Variable                        | Production value                                                  | Purpose                                             |
+| ------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`           | `https://webchat-ai-dashboard.vercel.app`                         | Origin the **browser** calls (same-origin `/api/*`) |
+| `NEXT_PUBLIC_BACKEND_API_URL`   | `https://webchat-ai-production-7e84.up.railway.app`               | Origin the Dashboard **server** proxies to          |
+| `VITE_WIDGET_API_BASE_URL`      | `https://webchat-ai-production-7e84.up.railway.app`               | Widget API base baked into the widget bundle        |
+| `WIDGET_API_BASE_URL` (backend) | `https://webchat-ai-production-7e84.up.railway.app`               | Runtime `data-api-base-url` in embed snippets       |
+| `WIDGET_SCRIPT_URL` (backend)   | `https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js` | Widget bundle URL in embed snippets                 |
+| `CORS_ORIGINS` (backend)        | `["https://webchat-ai-dashboard.vercel.app"]`                     | Backend CORS allow-list                             |
+| `ALLOWED_HOSTS` (backend)       | `webchat-ai-production-7e84.up.railway.app`                       | Trusted `Host` headers (API)                        |
 
-- Never copy `.env.development` (or its keys) into `.env.production`, CI
-  secrets, or any shared host.
-- Use restricted/test-scoped provider keys in non-production environments so a
-  dev-machine compromise cannot drive billing abuse. Rotate any key that may
-  have been shared or pasted into logs.
+### Auth / cookie model (ADR-003)
 
-## Production prerequisites
+Auth cookies are host-only (`SameSite=Strict`, no `Domain`, `Secure` in
+production) and only attach to the Railway API origin. Keeping browser API
+calls same-origin through the Dashboard `/api/*` rewrite preserves the cookie
+security model and lets the Next.js middleware gate `/dashboard`.
 
-- **MongoDB** — managed (Atlas). Authenticated URI embedded in `MONGODB_URI`, or
-  `MONGO_USERNAME`/`MONGO_PASSWORD`. Backups: `docs/DATABASE_BACKUP_RESTORE.md`.
-- **Redis** — managed, RESP/TLS (`rediss://...`). Password embedded in
-  `REDIS_URL` or via `REDIS_PASSWORD`.
-- **Secrets** — generate with `openssl rand -hex 32` (JWT_SECRET, etc.). Never
-  commit them; `.env.production` is gitignored.
-- **Reverse proxy** producing HTTPS in front of `:3000` (dashboard), `:8000`
-  (api) and `:8080` (widget). Set `TRUST_PROXY=true` and `ALLOWED_HOSTS` to the
-  public API hostname.
-- **Build-time frontend origin** — repo variables `NEXT_PUBLIC_API_URL` and
-  `VITE_WIDGET_API_BASE_URL` must be the public HTTPS API origin, or CD's
-  dashboard/widget builds fail (the loopback/placeholder guard is enforced).
+---
 
-## Environment setup on the deploy host
+## Deployment
 
-```bash
-cp .env.production.example .env.production   # then replace every placeholder
-openssl rand -hex 32                        # for JWT_SECRET
+### Vercel (Dashboard + Widget)
+
+Vercel deploys directly from the GitHub repository (`apps/dashboard`,
+`apps/widget`). No Docker images are involved.
+
+Set the following **environment variables** in the Vercel project settings
+(preferably for the production environment):
+
+**Dashboard:**
+
+| Variable                        | Production value                                                  |
+| ------------------------------- | ----------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`           | `https://webchat-ai-dashboard.vercel.app`                         |
+| `NEXT_PUBLIC_BACKEND_API_URL`   | `https://webchat-ai-production-7e84.up.railway.app`               |
+| `NEXT_PUBLIC_SITE_URL`          | `https://webchat-ai-dashboard.vercel.app`                         |
+| `NEXT_PUBLIC_WIDGET_SCRIPT_URL` | `https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js` |
+| `NEXT_PUBLIC_WIDGET_API_URL`    | `https://webchat-ai-production-7e84.up.railway.app/api/widget/v1` |
+| `NEXT_PUBLIC_DASHBOARD_URL`     | `https://webchat-ai-dashboard.vercel.app`                         |
+
+**Widget:**
+
+| Variable                   | Production value                                    |
+| -------------------------- | --------------------------------------------------- |
+| `VITE_WIDGET_API_BASE_URL` | `https://webchat-ai-production-7e84.up.railway.app` |
+
+### Railway (API + Worker)
+
+Railway deploys the Docker images built from `docker/Dockerfile.api` and
+`docker/Dockerfile.worker` directly from the GitHub repository.
+
+**API service:**
+
+- Command: `uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}`
+  (`docker/Dockerfile.api` already respects the Railway-injected `PORT`).
+- Health check: `https://webchat-ai-production-7e84.up.railway.app/api/health/live`
+  for liveness; `/api/health/ready` for readiness (fail-closed 503).
+- Set `TRUST_PROXY=true` (Railway is a trusted proxy) and the public
+  `ALLOWED_HOSTS`.
+
+**Worker service:**
+
+- Command: `python -m backend.workers` (no public HTTP).
+- Set the same backend environment as the API (MongoDB, Redis, AI keys,
+  payments). Keep the crawler settings aligned with the production profile:
+  `CRAWL_MAX_CONCURRENT=1`, `EMBEDDING_MAX_CONCURRENT_BATCHES=1`,
+  `CRAWL_NO_SANDBOX=true`, `CRAWL_HTTP_FIRST=true`.
+
+### Railway environment (both API and Worker)
+
+Set these in the Railway project environment (container env vars — no env file
+is shipped):
+
+```
+ENVIRONMENT=production
+DEBUG=false
+ENABLE_DOCS=false
+LOCAL_PRODUCTION_TEST=false
+COOKIE_SECURE=true
+TRUST_PROXY=true
+RATE_LIMIT_ENABLED=true
+PUBLIC_BASE_URL=https://webchat-ai-dashboard.vercel.app
+CORS_ORIGINS=["https://webchat-ai-dashboard.vercel.app"]
+ALLOWED_HOSTS=webchat-ai-production-7e84.up.railway.app
+JWT_SECRET=<real >=32-byte secret>
+MONGODB_URI=<authenticated Atlas URI>
+MONGODB_DB=webchat_ai
+REDIS_URL=<authenticated managed Redis URL>
+RESEND_API_KEY=<real key>
+EMAIL_FROM=<verified custom-domain sender>
+GEMINI_API_KEY=<real key>
+PAYMENT_PROVIDER=razorpay            # or stripe, with matching keys
+WIDGET_API_BASE_URL=https://webchat-ai-production-7e84.up.railway.app
+WIDGET_SCRIPT_URL=https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js
+SUPER_ADMIN_EMAILS=["<your email>"]
 ```
 
-`config.py` **fails fast** on any leftover placeholder (e.g. a `CHANGEME`-style
-`JWT_SECRET`), on loopback `ALLOWED_HOSTS`, or on unauthenticated
-MongoDB/Redis. `scripts/deploy.sh` re-validates the env file at deploy time.
+---
 
-## Build & local production test
+## CI/CD — what GitHub Actions does (and does not)
+
+GitHub Actions is the **CI / validation / security / build-verification** layer.
+
+- `ci.yml` runs on every push/PR: ruff, mypy, pytest, frontend lint/typecheck/
+  build/test, secret scan, Docker security posture, compose validation,
+  production-env validation, DB migrations against a real MongoDB, Docker image
+  builds (cached) scanned with Trivy, and the widget E2E (when `GEMINI_API_KEY`
+  is configured).
+- `cd.yml` publishes immutable `sha-<git-sha>` images to GHCR and scans them
+  with Trivy. This is retained as a validation/security gate and as the
+  artifact source for **optional self-hosting**; it is **not** how the current
+  Vercel/Railway production is deployed.
+- `cd.yml` also keeps a manual-dispatch SSH + Docker Compose deploy job as an
+  **optional self-hosting** path (see below). It self-skips when the SSH
+  secrets are not configured.
+
+Vercel and Railway deploy straight from the GitHub repository on push to
+`main`. No GHCR/SSH step fronts those deployments.
+
+### GitHub Actions variables
+
+Public build-time configuration lives in GitHub repository **Variables**
+(Settings → Secrets and variables → Actions → Variables):
+
+| Variable                   | Value                                               | Why CI needs it                               | Visibility |
+| -------------------------- | --------------------------------------------------- | --------------------------------------------- | ---------- |
+| `NEXT_PUBLIC_API_URL`      | `https://webchat-ai-dashboard.vercel.app`           | Dashboard Docker build gate (CI + CD publish) | public     |
+| `VITE_WIDGET_API_BASE_URL` | `https://webchat-ai-production-7e84.up.railway.app` | Widget Docker build gate (CI + CD publish)    | public     |
+
+Optional Dashboard embed origins (only required when the dashboard/embed generates snippets
+in CI builds — the app derives sensible defaults, so they are optional):
+
+| Variable                        | Value                                                             | Why                                                    | Visibility |
+| ------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------ | ---------- |
+| `NEXT_PUBLIC_SITE_URL`          | `https://webchat-ai-dashboard.vercel.app`                         | derived embed/SEO origins (optional)                   | public     |
+| `NEXT_PUBLIC_WIDGET_SCRIPT_URL` | `https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js` | embed snippet origin (optional)                        | public     |
+| `NEXT_PUBLIC_WIDGET_API_URL`    | `https://webchat-ai-production-7e84.up.railway.app/api/widget/v1` | embed snippet origin (optional)                        | public     |
+| `NEXT_PUBLIC_DASHBOARD_URL`     | `https://webchat-ai-dashboard.vercel.app`                         | embed snippet origin (optional)                        | public     |
+| `NEXT_PUBLIC_BACKEND_API_URL`   | `https://webchat-ai-production-7e84.up.railway.app`               | server rewrite target (optional; has built-in default) | public     |
+
+Secrets (config -> masked, private): `GEMINI_API_KEY` (widget E2E),
+`SSH_HOST` / `SSH_USER` / `SSH_KEY` (optional self-hosting only).
+
+---
+
+## Optional self-hosting with Docker Compose
+
+Docker Compose remains a first-class path for local development and optional
+self-hosting. Images are built locally or pulled as immutable `sha-<git-sha>`
+GHCR tags; the `compose.prod.yml` overlay pins `image:` refs, read-only root
+FS, `init: true`, and bounded logs.
+
+### Build & local production test
+
+Running a full local stack is a common source of accidental production writes.
+Use the right environment file per intent:
+
+| Environment file          | Purpose                                 | Data plane                                                             | Worker safety                                         |
+| ------------------------- | --------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------- |
+| `.env.development`        | ordinary local dev (`docker-up.sh`)     | local docker Mongo/Redis/Mailpit                                       | safe (local ARQ namespace `webchat_ai`)               |
+| `.env.production.sandbox` | SAFE production-STYLE local smoke tests | local docker Mongo/Redis/Mailpit, `MOCK` payments, zero external spend | safe (separate ARQ namespace `webchat_ai_sandbox`)    |
+| `.env.production`         | the REAL live configuration             | **MongoDB Atlas, Upstash Redis, live payments, real AI/Resend**        | **DANGER: worker consumes the real production queue** |
+
+> **WARNING**
+> `.env.production` contains REAL production credentials. It must NEVER be used
+> for ordinary local development. A worker started against it consumes the real
+> production ARQ queue. The smoke test and operator scripts REFUSE it unless you
+> opt in explicitly (`--prod` / `--allow-production` / explicit `--env-file`).
 
 ```bash
-# Full local production stack including dev Mongo/Redis/Mailpit:
-docker compose --env-file .env.production -f docker/compose.yml up -d --build
+# SAFE local production-STYLE stack incl. local Mongo/Redis/Mailpit (no prod access):
+docker compose --env-file .env.production.sandbox -f docker/compose.yml up -d --build
 
 # Smoke tests (10 checks against the running stack):
+#   (defaults to .env.production.sandbox; refuses .env.production without --prod)
 ./scripts/local-production-smoke-test.sh
 ./scripts/check-production-docker.sh
 ./scripts/check-docker-security.sh
 ./scripts/check-secrets.sh
 ```
 
-## Deploying
+> **Sandbox limitation (honest note)**
+> `.env.production.sandbox` is `ENVIRONMENT=development` with `MOCK` payments and
+> empty AI keys because `backend/core/config.py` rejects a keyless production
+> mode (`PAYMENT_PROVIDER=mock` and missing generation keys fail fast; see
+> `tests/test_config.py::test_local_production_test_still_rejects_mock_payments`).
+> It therefore cannot be byte-identical to the real production mode. To run a
+> true `ENVIRONMENT=production` local sim, an operator must manually supply:
+> a disposable MongoDB/Redis, a TEST-mode payment gateway key, one real AI
+> generation key, and set `ENVIRONMENT=production` + `LOCAL_PRODUCTION_TEST=true`
+> (+ the real public URLs). `LOCAL_PRODUCTION_TEST=true` only relaxes loopback /
+> URL validators; payment, AI, JWT, host and rate-limit checks still apply.
 
-### Automated (recommended)
+### Self-hosted deploy (optional, manual)
 
 ```bash
-# 1. Push to main (or tag v1.2.0) → cd.yml / publish + scan run automatically.
-# 2. Deploy the published SHA to production:
+# 1. Publish immutable sha-<git-sha> images (GHCR) via cd.yml / publish, or
+#    build locally.
+# 2. Deploy a published SHA to your own host:
 gh workflow run cd.yml --ref <sha-or-tag>        # = manual "deploy" dispatch
-```
-
-The deploy job (protect it with an environment / reviewer rule) SSHes to the
-host and runs, in order:
-
-1. **preflight** — env file is production, no placeholders, no
-   `LOCAL_PRODUCTION_TEST=true`;
-2. **pull** — the four immutable `sha-<git-sha>` images;
-3. **migrate** — `python -m backend.migrations` as a one-shot container
-   (**before** the rollout, idempotent, exit 0/1);
-4. **rollout** — `docker compose up -d api worker dashboard widget`;
-5. **health wait** — poll `http://127.0.0.1:8000/api/health/ready` for up to
-   180s; on failure it prints the rollback command and exits non-zero.
-
-### Manual
-
-```bash
+#    (or run scripts/deploy.sh on the host directly)
 ./scripts/deploy.sh deploy --env-file .env.production --tag sha-<git-sha> \
     --namespace your-org/repo
-./scripts/deploy.sh status  --env-file .env.production
 ```
 
-## Rolling back
+The deploy job SSHes to the host and runs: preflight → pull → migrate →
+rollout → health wait (poll `http://127.0.0.1:8000/api/health/ready`).
+
+### Rolling back (self-hosted)
 
 Immutable sha tags make rollback a single re-point — no rebuild:
 
@@ -166,12 +280,7 @@ Immutable sha tags make rollback a single re-point — no rebuild:
 ./scripts/deploy.sh rollback --env-file .env.production --tag sha-<previous-good-sha>
 ```
 
-The old image is still in GHCR. Re-run migrations only if the older release
-contains index/migration changes newer than the running schema (migrations are
-idempotent, so re-running is safe). A failed health check does **not** start the
-new containers automatically; operators roll back deliberately.
-
-## Health checks & observability
+### Health checks & observability
 
 | Service   | Probe                                      | Meaning                                                    |
 | --------- | ------------------------------------------ | ---------------------------------------------------------- |
@@ -181,54 +290,41 @@ new containers automatically; operators roll back deliberately.
 | dashboard | `wget :3000`                               | server responds                                            |
 | widget    | `wget --spider webchat-widget.iife.min.js` | bundle served                                              |
 
-Logs are JSON (`LOG_LEVEL`), bounded (`max-size 10m`, 3 files). Follow a
-service: `docker compose logs -f api`. Container introspection:
-`docker container inspect webchat-api` (read-only FS, `no-new-privileges`,
-`cap_drop: ALL`).
-
-### Prometheus & alerting (OBS-03)
-
 The API exposes Prometheus text format at `/metrics` (root path, no `/api`
-prefix). Ship the reference scraping + alerting configuration from this
-repository:
+prefix). Reference scraping + alerting config ships in `docker/prometheus/`.
 
-- `docker/prometheus/prometheus.yml` — scrape config (`metrics_path: /metrics`,
-  target `api:8000` inside the Docker network).
-- `docker/prometheus/alerts.yml` — alert rules (5xx rate, chat/LLM/AI-provider
-  failures, RAG fallback dominance, empty retrievals, latency percentiles,
-  MongoDB p95, crawl failures). Every metric referenced is validated against
-  `backend/core/metrics.py` by `tests/test_alert_rules.py`.
-
-Wire them into your own Prometheus deployment (in/out of the compose stack as
-desired): set `rule_files` to the alerts file, point an Alertmanager to your
-notification channel, and add the scrape job pointing at the API service.
-
-Log records carry `request_id` and, once a request authenticates, `tenant_id`
-so per-tenant incidents can be filtered without touching the payload data.
+---
 
 ## Production checklist
 
-- [ ] `.env.production`, copies as `.env.production` only (gitignored)
-- [ ] Real secrets everywhere; `./scripts/check-secrets.sh` passes
-- [ ] `ENVIRONMENT=production`, `DEBUG=false`, `ENABLE_DOCS=false`
-- [ ] `COOKIE_SECURE=true`, `RATE_LIMIT_ENABLED=true`, `TRUST_PROXY=true`
-- [ ] `ALLOWED_HOSTS` = public API hostname; no loopback, no `*`
+- [ ] Vercel Dashboard env vars set (`NEXT_PUBLIC_API_URL` = Dashboard URL,
+      `NEXT_PUBLIC_BACKEND_API_URL` = Railway API URL)
+- [ ] Vercel Widget env var set (`VITE_WIDGET_API_BASE_URL` = Railway API URL)
+- [ ] Railway API + Worker env vars set (`ENVIRONMENT=production`,
+      `LOCAL_PRODUCTION_TEST` unset, `COOKIE_SECURE=true`, `TRUST_PROXY=true`)
+- [ ] `ALLOWED_HOSTS` = Railway API hostname; no loopback, no `*`
 - [ ] MongoDB + Redis authenticated (managed)
-- [ ] `LOCAL_PRODUCTION_TEST` unset / not `true`
-- [ ] Repo variables `NEXT_PUBLIC_API_URL` / `VITE_WIDGET_API_BASE_URL` = real HTTPS API origin
+- [ ] Real secrets everywhere; `./scripts/check-secrets.sh` passes
+- [ ] Repo variables `NEXT_PUBLIC_API_URL` (Dashboard URL) /
+      `VITE_WIDGET_API_BASE_URL` (Railway API URL) set in GitHub Actions
 - [ ] AI spend protection limits set (non-zero daily/monthly token budgets)
-- [ ] Deploy host has `SSH_HOST` / `SSH_USER` / `SSH_KEY` secrets + repo checkout
-- [ ] Trivy passes on all four images (ci.yml + cd.yml)
-- [ ] Nightly/documented MongoDB backup procedure (see DATABASE_BACKUP_RESTORE.md)
-- [ ] Reverse proxy terminates TLS → `:3000`/`:8000`/`:8080`
+- [ ] Trivy passes on the built images (ci.yml + cd.yml)
+- [ ] Health checks reachable: `/api/health/live` + `/api/health/ready`
 
 ## Troubleshooting
 
-- **Containers never become healthy** — `docker compose logs api`; verify
-  MongoDB/Redis reachable from inside the container
-  (`docker compose exec api python -c "from backend.core.database import MongoDB; import asyncio; print(asyncio.run(MongoDB.ping()))"`).
-- **Outbound TLS through a VPN drops** — set `DOCKER_BRIDGE_MTU` (e.g. `1280`).
-- **Migration fails** — MongoDB unreachable or index creation failed: fix
-  connectivity and re-run `scripts/deploy.sh migrate` (idempotent).
-- **Dashboard built with loopback baked in** — the guard rejects it; set
-  `NEXT_PUBLIC_API_URL` (repo variable) to the HTTPS API origin and rebuild.
+- **CI fails on `NEXT_PUBLIC_API_URL`** — set the GitHub Actions repository
+  variable `NEXT_PUBLIC_API_URL` to `https://webchat-ai-dashboard.vercel.app`
+  (the Dashboard origin — not the Railway API URL). The Dashboard build guard
+  rejects loopback/placeholder values by design.
+- **Dashboard `/api/*` not proxying** — verify `NEXT_PUBLIC_BACKEND_API_URL`
+  (database origin to Railway) and that the rewrite is 1:1 (no `/api/api`).
+- **Widget cannot reach the API from a customer site** — verify
+  `VITE_WIDGET_API_BASE_URL` at build time and `data-api-base-url` at runtime;
+  allow the API origin in the customer-page CSP `connect-src`.
+- **Containers never become healthy (self-hosted)** — `docker compose logs
+api`; verify MongoDB/Redis reachable from inside the container.
+- **Outbound TLS through a VPN drops (self-hosted)** — set
+  `DOCKER_BRIDGE_MTU` (e.g. `1280`).
+- **Migration fails (self-hosted)** — MongoDB unreachable or index creation
+  failed: fix connectivity and re-run `scripts/deploy.sh migrate` (idempotent).

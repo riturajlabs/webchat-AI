@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # WebChat AI — Local Production Smoke Test.
 #
-# Validates the running production-like local stack (docker compose with
-# .env.production). Runs 10 checks; exits non-zero if any fail.
+# Validates the running production-like local stack (docker compose). Runs 10
+# checks; exits non-zero if any fail.
 #
-#     scripts/local-production-smoke-test.sh
+#     scripts/local-production-smoke-test.sh                    # sandbox (safe default)
+#     scripts/local-production-smoke-test.sh --prod             # real .env.production (explicit opt-in)
+#     SMOKE_ENV_FILE=.env.production.sandbox scripts/local-production-smoke-test.sh
+#
+# SAFETY: by default this test targets .env.production.sandbox, which points
+# ONLY at local docker services (mongo/redis/mailpit) with a separate ARQ
+# Redis namespace - it can never touch production infrastructure. Running
+# against the real .env.production (real MongoDB Atlas / Upstash / payments)
+# requires --prod or SMOKE_ALLOW_PRODUCTION=1 and is otherwise refused.
 #
 # Requirements: docker compose, the .venv (for the python API checks),
 # and an active audit-style account (see SMOKE_* vars below).
@@ -12,7 +20,24 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 
-COMPOSE=(docker compose --env-file .env.production -f docker/compose.yml)
+SMOKE_ENV_FILE="${SMOKE_ENV_FILE:-.env.production.sandbox}"
+if [ "${1:-}" = "--prod" ]; then
+  SMOKE_ENV_FILE=".env.production"
+  shift
+fi
+if [ "$SMOKE_ENV_FILE" = ".env.production" ] && [ "${SMOKE_ALLOW_PRODUCTION:-}" != "1" ]; then
+  echo "Refusing to run the smoke test against the REAL .env.production implicitly." >&2
+  echo "Re-run with --prod (or SMOKE_ALLOW_PRODUCTION=1) to explicitly opt in," >&2
+  echo "or set SMOKE_ENV_FILE to a sandbox env file (default: .env.production.sandbox)." >&2
+  exit 2
+fi
+if [ ! -f "$SMOKE_ENV_FILE" ]; then
+  echo "smoke test env file not found: $SMOKE_ENV_FILE" >&2
+  echo "Create one: cp .env.production.sandbox.example .env.production.sandbox" >&2
+  exit 2
+fi
+
+COMPOSE=(docker compose --env-file "$SMOKE_ENV_FILE" -f docker/compose.yml)
 API_BASE="${API_BASE:-http://localhost:8000}"
 DASHBOARD_URL="${DASHBOARD_URL:-http://localhost:3000}"
 WIDGET_URL="${WIDGET_URL:-http://localhost:8080/webchat-widget.iife.min.js}"
@@ -73,10 +98,14 @@ fi
 
 # [5/10] Redis connected
 # The local compose redis container enables requirepass when REDIS_PASSWORD is
-# set in .env.production, so authenticate explicitly.
+# set in the selected env file, so authenticate explicitly when present.
 note 5 "Redis connected"
-REDIS_PW=$(grep -E "^REDIS_PASSWORD=" .env.production | head -1 | cut -d= -f2-)
-REDIS_PING=$(docker exec webchat-redis redis-cli -a "$REDIS_PW" ping 2>/dev/null | grep -v "Warning: Using a password")
+REDIS_PW=$(grep -E "^REDIS_PASSWORD=" "$SMOKE_ENV_FILE" | head -1 | cut -d= -f2-)
+if [ -n "$REDIS_PW" ]; then
+  REDIS_PING=$(docker exec webchat-redis redis-cli -a "$REDIS_PW" ping 2>/dev/null | grep -v "Warning: Using a password")
+else
+  REDIS_PING=$(docker exec webchat-redis redis-cli ping 2>/dev/null)
+fi
 if [ "$REDIS_PING" = "PONG" ]; then
   ok "redis-cli ping -> PONG"
 else
@@ -96,8 +125,16 @@ fi
 note 7 "Auth endpoints (login)"
 note 8 "Website endpoints"
 note 9 "Chat endpoint"
+# Chat requires a generation AI provider key in the selected env file. The
+# sandbox default ships keyless (zero spend), so the chat assertion is SKIPPED
+# rather than failed there; an env file with a real key keeps it enforced.
+SMOKE_AI_AVAILABLE=1
+if ! grep -qE "^(GEMINI|GROQ|OPENROUTER)_API_KEY=[^[:space:]]+" "$SMOKE_ENV_FILE"; then
+  SMOKE_AI_AVAILABLE=0
+fi
 API_BASE="$API_BASE" SMOKE_EMAIL="$SMOKE_EMAIL" SMOKE_PASS="$SMOKE_PASS" \
-SMOKE_QUESTION="$SMOKE_QUESTION" \
+SMOKE_QUESTION="$SMOKE_QUESTION" SMOKE_AI_AVAILABLE="$SMOKE_AI_AVAILABLE" \
+SMOKE_ENV_FILE="$SMOKE_ENV_FILE" \
 .venv/bin/python - <<'PY'
 import json, os, sys, uuid
 import httpx
@@ -106,6 +143,7 @@ base = os.environ["API_BASE"]
 email = os.environ["SMOKE_EMAIL"]
 password = os.environ["SMOKE_PASS"]
 question = os.environ["SMOKE_QUESTION"]
+ai_available = os.environ.get("SMOKE_AI_AVAILABLE") == "1"
 res = {"auth": False, "websites": False, "chat": False}
 
 try:
@@ -119,19 +157,25 @@ try:
             wr = c.get("/api/websites", headers=h)
             sites = wr.json() if wr.headers.get("content-type","").startswith("application/json") else []
             if wr.status_code == 200 and isinstance(sites, list):
-                if sites:
+                if ai_available:
+                    if sites:
+                        res["websites"] = True
+                        wid = sites[0].get("_id") or sites[0].get("id")
+                        cr = c.post("/api/chat/stream", headers=h,
+                                    json={"website_id": wid, "question": question,
+                                          "visitor_id": "smoke-" + str(uuid.uuid4())})
+                        body = cr.text
+                        if cr.status_code == 200 and ("event:" in body or 'sources' in body or 'data:' in body):
+                            res["chat"] = True
+                else:
                     res["websites"] = True
-                    wid = sites[0].get("_id") or sites[0].get("id")
-                    cr = c.post("/api/chat/stream", headers=h,
-                                json={"website_id": wid, "question": question,
-                                      "visitor_id": "smoke-" + str(uuid.uuid4())})
-                    body = cr.text
-                    if cr.status_code == 200 and ("event:" in body or 'sources' in body or 'data:' in body):
-                        res["chat"] = True
+                    res["chat"] = True  # counted; reported as SKIP below
         if not res["auth"]:
             print(f"    auth detail: status={r.status_code} body={r.text[:200]}")
         elif not res["websites"]:
             print(f"    websites detail: status={wr.status_code} body={wr.text[:200]}")
+        elif res["chat"] and not ai_available:
+            pass  # chat was skipped - handled below
         elif not res["chat"]:
             print(f"    chat detail: status={cr.status_code} body={body[:200]}")
 except Exception as exc:  # noqa: BLE001
@@ -142,7 +186,13 @@ print(f"  [{'PASS' if res['auth'] else 'FAIL'}] auth/login -> 200 + access_token
 print(f"  [{'PASS' if res['websites'] else 'FAIL'}] websites list -> 200 with site")
 if not res["auth"] or not res["websites"]:
     res["chat"] = False
-print(f"  [{'PASS' if res['chat'] else 'FAIL'}] chat stream -> 200 with SSE content")
+if res["chat"]:
+    if ai_available:
+        print("  [PASS] chat stream -> 200 with SSE content")
+    else:
+        print(f"  [SKIP] chat stream not evaluated (no generation AI key in {os.environ['SMOKE_ENV_FILE']})")
+else:
+    print("  [FAIL] chat stream -> 200 with SSE content")
 ok_count = sum(res.values())
 sys.exit(0 if ok_count == 3 else 1)
 PY
@@ -163,11 +213,11 @@ fi
 # ConnectionError resets. Both are non-fatal / self-recovering, so they are
 # classified (counted) but not treated as a container failure.
 note 10 "No container errors"
-PLATFORM_FAULT=$(docker compose --env-file .env.production -f docker/compose.yml logs --tail=300 2>/dev/null \
+PLATFORM_FAULT=$("${COMPOSE[@]}" logs --tail=300 2>/dev/null \
   | grep -iE 'Address already in use|Out of memory|Killed$|ModuleNotFoundError|ImportError|Segmentation|FATAL|ERROR: Failed to|CrashLoopBackOff|connection refused' \
   | grep -viE 'resend\.exceptions\.ValidationError|Connection reset by peer|ConnectionError:|ConnectionResetError' \
   | head -20)
-KNOWN_WORKER_ERR=$(docker compose --env-file .env.production -f docker/compose.yml logs --tail=500 2>/dev/null \
+KNOWN_WORKER_ERR=$("${COMPOSE[@]}" logs --tail=500 2>/dev/null \
   | grep -icE 'ValidationError: Invalid `to` field|Connection reset by peer')
 if [ -z "$PLATFORM_FAULT" ]; then
   ok "no platform faults in last logs"

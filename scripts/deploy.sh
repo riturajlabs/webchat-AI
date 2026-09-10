@@ -11,6 +11,11 @@
 #   scripts/deploy.sh rollback --env-file .env.production --tag <previous-sha> [--registry ghcr.io] [--namespace your-org]
 #   scripts/deploy.sh status  --env-file .env.production
 #
+# PRODUCTION SAFETY: the mutating actions (deploy / migrate / rollback) target
+# real production infrastructure and are REFUSED unless --env-file is passed
+# explicitly (this script's default is .env.production). This also matches the
+# cd.yml self-hosted deploy job, which always passes --env-file explicitly.
+#
 # deploy = validate -> pull images -> run migrations -> compose up -> wait for
 #          health; on failure it exits non-zero and prints the rollback command.
 # migrate = run the one-shot migration only (idempotent; safe to re-run).
@@ -53,6 +58,18 @@ env_val() {
   return 1
 }
 
+# Mutating production actions require an EXPLICIT --env-file (never the
+# implicit default) so an accidental `deploy.sh deploy --tag X` cannot silently
+# target real production infrastructure. cd.yml's self-hosted deploy job passes
+# --env-file .env.production explicitly and therefore passes this guard.
+require_explicit_production_env() {
+  if [ "$ENV_FILE" = "$DEFAULT_ENV_FILE" ] && [ "${ENV_FILE_EXPLICIT:-0}" -ne 1 ]; then
+    bad "Refusing to '$ACTION' against production infrastructure implicitly."
+    bad "'$0' defaults to '$DEFAULT_ENV_FILE'; pass --env-file $DEFAULT_ENV_FILE explicitly to confirm this targets PRODUCTION."
+    exit 1
+  fi
+}
+
 preflight() {
   local ENV_FILE="$1"
   [ -f "$ENV_FILE" ] || { bad "env file not found: $ENV_FILE"; exit 1; }
@@ -84,10 +101,10 @@ preflight() {
 
 parse_args() {
   ACTION="${1:-}"; shift || true
-  ENV_FILE="$DEFAULT_ENV_FILE"; IMAGE_TAG=""; REGISTRY="ghcr.io"; NAMESPACE=""
+  ENV_FILE="$DEFAULT_ENV_FILE"; ENV_FILE_EXPLICIT=0; IMAGE_TAG=""; REGISTRY="ghcr.io"; NAMESPACE=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --env-file) ENV_FILE="$2"; shift 2 ;;
+      --env-file) ENV_FILE="$2"; ENV_FILE_EXPLICIT=1; shift 2 ;;
       --tag)      IMAGE_TAG="$2"; shift 2 ;;
       --registry) REGISTRY="$2"; shift 2 ;;
       --namespace) NAMESPACE="$2"; shift 2 ;;
@@ -132,6 +149,7 @@ ensure_network() {
 }
 
 migrate() {
+  require_explicit_production_env
   preflight "$ENV_FILE"
   [ -n "$IMAGE_TAG" ] || { bad "--tag is required"; exit 1; }
   ensure_network
@@ -154,6 +172,7 @@ migrate() {
 }
 
 deploy() {
+  require_explicit_production_env
   preflight "$ENV_FILE"
   [ -n "$IMAGE_TAG" ] || { bad "--tag is required"; exit 1; }
 
@@ -200,6 +219,7 @@ wait_healthy() {
 }
 
 rollback() {
+  require_explicit_production_env
   preflight "$ENV_FILE"
   [ -n "$IMAGE_TAG" ] || { bad "--tag is required"; exit 1; }
   ok "rolling back to immutable tag $IMAGE_TAG"

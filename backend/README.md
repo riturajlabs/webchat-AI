@@ -12,8 +12,9 @@ widget API, billing, and the ARQ background worker.
 - **Version:** 0.1.0
 
 This README is the developer-facing orientation for the backend. The platform
-overview and quick start live in the [root README](../README.md); the production
-deployment path (GHCR images, compose, rollback) is documented in
+overview and quick start live in the [root README](../README.md); the current
+Vercel/Railway production deployment and the optional Docker Compose
+self-hosting path are documented in
 [docs/deployment/README.md](../docs/deployment/README.md).
 
 ## Repository layout
@@ -267,7 +268,9 @@ of Done.
 
 ## Production
 
-The backend runs as two containers — `api` (uvicorn) and `worker` (ARQ) — built
-to immutable `sha-<git-sha>` GHCR images. Migrations run as a one-shot container
-before rollout. Details, health probes, Prometheus alerting, and troubleshooting:
+The backend runs as two Railway services — `api` (uvicorn,
+`docker/Dockerfile.api`, `uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}`)
+and `worker` (ARQ, `python -m backend.workers`, `docker/Dockerfile.worker`) —
+backed by managed MongoDB/Redis. Health probes, the Vercel/Railway environment
+contract, and the optional Docker Compose self-hosting path are documented in
 [docs/deployment/README.md](../docs/deployment/README.md).
