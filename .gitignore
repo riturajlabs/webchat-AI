@@ -56,3 +56,5 @@ tls/
 playwright-report/
 test-results/
 .coverage
+/.audit-tmp/
+/.bench-output/

@@ -6,20 +6,11 @@ import { useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/features/auth/auth-context';
 import { getLandingDestination } from '@/lib/landing-navigation';
 
 import { MARKETING_NAV_LINKS } from './navbar';
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) {
-    return '?';
-  }
-  const first = parts[0]?.[0] ?? '';
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
-  return (first + last).toUpperCase();
-}
 
 export function MobileMenu() {
   const { isAuthenticated, status, user, logout } = useAuth();
@@ -120,9 +111,11 @@ export function MobileMenu() {
               isAuthenticated ? (
                 <>
                   <div className="flex items-center gap-3 px-3 py-2">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-600 text-sm font-semibold text-white">
-                      {initials(user?.name ?? '?')}
-                    </span>
+                    <Avatar
+                      name={user?.name}
+                      avatarUrl={user?.avatar_url}
+                      className="h-9 w-9 text-sm"
+                    />
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium">{user?.name}</p>
                       <p className="truncate text-xs text-muted-foreground">{user?.email}</p>

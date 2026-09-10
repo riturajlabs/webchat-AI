@@ -1,7 +1,7 @@
 """Unit tests for AccountService account-deletion cascade logic (SEC-L02 gate)."""
 
 import pytest
-from backend.core.errors import EmailNotVerifiedError, InvalidCredentialsError
+from backend.core.errors import InvalidCredentialsError
 from backend.core.security import utcnow
 from backend.models.audit_log import AUDIT_ACCOUNT_DELETED
 from backend.models.user import User
@@ -70,6 +70,7 @@ async def test_delete_account_purges_tenant_and_sessions_and_audits() -> None:
         principal=_principal(user),
         ip_address="1.2.3.4",
         user_agent="pytest",
+        password=VALID_PASSWORD,
     )
 
     assert result.email == user.email
@@ -78,6 +79,26 @@ async def test_delete_account_purges_tenant_and_sessions_and_audits() -> None:
     # An ACCOUNT_DELETED audit entry survives for review after the tenant purge.
     assert len(env.audit.logs) == 2  # REGISTER + ACCOUNT_DELETED
     assert env.audit.logs[-1].action == AUDIT_ACCOUNT_DELETED
+
+
+async def test_delete_account_rejects_wrong_password_without_purging() -> None:
+    # SEC-L02: deletion is confirmed with the account password; a wrong
+    # password must fail before anything is purged and must not reveal whether
+    # the account exists (generic credential error).
+    env = build_auth_env()
+    purge = FakeTenantPurgeRepository()
+    service = _build_service(env, purge)
+    user = await _register(env)
+
+    with pytest.raises(InvalidCredentialsError):
+        await service.delete_account(
+            principal=_principal(user),
+            ip_address="1.2.3.4",
+            user_agent="pytest",
+            password="WrongPass1!",
+        )
+    assert purge.purged_tenants == []
+    assert purge.purged_user_sessions == []
 
 
 async def test_delete_account_unknown_user_raises_and_does_not_purge() -> None:
@@ -93,6 +114,7 @@ async def test_delete_account_unknown_user_raises_and_does_not_purge() -> None:
             principal=_principal(user),
             ip_address=None,
             user_agent=None,
+            password=VALID_PASSWORD,
         )
     assert purge.purged_tenants == []
     assert purge.purged_user_sessions == []
@@ -120,24 +142,38 @@ async def test_delete_account_rejects_tenant_mismatch() -> None:
             principal=forged,
             ip_address=None,
             user_agent=None,
+            password=VALID_PASSWORD,
         )
     assert purge.purged_tenants == []
     assert purge.purged_user_sessions == []
 
 
-async def test_delete_account_rejects_unverified_email() -> None:
-    # SEC-L02: destroying an account is a sensitive write and requires a
-    # verified email (an attacker using someone else's address cannot purge).
+async def test_delete_account_requires_the_account_password() -> None:
+    # SEC-L02: the password gate replaces the old verified-email gate. An
+    # unverified account is still deletable by its owner (who proves ownership
+    # with the password) — an attacker who registered with someone else's
+    # address cannot purge what they cannot authenticate to.
     env = build_auth_env()
     purge = FakeTenantPurgeRepository()
     service = _build_service(env, purge)
     user = await _register_unverified(env)
 
-    with pytest.raises(EmailNotVerifiedError):
+    with pytest.raises(InvalidCredentialsError):
         await service.delete_account(
             principal=_principal(user),
             ip_address="1.2.3.4",
             user_agent="pytest",
+            password="WrongPass1!",
         )
     assert purge.purged_tenants == []
     assert purge.purged_user_sessions == []
+
+    result = await service.delete_account(
+        principal=_principal(user),
+        ip_address="1.2.3.4",
+        user_agent="pytest",
+        password=VALID_PASSWORD,
+    )
+    assert result.email == user.email
+    assert purge.purged_tenants == [user.tenant_id]
+    assert purge.purged_user_sessions == [user.id]

@@ -6,6 +6,7 @@ import { Bot, ChevronDown, LayoutDashboard, LogOut } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/features/auth/auth-context';
 import { getLandingDestination } from '@/lib/landing-navigation';
 import { cn } from '@/lib/utils';
@@ -30,16 +31,6 @@ export function BrandMark() {
       WebChat AI
     </Link>
   );
-}
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) {
-    return '?';
-  }
-  const first = parts[0]?.[0] ?? '';
-  const last = parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '';
-  return (first + last).toUpperCase();
 }
 
 function UserMenu({ onLogout, isLoggingOut }: { onLogout: () => void; isLoggingOut: boolean }) {
@@ -86,9 +77,7 @@ function UserMenu({ onLogout, isLoggingOut }: { onLogout: () => void; isLoggingO
         onClick={() => setOpen((value) => !value)}
         className="inline-flex items-center gap-1.5 rounded-md px-1 py-1 transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white">
-          {initials(user?.name ?? '?')}
-        </span>
+        <Avatar name={user?.name} avatarUrl={user?.avatar_url} className="h-8 w-8 text-xs" />
         <ChevronDown
           className={cn('size-4 text-muted-foreground transition-transform', open && 'rotate-180')}
           aria-hidden="true"

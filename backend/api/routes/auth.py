@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, Request, Response
 
 from backend.api.deps import (
+    account_delete_limiter,
     client_ip,
     current_user,
     forgot_password_limiter,
@@ -32,6 +33,7 @@ from backend.core.errors import InvalidCredentialsError
 from backend.core.security import generate_csrf_token
 from backend.schemas.auth import (
     AuthResponse,
+    DeleteAccountRequest,
     ForgotPasswordRequest,
     LoginRequest,
     MessageResponse,
@@ -271,21 +273,25 @@ async def update_me(
 
 @router.delete("/me", response_model=MessageResponse)
 async def delete_me(
+    body: DeleteAccountRequest,
     request: Request,
     response: Response,
     principal: Annotated[Principal, Depends(current_user)],
     account: Annotated[AccountService, Depends(get_account_service)],
+    _: Annotated[None, Depends(account_delete_limiter)],
 ) -> MessageResponse:
     """Irreversibly delete the signed-in user's account and its data.
 
-    The deletion is always scoped to the authenticated user's own private
-    tenant (resolved from the verified principal, never from request input).
-    The session cookies are cleared once the purge completes.
+    The caller must confirm the account password (ownership proof). The
+    deletion is always scoped to the authenticated user's own private tenant
+    (resolved from the verified principal, never from request input). The
+    session cookies are cleared once the purge completes.
     """
     await account.delete_account(
         principal=principal,
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
+        password=body.password,
     )
     _clear_session_cookies(response)
     return MessageResponse(message="Your account has been deleted.")

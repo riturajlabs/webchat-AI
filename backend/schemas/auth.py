@@ -186,6 +186,20 @@ class UpdateProfileRequest(BaseModel):
         return value
 
 
+class DeleteAccountRequest(BaseModel):
+    """Password re-confirmation for irreversible account deletion (SEC-L02).
+
+    Destroying an account removes the tenant and every document it owns, so the
+    caller must prove ownership of the account by presenting its password
+    (checked against the stored hash in ``AccountService.delete_account``). The
+    password policy is deliberately not re-enforced here: an existing account
+    may predate the current policy, and the field only needs to be non-empty to
+    be verifiable.
+    """
+
+    password: str = Field(min_length=1, max_length=200)
+
+
 class AuthResponse(BaseModel):
     """Access token + cookies data returned by register/login."""
 

@@ -6,7 +6,6 @@ import { AlertTriangle, Check, Loader2, Monitor, Moon, Sun, X } from 'lucide-rea
 import { useTheme } from 'next-themes';
 
 import { api } from '@/lib/api';
-import { clearSession } from '@/lib/session';
 import { useAuth } from '@/features/auth/auth-context';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -69,22 +68,25 @@ function DeleteAccountDialog({
   open,
   onOpenChange,
   email,
+  password,
+  onPasswordChange,
   onConfirm,
   isPending,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   email: string;
+  password: string;
+  onPasswordChange: (password: string) => void;
   onConfirm: () => void;
   isPending: boolean;
 }) {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [confirmation, setConfirmation] = useState('');
   const close = () => onOpenChange(false);
 
   useAccessibleDialog({ open, onClose: close, contentRef });
 
-  const matches = confirmation.trim() === email;
+  const canConfirm = password.length > 0;
 
   if (!open) {
     return null;
@@ -117,8 +119,10 @@ function DeleteAccountDialog({
                 Delete account
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                This permanently deletes your account, your workspace and all of its data (websites,
-                documents, conversations, API keys and more). This action cannot be undone.
+                This permanently deletes your account for{' '}
+                <span className="font-medium">{email}</span> — your workspace and all of its data
+                (websites, documents, conversations, API keys and more). This action cannot be
+                undone.
               </p>
             </div>
           </div>
@@ -134,15 +138,13 @@ function DeleteAccountDialog({
         </div>
 
         <div className="mb-5 space-y-1.5">
-          <Label htmlFor="delete-account-confirm">
-            Type <span className="font-semibold">{email}</span> to confirm
-          </Label>
+          <Label htmlFor="delete-account-password">Enter your password to confirm</Label>
           <Input
-            id="delete-account-confirm"
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            placeholder={email}
-            autoComplete="off"
+            id="delete-account-password"
+            type="password"
+            value={password}
+            onChange={(event) => onPasswordChange(event.target.value)}
+            autoComplete="current-password"
             disabled={isPending}
           />
         </div>
@@ -154,7 +156,7 @@ function DeleteAccountDialog({
           <Button
             variant="destructive"
             onClick={() => void onConfirm()}
-            disabled={!matches || isPending}
+            disabled={!canConfirm || isPending}
             data-testid="delete-account-confirm"
           >
             {isPending ? (
@@ -173,10 +175,11 @@ function DeleteAccountDialog({
 }
 
 function DangerZone() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isPending, setIsPending] = useState(false);
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const email = user?.email ?? '';
@@ -187,9 +190,12 @@ function DangerZone() {
     }
     setIsPending(true);
     try {
-      await api.delete('/api/auth/me');
-      clearSession();
-      router.push('/login');
+      await api.delete('/api/auth/me', { password });
+      // Server has already purged the account and revoked the session; the
+      // context logout clears the local auth user state so the navbar does not
+      // keep showing a stale signed-in user after the redirect.
+      await logout();
+      router.push('/');
     } catch (error) {
       setIsPending(false);
       setError(error instanceof Error ? error.message : 'Failed to delete your account.');
@@ -213,6 +219,7 @@ function DangerZone() {
           className="w-fit"
           onClick={() => {
             setError(null);
+            setPassword('');
             setDialogOpen(true);
           }}
         >
@@ -233,6 +240,8 @@ function DangerZone() {
           }
         }}
         email={email}
+        password={password}
+        onPasswordChange={setPassword}
         onConfirm={() => void confirmDelete()}
         isPending={isPending}
       />

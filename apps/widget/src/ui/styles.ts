@@ -361,7 +361,10 @@ export const WIDGET_STYLES = `
   .wc-messages {
     flex: 1;
     overflow-y: auto;
-    padding: 14px 14px 8px;
+    /* Overflowing children (e.g. a wide table before its wrapper clips it)
+       must never turn the whole conversation into a horizontal scroller. */
+    overflow-x: clip;
+    padding: 14px 14px 12px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -423,6 +426,9 @@ export const WIDGET_STYLES = `
 
   .wc-bubble {
     max-width: 82%;
+    /* Flex min-size guardrail: a wide embedded table must not force the
+       bubble (a flex item) wider than its 82% cap. */
+    min-width: 0;
     padding: 9px 13px;
     border-radius: 16px;
     font-size: 0.95em;
@@ -943,9 +949,46 @@ export const WIDGET_STYLES = `
     color: var(--wc-muted);
   }
 
-  .wc-bubble-content table {
-    width: 100%;
+  /* Markdown tables (emitted inside .wc-table-scroll) scroll horizontally
+     within the bubble; the widget itself never gets wider than the viewport. */
+  .wc-bubble-content .wc-table-scroll {
+    max-width: 100%;
     margin: 0.5em 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    /* Restore horizontal swipes for the table even though the message list
+       only allows vertical panning. */
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35)) transparent;
+  }
+
+  .wc-bubble-content .wc-table-scroll::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  .wc-bubble-content .wc-table-scroll::-webkit-scrollbar-track {
+    background: var(--wc-scrollbar-track, transparent);
+  }
+
+  .wc-bubble-content .wc-table-scroll::-webkit-scrollbar-thumb {
+    background: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35));
+    border-radius: 999px;
+  }
+
+  .wc-bubble-content .wc-table-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--wc-scrollbar-thumb, rgba(100, 116, 139, 0.35));
+    filter: brightness(1.1);
+  }
+
+  .wc-bubble-content .wc-table-scroll table {
+    width: 100%;
+    /* Keep column widths at their natural (readable) size rather than
+       compressing cells to force the table into the widget. When the table's
+       content is wider than the bubble the wrapper scrolls horizontally. */
+    min-width: max-content;
+    margin: 0;
     border-collapse: collapse;
     font-size: 0.92em;
   }

@@ -483,6 +483,83 @@ describe('inline citation links (audit W-09)', () => {
   });
 });
 
+describe('markdown layout safety', () => {
+  it('wraps a wide markdown table in a horizontally scrollable container', () => {
+    const bubble = createBubble(
+      message(
+        'assistant',
+        [
+          '# Indira University – Programs by School and Level',
+          '',
+          '| School | Undergraduate Programs | Post-graduate Programs |',
+          '| --- | --- | --- |',
+          '| B. Com | Accountancy & Taxation / Financial Markets / Business Administration | Banking & Finance / Financial Markets |',
+        ].join('\n'),
+      ),
+    );
+    const content = bubble.querySelector('.wc-bubble-content');
+    const wrapper = content?.querySelector('.wc-table-scroll');
+    expect(wrapper).toBeTruthy();
+    expect(wrapper?.querySelector('table')).toBeTruthy();
+    // The long cell content remains fully rendered (nothing truncated).
+    expect(content?.textContent).toContain('Accountancy & Taxation');
+    expect(content?.textContent).toContain('Banking & Finance');
+  });
+
+  it('renders a plain paragraph without any table wrapper', () => {
+    const bubble = createBubble(message('assistant', 'A short normal answer.'));
+    expect(bubble.querySelector('.wc-table-scroll')).toBeNull();
+    expect(bubble.querySelector('.wc-bubble-content')?.textContent).toBe('A short normal answer.');
+  });
+
+  it('keeps the source cards rendered and clickable below a wide table', () => {
+    const bubble = createBubble(
+      message(
+        'assistant',
+        [
+          '| School | Programs |',
+          '| --- | --- |',
+          '| B. Com | Accountancy |',
+          '',
+          'See [1] for details.',
+        ].join('\n'),
+        { sources: [{ url: 'https://example.com/programs', title: 'Programs at Indira' }] },
+      ),
+    );
+    const content = bubble.querySelector('.wc-bubble-content');
+    expect(content?.querySelector('.wc-table-scroll')).toBeTruthy();
+    const link = bubble.querySelector<HTMLAnchorElement>('.wc-sources-list a');
+    expect(link).toBeTruthy();
+    expect(link?.textContent).toContain('Programs at Indira');
+    expect(link?.getAttribute('target')).toBe('_blank');
+  });
+
+  it('fully renders a long assistant answer without dropping the last content', () => {
+    const longAnswer =
+      '# Program Overview\n\n' +
+      '| School | Undergraduate | Post-graduate |\n' +
+      '| --- | --- | --- |\n' +
+      '| B. Com | Accountancy & Taxation | Financial Markets |\n\n' +
+      'Check https://example.com/apply for details.\n\n' +
+      'Sources: [1], [2].\n';
+    const bubble = createBubble(
+      message('assistant', longAnswer, {
+        sources: [
+          { url: 'https://example.com/apply', title: 'Apply now' },
+          { url: 'https://example.com/fees', title: 'Fees & Aid' },
+        ],
+      }),
+    );
+    expect(bubble.querySelector('.wc-table-scroll table')).toBeTruthy();
+    expect(bubble.querySelector('.wc-bubble-content')?.textContent).toContain(
+      'https://example.com/apply',
+    );
+    // [1] and [2] were upgraded to clickable citation chips (sources remain).
+    expect(bubble.querySelectorAll('.wc-citation').length).toBe(2);
+    expect(bubble.querySelectorAll('.wc-source-item').length).toBe(2);
+  });
+});
+
 describe('empty-state avatar safety (audit W-22)', () => {
   it('renders http(s) avatars as images', () => {
     const state = createEmptyState({

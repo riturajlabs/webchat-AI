@@ -68,15 +68,31 @@ describe('renderMarkdown', () => {
     expect(html).toContain('>Copy</button>');
   });
 
-  it('renders GFM tables with header/body and alignment', () => {
+  it('renders GFM tables with header/body and alignment inside a scroll wrapper', () => {
     const html = renderMarkdown(
       ['| Name | Qty |', '| :--- | ---: |', '| A    | 1   |', '| B    | 2   |'].join('\n'),
     );
     expect(html).toContain(
-      '<table><thead><tr><th align="left">Name</th><th align="right">Qty</th>',
+      '<div class="wc-table-scroll"><table><thead><tr><th align="left">Name</th><th align="right">Qty</th>',
     );
     expect(html).toContain('<td align="left">A</td><td align="right">1</td>');
-    expect(html).toContain('</tbody></table>');
+    expect(html).toContain('</tbody></table></div>');
+  });
+
+  it('closes the table wrapper before a following paragraph', () => {
+    const html = renderMarkdown(
+      ['| A | B |', '| --- | --- |', '| 1 | 2 |', '', 'Text after'].join('\n'),
+    );
+    expect(html).toContain('</tbody></table></div><p>Text after</p>');
+  });
+
+  it('emits balanced wrapper markup when a table is cut off mid-stream', () => {
+    const html = renderMarkdown(
+      ['| School | Programs |', '| --- | --- |', '| B. Com – A'].join('\n'),
+    );
+    const wrappers = html.match(/<div class="wc-table-scroll">/g) ?? [];
+    expect(wrappers).toHaveLength(1);
+    expect(html).toContain('</tbody></table></div>');
   });
 
   it('renders a non-table pipe line as a paragraph', () => {

@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlparse
 
+from bs4 import BeautifulSoup
+
 from backend.core.config import Settings, get_settings
 from backend.core.errors import InvalidUrlError
 from backend.models.crawl_job import CrawlJobError
@@ -229,7 +231,14 @@ class CrawlSession:
             if self._on_extracting is not None:
                 await self._on_extracting(final_url)
             if stored == 0 and self.preview_image is None:
-                self.preview_image = pick_preview_image(extracted.meta, page.url)
+                # Image extraction prefers social meta, then a representative
+                # <img> (srcset + lazy shims), then favicon; the soup is only
+                # parsed for the first stored page, so the cost is negligible.
+                self.preview_image = pick_preview_image(
+                    extracted.meta,
+                    page.url,
+                    soup=BeautifulSoup(page.html, "html.parser"),
+                )
             content = clean_html(page.html, max_chars=self._settings.crawl_max_content_bytes)
             checksum = hashlib.sha256(content.encode("utf-8")).hexdigest()
             document = Document.new(

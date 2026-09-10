@@ -1,8 +1,13 @@
-# WebChat AI Widget SDK
+# WebChat AI — Widget SDK
 
-Framework-independent, embeddable chatbot widget. Ships as a custom element
-(`<webchat-widget>`) with a **closed shadow root**: host-page CSS cannot leak in,
-widget CSS cannot leak out, and internals are invisible to page scripts.
+Framework-independent, embeddable chatbot widget for
+[WebChat AI](../../README.md). Ships as a custom element `<webchat-widget>` with
+a **closed shadow root**: host-page CSS cannot leak in, widget CSS cannot leak
+out, and internals are invisible to page scripts.
+
+The widget is a consumer of the backend's public v1 widget contract
+(`/api/widget/v1/*`). Full platform context: [`backend/README.md`](../../backend/README.md),
+[docs/README.md](../../docs/README.md).
 
 ## Quick start — one-line embed
 
@@ -29,8 +34,6 @@ has run.
 
 ### API base resolution
 
-The widget resolves its API base in this order:
-
 1. `data-api-base-url` (or `apiBaseUrl` in `init()`/`mount()`), given as either a
    host origin or a fully versioned path.
 2. `VITE_WIDGET_API_BASE_URL`, baked in at build time — the SaaS host ships the
@@ -44,19 +47,26 @@ The resolved base always ends in `/api/widget/v1`, so requests hit
 
 ## Production bundle
 
-`pnpm build` emits **content-hashed** bundles under `dist/`:
+`pnpm build` runs `tsc --noEmit`, `vite build`, then `scripts/copy-stable.mjs`
+and `scripts/check-assets.mjs`:
 
-- `webchat-widget.<hash>.js` (ESM), `webchat-widget.umd.<hash>.cjs` (UMD),
+- **Content-hashed** bundles under `dist/` (cache forever):
+  `webchat-widget.<hash>.js` (ESM), `webchat-widget.umd.<hash>.cjs` (UMD),
   `webchat-widget.iife.min.<hash>.js` (IIFE) plus `.map` siblings.
-- `scripts/copy-stable.mjs` also writes stable-name copies
-  (`webchat-widget.iife.min.js`, …) for package entry points and local dev/e2e;
-  these must **not** be used for long-lived caching.
+- **Stable-name** copies (`webchat-widget.iife.min.js`, `webchat-widget.umd.cjs`,
+  `webchat-widget.js`) for package entry points and local dev/e2e — these must
+  **not** be used for long-lived caching. The package also declares
+  `unpkg`/`jsdelivr` pointing at the stable IIFE.
+- `scripts/check-size.mjs` (`build:size`) enforces the ≤ 100 KB gzip budget on
+  the IIFE bundle.
 
-Host the hashed IIFE bundle on a CDN and set `WIDGET_SCRIPT_URL` to it — the
-CDN can then serve it with `Cache-Control: immutable` for a year (see
-`docker/nginx.widget.conf`), and the embed snippet returned by the backend
-points at the correct asset. `scripts/check-assets.mjs` verifies the hashed
-bundle exists and prints the value to configure.
+Host the hashed IIFE bundle on a CDN and set `WIDGET_SCRIPT_URL` (backend) /
+`NEXT_PUBLIC_WIDGET_SCRIPT_URL` (dashboard) to it — the CDN can then serve it
+with `Cache-Control: immutable` for a year (see
+[`docker/nginx.widget.conf`](../../docker/nginx.widget.conf)), and the embed
+snippet returned by the backend points at the correct asset.
+`scripts/check-assets.mjs` verifies the hashed bundle exists and prints the value
+to configure.
 
 ## Programmatic use (frameworks)
 
@@ -126,6 +136,17 @@ interface WidgetController {
 | "This assistant is currently unavailable" | widget disabled                                      |
 | "This assistant is still being set up"    | website not `ready` yet                              |
 
+### Markdown rendering
+
+Assistant answers are rendered from Markdown by `src/markdown/render.ts` and
+sanitized with DOMPurify (allow-listed tags/attributes) before insertion:
+
+- headings, lists, links, paragraphs, blockquotes, strikethrough
+- inline code and fenced code blocks (language label + copy button)
+- GFM tables incl. column alignment — wide tables scroll horizontally inside a
+  `.wc-table-scroll` wrapper so they never overflow the bubble
+- inline citation chips that expand to the source list for the message
+
 ## Theming
 
 Theme is applied from the widget config as CSS custom properties on the host
@@ -137,6 +158,9 @@ webchat-widget {
   --wc-accent: #06b6d4;
 }
 ```
+
+Shared presets + the resolve engine live in
+[`packages/themes`](../../packages/themes/README.md).
 
 ## Host-page CSP
 
@@ -162,9 +186,17 @@ audit runs in CI (`src/ui/accessibility.test.ts`).
 - **Message length:** max 2000 characters per message.
 - **Identity:** an anonymous `wc_visitor` cookie keys per-visitor rate limits
   and session continuity. No `localStorage`/`sessionStorage`, no PII.
-- **Bundle:** the IIFE is gated at ≤ 100 KB gzip.
+- **Bundle:** the IIFE is gated at ≤ 100 KB gzip (`scripts/check-size.mjs`).
 - **API version:** the SDK pins the v1 public widget contract
   (`/api/widget/v1/*`) and parses responses forward-compatibly.
 
-See `docs/Phase-8-Widget-SDK-Implementation-Plan.md` for the full design and
-the offline/error handling matrix (§9).
+## Development
+
+```bash
+pnpm --filter @webchat/widget dev          # Vite dev server (demo harness)
+pnpm --filter @webchat/widget test         # vitest run
+pnpm --filter @webchat/widget build:size   # typecheck + bundle + size gate
+```
+
+See [tests/README.md](../../tests/README.md) for the widget test layout and
+Definition of Done.

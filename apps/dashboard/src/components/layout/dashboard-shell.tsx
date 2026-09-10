@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Bot, LogOut } from 'lucide-react';
 import { useState } from 'react';
 
@@ -15,6 +16,7 @@ import { ThemeToggle } from '@/components/theme/theme-toggle';
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -24,6 +26,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     setIsLoggingOut(true);
     try {
       await logout();
+      router.push('/');
     } finally {
       setIsLoggingOut(false);
     }

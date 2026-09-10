@@ -240,11 +240,14 @@ export function renderMarkdown(source: string): string {
     }
 
     // --- Tables ------------------------------------------------------------
+    // Tables are emitted inside a dedicated scroll wrapper: a wide table must
+    // scroll horizontally *within* the assistant bubble instead of forcing the
+    // whole widget (or the message list) wider than the viewport.
     if (!inTable && trimmed.startsWith('|') && isDelimiterRow(lines[i + 1]?.trim() ?? '')) {
       closeAllLists();
       const header = splitRow(trimmed);
       tableAlign = delimiterAlign(lines[i + 1].trim());
-      parts.push('<table><thead><tr>');
+      parts.push('<div class="wc-table-scroll"><table><thead><tr>');
       for (let c = 0; c < header.length; c += 1) {
         parts.push(`<th${alignAttr(tableAlign[c] ?? null)}>${renderInline(header[c])}</th>`);
       }
@@ -263,7 +266,7 @@ export function renderMarkdown(source: string): string {
         parts.push('</tr>');
         continue;
       }
-      parts.push('</tbody></table>');
+      parts.push('</tbody></table></div>');
       inTable = false;
       tableAlign = [];
       // Fall through: the current line is a normal block.
@@ -322,7 +325,7 @@ export function renderMarkdown(source: string): string {
     parts.push('</code></pre>');
   }
   if (inTable) {
-    parts.push('</tbody></table>');
+    parts.push('</tbody></table></div>');
   }
   closeAllLists();
 

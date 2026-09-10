@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api } from '@/lib/api';
 import { useAuth } from '@/features/auth/auth-context';
-import { clearSession } from '@/lib/session';
 
 import { SettingsPage } from './settings-page';
 
@@ -13,16 +12,14 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-vi.mock('@/lib/session', () => ({
-  clearSession: vi.fn(),
-}));
-
 vi.mock('next-themes', () => ({
   useTheme: vi.fn(),
 }));
 
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push }),
 }));
 
 vi.mock('@/features/auth/auth-context', () => ({
@@ -34,7 +31,7 @@ import { useTheme } from 'next-themes';
 const mockedUseAuth = vi.mocked(useAuth);
 const mockedUseTheme = vi.mocked(useTheme);
 const mockedDelete = vi.mocked(api.delete);
-const mockedClearSession = vi.mocked(clearSession);
+const mockLogout = vi.fn();
 
 const USER = {
   id: 'user-1',
@@ -51,6 +48,7 @@ function mockAuth() {
   mockedUseAuth.mockReturnValue({
     user: USER,
     status: 'ready',
+    logout: mockLogout,
   } as never);
 }
 
@@ -88,33 +86,31 @@ describe('SettingsPage', () => {
     expect(setTheme).toHaveBeenCalledWith('dark');
   });
 
-  it('requires typing the account email to enable account deletion', () => {
+  it('requires entering the account password to enable account deletion', () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
 
     const confirmButton = screen.getByTestId('delete-account-confirm');
+    const input = screen.getByLabelText(/password to confirm/) as HTMLInputElement;
     expect(confirmButton).toBeDisabled();
 
-    const input = screen.getByLabelText(/jane@example.com/) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: 'wrong@example.com' } });
-    expect(confirmButton).toBeDisabled();
-
-    fireEvent.change(input, { target: { value: USER.email } });
+    fireEvent.change(input, { target: { value: 'Str0ng!Pass' } });
     expect(confirmButton).toBeEnabled();
   });
 
-  it('deletes the account, clears the session and redirects to login', async () => {
+  it('deletes the account with the password, logs out and redirects home', async () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
 
-    const input = screen.getByLabelText(/jane@example.com/) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: USER.email } });
+    const input = screen.getByLabelText(/password to confirm/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Str0ng!Pass' } });
     fireEvent.click(screen.getByTestId('delete-account-confirm'));
 
     await waitFor(() => {
-      expect(mockedDelete).toHaveBeenCalledWith('/api/auth/me');
+      expect(mockedDelete).toHaveBeenCalledWith('/api/auth/me', { password: 'Str0ng!Pass' });
     });
-    expect(mockedClearSession).toHaveBeenCalled();
+    expect(mockLogout).toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith('/');
   });
 
   it('shows an inline error when deletion fails', async () => {
@@ -122,8 +118,8 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
 
-    const input = screen.getByLabelText(/jane@example.com/) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: USER.email } });
+    const input = screen.getByLabelText(/password to confirm/) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Str0ng!Pass' } });
     fireEvent.click(screen.getByTestId('delete-account-confirm'));
 
     await waitFor(() => {

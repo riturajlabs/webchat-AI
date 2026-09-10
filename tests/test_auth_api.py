@@ -250,14 +250,10 @@ def test_delete_me_purges_tenant_and_clears_session(client) -> None:
         "access_token"
     ]
     headers = {"Authorization": f"Bearer {access_token}"}
-    # SEC-L02: destructive writes require a verified email; verify first.
-    verification_token = token_from_url(env.mail.sent[0])
-    assert (
-        test_client.post("/api/auth/verify-email", json={"token": verification_token}).status_code
-        == 200
+    # SEC-L02: deletion is confirmed with the account password.
+    response = test_client.request(
+        "DELETE", "/api/auth/me", headers=headers, json={"password": VALID_PASSWORD}
     )
-
-    response = test_client.delete("/api/auth/me", headers=headers)
     assert response.status_code == 200
     assert response.json()["message"]
     assert env.purge.purged_user_sessions  # sessions were revoked
@@ -267,6 +263,57 @@ def test_delete_me_purges_tenant_and_clears_session(client) -> None:
     # Session cookies (refresh + csrf) are cleared by the delete response.
     set_cookie = response.headers.get_list("set-cookie")
     assert any("refresh_token=" in value and "Max-Age=0" in value for value in set_cookie)
+
+
+def test_delete_me_rejects_wrong_password_and_keeps_account(client) -> None:
+    test_client, env = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.request(
+        "DELETE", "/api/auth/me", headers=headers, json={"password": "WrongPass1!"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "INVALID_CREDENTIALS"
+    assert response.json()["error"]["message"] == "Incorrect password."
+    # Nothing was purged and the account still exists.
+    assert env.purge.purged_tenants == []
+    assert env.purge.purged_user_sessions == []
+    me = test_client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200
+
+
+def test_delete_me_allows_unverified_email_with_correct_password(client) -> None:
+    # SEC-L02: the password gate replaces the verified-email gate, so an
+    # unverified owner can still delete their own account.
+    test_client, env = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.request(
+        "DELETE", "/api/auth/me", headers=headers, json={"password": VALID_PASSWORD}
+    )
+
+    assert response.status_code == 200
+    assert env.purge.purged_tenants
+
+
+def test_delete_me_missing_password_returns_422(client) -> None:
+    test_client, env = client
+    access_token = test_client.post("/api/auth/register", json=REGISTER_PAYLOAD).json()[
+        "access_token"
+    ]
+    headers = {"Authorization": f"Bearer {access_token}"}
+
+    response = test_client.delete("/api/auth/me", headers=headers)
+
+    assert response.status_code == 422
+    assert env.purge.purged_tenants == []
 
 
 def test_delete_me_requires_bearer_token(client) -> None:

@@ -1,145 +1,213 @@
-# WebChat AI
+# 🤖 WebChat AI
 
-Multi-tenant AI SaaS platform that lets anyone deploy a website-specific AI chat assistant in minutes. Zero-code integration via a single script tag, powered by RAG (retrieval-augmented generation) on Google Gemini.
+**Turn any website into a source-grounded AI assistant.**
 
-## Repository layout
+A multi-tenant AI SaaS platform that lets anyone deploy a website-specific chat
+assistant in minutes — no code beyond a single `<script>` tag. WebChat AI
+crawls a website into a retrieval-augmented knowledge base, then answers your
+visitors' questions with **citations back to the source material**.
 
 ```
-apps/dashboard     Next.js 15 dashboard (tenant + admin)
-apps/widget        Framework-independent embeddable widget SDK
-backend/           FastAPI backend (api, services, repositories, workers, ai)
-docs/              Design documents 00-07 (07 = Architecture Decision Record)
-docker/            Dockerfiles + compose for local development
-scripts/           Dev/ops helper scripts
-tests/             Test suites (backend pytest, frontend vitest/e2e)
+Zero-code embed                       Every answer cites its sources
+────────────────────                  ─────────────────────────────
+<script src="https://cdn.example.com"
+  data-widget-id="your_widget_id"     > Sources: docs/quickstart.md
+  defer></script>                       FAQ · pricing · setup guide
 ```
 
-## Prerequisites
+## What it does
 
-- Node.js >= 20, pnpm >= 9
-- Python 3.13 (via `uv`)
-- Docker + Docker Compose
+|                            |                                                                                                                                                                                                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ⚡ **Website ingest**      | Crawls your site (**robots-aware, sitemap + priority paths, same-origin + SSRF guarded, HTTP-first with JS-rendering fallback**), cleans it, chunks it, and embeds it into a knowledge base.                                                          |
+| 🎯 **Source-grounded RAG** | Hybrid retrieval (vector `$vectorSearch` + keyword, fused via RRF), optional reranking, adaptive query classification, confidence gating, and post-generation faithfulness checks — answers come with sources, or the assistant says it can't answer. |
+| 🔌 **Zero-config widget**  | A embeddable SDK with a closed shadow root, 10 curated themes, Markdown rendering (incl. tables and citations), streaming answers, offline handling, and WCAG 2.2 AA accessibility.                                                                   |
+| 🏢 **Multi-tenant SaaS**   | Tenant-isolated workspaces, plans/billing (Stripe, Razorpay, or mock), usage metering and **LLM token budgets**, developer API keys, and a super-admin console.                                                                                       |
+| 🔒 **Security-first**      | JWT + refresh cookies (`SameSite=Strict`), CSRF, Argon2, email verification, login lockout, rate limiting, prompt-injection guards, and PII redaction — with a 2266+ test backend suite and CI/CD security gates.                                     |
 
-## Quick start
+## Architecture
 
-1. Copy environment variables (a ready-made development file ships with the
-   repo; copy it for local development):
+```mermaid
+flowchart LR
+  subgraph Web["Customer website"]
+    WIDGET["WebChat widget<br/>(one-line embed)"]
+  end
 
-   ```bash
-   cp .env.development .env
-   ```
+  subgraph Platform["WebChat AI platform"]
+    DASH["Dashboard<br/>Next.js · :3000"]
+    API["API<br/>FastAPI · :8000"]
+    WORKER["Worker<br/>ARQ + Playwright crawl"]
+    MONGO[("MongoDB Atlas<br/>documents + vectors")]
+    REDIS[("Redis<br/>cache · rate limit · job queue")]
+  end
 
-2. Start the full development stack (MongoDB, Redis, Mailpit, API, Worker,
-   Dashboard, Widget):
+  subgraph AI["AI providers"]
+    GEN["Generation<br/>Gemini · Groq · OpenRouter"]
+    EMB["Embeddings<br/>Gemini · Jina · Cohere"]
+  end
 
-   ```bash
-   docker compose --env-file .env.development -f docker/compose.yml up --build
-   ```
+  WIDGET -->|"/api/widget/v1 · SSE"| API
+  DASH -->|"/api/* same-origin proxy"| API
+  API --> MONGO
+  API --> REDIS
+  WORKER --> MONGO
+  WORKER --> REDIS
+  WORKER -->|"crawl + render"| Web
+  API --> GEN
+  API --> EMB
+  WORKER --> EMB
 
-   (or `scripts/docker-up.sh`). The `--env-file` flag loads the selected
-   environment file and compose passes it straight into the containers.
+  style MONGO fill:#0b3d2e
+  style REDIS fill:#3d200b
+```
 
-3. Install frontend dependencies and run the dashboard:
+## How an answer is produced
 
-   ```bash
-   pnpm install
-   pnpm dev:dashboard
-   ```
+```mermaid
+flowchart TD
+  Q["Visitor question"] --> C["Query classify<br/>simple / medium / complex<br/>(adaptive retrieval)"]
+  C --> RW["Conversational rewrite<br/>(context-aware)"]
+  RW --> RET["Retrieve<br/>vector + keyword · hybrid RRF<br/>cached · source-diversified"]
+  RET --> RR["Optional rerank<br/>(top-k per source cap)"]
+  RR --> CTX["Context assembly<br/>budget + dedupe + optimize"]
+  CTX --> GEN2["Streaming generation<br/>provider fallback chain"]
+  GEN2 --> GATE{"Confidence +<br/>faithfulness gate"}
+  GATE -->|"pass"| ANS["Answer with source citations"]
+  GATE -->|"too uncertain"| ABS["Abstention / warning"]
+```
 
-4. Backend (local, without Docker) — see `scripts/setup.sh` and `scripts/dev-api.sh`.
+### The website crawler, step by step
 
-> MongoDB Atlas and managed Redis are used for production (Phase 13/14). Local
-> development uses the Docker `mongo`/`redis` services or a native local
-> instance; the service URIs come from the selected env file.
->
-> **Environment configuration**: see `.env.example` for the full variable
-> reference. Two env files ship with the repo:
->
-> - `.env.development` — local docker services (`ENVIRONMENT=development`,
->   `MONGODB_URI=mongodb://mongo:27017`, `REDIS_URL=redis://redis:6379`,
->   `MAILPIT_API_URL=http://mailpit:8025`, `DEBUG=true`, `COOKIE_SECURE=false`,
->   `PAYMENT_PROVIDER=mock`).
-> - `.env.production` — `ENVIRONMENT=production` for **local production
->   testing**: external managed services (Atlas MongoDB, managed Redis, Resend,
->   real AI keys) but localhost app URLs, gated by `LOCAL_PRODUCTION_TEST=true`.
->   `backend/core/config.py` fails fast at boot on weak production values
->   (loopback CORS/hosts, short JWT secret, missing AI keys, mock payments)
->   unless the explicit local-production-test flag is set. Before deploying to
->   Railway, only URL/domain and provider-credential values change (see
->   `.env.example` "RAILWAY DEPLOYMENT").
+1. **Discover** — start page, sitemap, and links. BFS with a page budget, boosts
+   for `CRAWL_PRIORITY_URL_PATHS`, respects `robots.txt` and stays same-origin.
+2. **Guard** — SSRF guard validates every destination; only HTTP(S) origins pass.
+3. **Fetch** — HTTP-first; pages that need JS rendering fall back to Playwright
+   (Chromium, with or without sandbox per env).
+4. **Clean + chunk** — HTML is extracted and cleaned, then split into chunks by
+   token budget with overlap; near-empty pages are dropped.
+5. **Embed** — chunks become vectors via a **single locked embedding provider**
+   (switching embedding spaces mid-corpus would corrupt `$vectorSearch`).
+6. **Persist** — tenant-scoped documents/chunks with their embedding identity,
+   retried with backoff; documents that exhaust retries are quarantined.
 
-## Production Environment Setup
+## Monorepo layout
 
-**Never commit secrets to the repository.** All production credentials must be
-managed through your deployment platform.
+```
+├── apps/
+│   ├── dashboard/       Next.js 15 dashboard, marketing site + tenant admin
+│   └── widget/          Framework-independent embeddable widget SDK
+├── backend/             FastAPI (API, services, repositories, ARQ worker, AI clients)
+├── packages/themes/     Shared widget theme presets + resolve engine
+├── docs/                Design docs, ADRs, deployment guide, audit reports
+├── docker/              Dockerfiles + compose (dev and production)
+├── scripts/             Dev / ops / verification helpers
+└── tests/               Backend pytest suites + widget E2E
+```
 
-### Development (local)
+Each area has its own README — see the [documentation map](#documentation).
+
+## Tech stack
+
+| Layer     | Technology                                                                                                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Backend   | Python 3.13 · FastAPI · Pydantic v2 · Motor (MongoDB) · Redis · ARQ                                                                                                                                    |
+| AI        | Google Gemini (default), Groq, OpenRouter for generation — built on shared OpenAI-compatible streaming helpers; Gemini / Jina / Cohere for embeddings; adaptive routing with health + circuit breakers |
+| Dashboard | Next.js 15 (App Router, Turbopack) · React 19 · Tailwind CSS v4 · TanStack Query                                                                                                                       |
+| Widget    | TypeScript · Vite (ESM/UMD/IIFE) · DOMPurify · Shadow DOM · `--wc-*` CSS theming                                                                                                                       |
+| Infra     | Docker Compose · GitHub Actions CI/CD · GHCR · Prometheus + alert rules                                                                                                                                |
+
+## Quick start (local development)
+
+**Prerequisites:** Node.js ≥ 20, pnpm ≥ 9, Python 3.13 (via `uv`), Docker + Compose.
 
 ```bash
-cp .env.example .env          # or use .env.development directly
-# Fill in local values, then:
+# 1. Environment (a ready-made dev file ships with the repo)
+cp .env.development .env
+
+# 2. Full stack — MongoDB, Redis, Mailpit, API, Worker, Dashboard, Widget
 docker compose --env-file .env.development -f docker/compose.yml up --build
+#    (or: scripts/docker-up.sh)
+
+# 3. Frontend deps + dashboard dev server
+pnpm install
+pnpm dev:dashboard            # open http://localhost:3000
+
+# 4. Backend without Docker: scripts/setup.sh then scripts/dev-api.sh
 ```
 
-### Production (deployed)
+Environment note: `.env.development` points at the Docker `mongo`/`redis`/
+`mailpit` services (`ENVIRONMENT=development`); `.env.production` is for local
+production testing against managed services (`LOCAL_PRODUCTION_TEST=true`).
+`.env.example` documents the full variable reference. `backend/core/config.py`
+**fails fast** at boot on weak production values (loopback hosts, short
+`JWT_SECRET`, missing AI keys, mock payments) unless the local-production-test
+flag is set.
 
-Secrets are set as **environment variables** on your deployment platform — no
-`.env` file is shipped. Examples:
+## Production deployment
 
-| Platform    | How to set secrets                                                                 |
-| ----------- | ---------------------------------------------------------------------------------- |
-| **Railway** | Project → Variables tab (supports multi-line JSON, secret masking)                 |
-| **AWS**     | Secrets Manager / SSM Parameter Store → inject via task definition or ECS          |
-| **Docker**  | `docker run -e MONGODB_URI=...` or Docker Compose `secrets` / `.env` (not tracked) |
+- **Path:** Docker Compose running immutable `sha-<git-sha>` GHCR images,
+  shipped by GitHub Actions (CI validate → publish → Trivy gate → manual deploy).
+- **Services:** `api`, `worker`, `dashboard`, `widget`; managed MongoDB Atlas +
+  Redis; one-shot migrations before rollout; documented rollback.
+- **Observability:** JSON logs with `request_id`/`tenant_id`, `/metrics`
+  (Prometheus), and validated alert rules.
+- **Links:** full guide in [`docs/deployment/README.md`](docs/deployment/README.md);
+  container/image reference in [`docker/README.md`](docker/README.md).
 
-> Kubernetes is explicitly NOT a deployment target. Production uses the Docker
-> Compose stack with immutable GHCR images (see `docs/deployment/README.md` and
-> `.github/workflows/cd.yml`).
+The API's default fallback origin for the dashboard proxy targets a Railway
+deployment; in real deploys you set your own public origins
+(`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BACKEND_API_URL`,
+`VITE_WIDGET_API_BASE_URL`) at build time (see the dashboard & widget READMEs).
 
-### Required secrets for production
+## Embedding the widget
 
-At minimum you must provide:
+Production flows get a ready-to-paste snippet from the dashboard. The same embed
+works from any host that can serve the IIFE bundle:
 
-- `MONGODB_URI` — MongoDB Atlas connection string (`mongodb+srv://...`)
-- `REDIS_URL` — Managed Redis URL (`rediss://...`)
-- `JWT_SECRET` — Generate with `openssl rand -hex 32` (>= 32 bytes)
-- `GEMINI_API_KEY` — Required for embeddings + generation
-- `RESEND_API_KEY` — Required for email delivery
-- `STRIPE_SECRET_KEY` / `RAZORPAY_KEY_ID` — Required if payments enabled
+```html
+<script
+  src="https://cdn.example.com/webchat-widget.iife.min.js"
+  data-widget-id="your_widget_id"
+  data-api-base-url="https://api.example.com"   <!-- optional override -->
+  defer
+></script>
+```
 
-Run `./scripts/check-secrets.sh` before every commit to verify no secrets are
-accidentally tracked.
-
-## Development scripts
-
-| Script                     | Purpose                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------- |
-| `scripts/setup.sh`         | One-time setup (`.env`, pnpm install, uv sync)                                  |
-| `scripts/dev-api.sh`       | FastAPI dev server (hot reload, `:8000`)                                        |
-| `scripts/dev-worker.sh`    | ARQ background worker (`python -m backend.workers`)                             |
-| `scripts/docker-up.sh`     | Start full Docker stack (Mongo, Redis, Mailpit, API, Worker, Dashboard, Widget) |
-| `scripts/check-backend.sh` | ruff + mypy + pytest                                                            |
+The widget **auto-upgrades** from `data-widget-id` — no `init()` call needed.
+Defaults fall back to the build-time `VITE_WIDGET_API_BASE_URL`, then
+same-origin `/api/widget/v1`. See the
+[Widget SDK README](apps/widget/README.md) for programmatic `init()`/`mount()`
+use, theming (`--wc-*`), CSP requirements, and accessibility.
 
 ## Verification
 
 ```bash
-pnpm lint && pnpm typecheck && pnpm build && pnpm test   # frontend
-./scripts/check-backend.sh                                # backend
-curl http://localhost:8000/api/health                     # expect database:true, redis:true
+./scripts/check-backend.sh         # ruff + mypy + pytest (backend gate)
+pnpm lint && pnpm typecheck && pnpm build && pnpm test   # frontends
+./scripts/check-secrets.sh         # secret scanner — run before committing
 ```
+
+Backend: 2266+ tests across auth, security, RAG, crawler, embeddings, provider
+routing, widget API, tenant isolation, billing and observability (as measured on
+the last full run). See [`tests/README.md`](tests/README.md) for the area map
+and the Definition of Done.
 
 ## Documentation
 
-| Doc                                 | Purpose                                        |
-| ----------------------------------- | ---------------------------------------------- |
-| `00-AI-Development-Rules.md`        | Mandatory rules for AI coding agents           |
-| `docs/01-PRD.md`                    | Product requirements                           |
-| `docs/02-TRD.md`                    | Technical requirements                         |
-| `docs/03-App-Flow.md`               | Application flows                              |
-| `docs/04-UI-UX-Brief.md`            | UI/UX design brief                             |
-| `docs/05-Backend-Schema.md`         | Database schema                                |
-| `docs/06-Implementation-Plan.md`    | Phased implementation plan                     |
-| `docs/07-Architecture-Decisions.md` | Architecture decision record (source of truth) |
+- [`docs/README.md`](docs/README.md) — index of canonical docs (PRD, TRD, app
+  flows, schema, implementation plan, **ADR-001…ADR-009**) and historical
+  audit reports
+- [`docs/deployment/README.md`](docs/deployment/README.md) — production runbook
+- [`backend/README.md`](backend/README.md) — API, RAG pipeline, worker, config
+- [`00-AI-Development-Rules.md`](00-AI-Development-Rules.md) — mandatory rules
+  for AI coding agents in this repo
+
+## Contributing
+
+Work proceeds with a Definition of Done that is documented in
+[`tests/README.md`](tests/README.md) and enforced locally via the scripted gates
+above and in CI. For security concerns, do **not** open a public issue — reach
+out privately (security reporting channel to be provided).
 
 ## License
 

@@ -12,6 +12,7 @@ import {
   useWebsites,
 } from './hooks';
 import { WebsiteList } from './website-list';
+import { DEFAULT_WEBSITE_IMAGE } from './constants';
 import type { CrawlJob, Website } from './types';
 
 vi.mock('./hooks', () => ({
@@ -165,7 +166,7 @@ describe('WebsiteList', () => {
     expect(screen.getByText('ready')).toBeInTheDocument();
   });
 
-  it('renders a website preview image and falls back gracefully when it is broken', () => {
+  it('renders a website preview image and falls back to the default when it is broken', () => {
     mockWebsites({
       data: [{ ...SITE, preview_image: 'https://cdn.example/acme.png' }],
     });
@@ -175,11 +176,21 @@ describe('WebsiteList', () => {
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute('src', 'https://cdn.example/acme.png');
 
-    // A broken remote image must not break the card — the banner hides and the
-    // website content remains.
+    // A broken remote image must not break the card — the src swaps to the
+    // bundled default artwork and the website content remains.
     fireEvent.error(img as HTMLImageElement);
-    expect(container.querySelector('img')).toBeNull();
+    const fallback = container.querySelector('img');
+    expect(fallback).not.toBeNull();
+    expect(fallback).toHaveAttribute('src', DEFAULT_WEBSITE_IMAGE);
     expect(screen.getByText('Acme Inc')).toBeInTheDocument();
+  });
+
+  it('renders the default artwork when a website has no preview image', () => {
+    const { container } = renderList();
+
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute('src', DEFAULT_WEBSITE_IMAGE);
   });
 
   it('shows the knowledge base statistics in the advanced details section', () => {

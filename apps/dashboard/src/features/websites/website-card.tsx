@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { StatusBadge } from './status-badge';
 import { CrawlJobProgressBar } from './crawl-job-progress-bar';
 import { KnowledgeBadge } from './knowledge-badge';
+import { DEFAULT_WEBSITE_IMAGE } from './constants';
 import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 interface WebsiteCardProps {
@@ -31,25 +32,27 @@ export function WebsiteCard({
   onDelete,
 }: WebsiteCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [imageFailed, setImageFailed] = useState(false);
+  // The teaser is always rendered: the crawled preview image when the website
+  // has one, otherwise the shared default. On an image error the src swaps to
+  // the default exactly once (state is already the default, so React bails out
+  // of any follow-up render — no infinite error loop).
+  const [imageSrc, setImageSrc] = useState(() => website.preview_image || DEFAULT_WEBSITE_IMAGE);
   useEffect(() => {
-    setImageFailed(false);
+    setImageSrc(website.preview_image || DEFAULT_WEBSITE_IMAGE);
   }, [website.preview_image]);
   const isRunning = crawlJob?.status === 'running' || crawlPending;
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-sm">
-      {website.preview_image && !imageFailed ? (
-        <div className="-m-1 overflow-hidden rounded-md border border-border/60">
-          {/* eslint-disable-next-line @next/next/no-img-element -- page metadata preview image URL */}
-          <img
-            src={website.preview_image}
-            alt=""
-            className="aspect-[16/9] w-full object-cover"
-            onError={() => setImageFailed(true)}
-          />
-        </div>
-      ) : null}
+      <div className="-m-1 overflow-hidden rounded-md border border-border/60">
+        {/* eslint-disable-next-line @next/next/no-img-element -- page metadata preview image URL */}
+        <img
+          src={imageSrc}
+          alt=""
+          className="aspect-[16/9] w-full object-cover"
+          onError={() => setImageSrc(DEFAULT_WEBSITE_IMAGE)}
+        />
+      </div>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-semibold">{website.name}</h3>

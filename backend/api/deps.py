@@ -772,6 +772,10 @@ reset_password_limiter = RateLimitDependency(limit=5, window_seconds=3600, alway
 # single account's write endpoint cannot be flooded with DB writes, while
 # legitimate profile edits (rare) never hit the cap.
 profile_update_limiter = RateLimitDependency(limit=60, window_seconds=3600)
+# SEC-L02: account deletion is a password-confirmed destructive write, so it is
+# budgeted tightly and always enforced (like login) — a compromised bearer
+# token cannot be used to brute-force the account password via this route.
+account_delete_limiter = RateLimitDependency(limit=5, window_seconds=3600, always_enforced=True)
 # Phase 3 website-management abuse protection (create/update/delete/list/get).
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).

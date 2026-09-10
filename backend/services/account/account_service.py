@@ -16,7 +16,8 @@ user's or tenant's data.
 import logging
 from dataclasses import dataclass
 
-from backend.core.errors import EmailNotVerifiedError, InvalidCredentialsError
+from backend.core.errors import InvalidCredentialsError
+from backend.core.security import verify_password
 from backend.models.audit_log import AUDIT_ACCOUNT_DELETED, AuditLog
 from backend.repositories import (
     AuditLogRepository,
@@ -55,14 +56,19 @@ class AccountService:
         principal: Principal,
         ip_address: str | None,
         user_agent: str | None,
+        password: str,
     ) -> AccountDeleteResult:
         """Irreversibly delete the authenticated user's account and tenant.
 
         The user is resolved from the (server-verified) principal so the
-        deletion always targets the caller's own tenant. The account is marked
-        deleted only after every tenant-scoped resource has been purged. After
-        this returns, the user's session is invalid (refresh tokens are gone)
-        and re-authentication is impossible (the user + tenant no longer exist).
+        deletion always targets the caller's own tenant. The account password
+        must be presented so the caller proves ownership of the account (an
+        email-address gate cannot tell a real owner from an attacker who
+        registered with someone else's address, while the password can). The
+        account is marked deleted only after every tenant-scoped resource has
+        been purged. After this returns, the user's session is invalid (refresh
+        tokens are gone) and re-authentication is impossible (the user + tenant
+        no longer exist).
         """
         user = await self._users.find_by_id(principal.user_id)
         if user is None:
@@ -71,11 +77,11 @@ class AccountService:
             # Defense in depth: never purge a tenant the principal does not own.
             raise InvalidCredentialsError("Invalid or expired session.")
 
-        # SEC-L02: destructive account writes require a verified email so an
-        # attacker registering with someone else's address cannot destroy data
-        # he does not own.
-        if not principal.email_verified:
-            raise EmailNotVerifiedError("Verify your email before deleting your account.")
+        # SEC-L02: destructive account writes require the account password.
+        # A missing hash is treated as an invalid credential (never an account-
+        # probing signal), and the failure happens before anything is purged.
+        if not user.password_hash or not verify_password(password, user.password_hash):
+            raise InvalidCredentialsError("Incorrect password.")
 
         await self._purge.purge_user_sessions(user.id)
         await self._purge.purge_tenant(user.tenant_id)
