@@ -10,7 +10,7 @@ only the final attempt records a permanent `failed` state.
 
 import hashlib
 import logging
-from typing import Any
+from typing import Any, cast
 
 from arq.connections import ArqRedis
 from redis.asyncio import ConnectionPool
@@ -42,13 +42,34 @@ from backend.repositories import (
     MongoVectorRepository,
     MongoWebsiteRepository,
 )
-from backend.services.ingestion import BrowserPageFetcher, CrawlSession, SsrFGuard
+from backend.services.ingestion import (
+    BrowserPageFetcher,
+    CrawlSession,
+    HybridPageFetcher,
+    PageFetcher,
+    SsrFGuard,
+)
 from backend.services.ingestion.browser import crawl_semaphore
 from backend.workers.jobs.knowledge import enqueue_process_website_documents
 
 logger = logging.getLogger("webchat_ai")
 
 _pool: ConnectionPool | None = None
+
+
+def _make_page_fetcher(ctx: dict[str, Any], guard: SsrFGuard) -> PageFetcher:
+    """Pick the crawler fetcher: injected (tests) else HTTP-first hybrid.
+
+    Production stays on plain HTTP/HTTPS by default and only opens the shared
+    headless Chromium instance when a page is judged to need JavaScript.
+    `CRAWL_HTTP_FIRST=false` restores the previous browser-only fetcher.
+    """
+    provided = ctx.get("crawler_fetcher")
+    if provided is not None:
+        return cast(PageFetcher, provided)
+    if get_settings().crawl_http_first:
+        return HybridPageFetcher(guard=guard)
+    return BrowserPageFetcher(guard=guard)
 
 
 def _arq_redis() -> ArqRedis:
@@ -158,7 +179,7 @@ async def _run_crawl_job_impl(
     """Core worker logic, testable with fake repositories/fetcher injected.
 
     `ctx["crawler_fetcher"]` may supply a `PageFetcher` (used by tests to
-    avoid launching Chromium); production uses `BrowserPageFetcher`.
+    avoid launching Chromium); production uses the HTTP-first `HybridPageFetcher`.
     """
     job = await crawl_jobs.find_by_id_any(crawl_job_id)
     if job is None:
@@ -202,7 +223,7 @@ async def _run_crawl_job_impl(
         )
 
     guard = SsrFGuard()
-    fetcher = ctx.get("crawler_fetcher") or BrowserPageFetcher(guard=guard)
+    fetcher = _make_page_fetcher(ctx, guard)
 
     async def on_fetching(url: str) -> None:
         await crawl_events.publish_fetching(

@@ -13,6 +13,14 @@ from backend.services.ingestion.crawler import (
     PageFetcher,
 )
 from backend.services.ingestion.extractor import ExtractedPage, extract_page, pick_preview_image
+from backend.services.ingestion.http_first import (
+    HttpContentVerdict,
+    HTTPFetchResult,
+    HybridPageFetcher,
+    extract_http_content,
+    fetch_http_page,
+    judge_http_content,
+)
 from backend.services.ingestion.ssrf_guard import SsrFGuard
 
 __all__ = [
@@ -21,9 +29,15 @@ __all__ = [
     "ExtractedPage",
     "FetchError",
     "FetchedPage",
+    "HTTPFetchResult",
+    "HybridPageFetcher",
+    "HttpContentVerdict",
     "PageFetcher",
     "SsrFGuard",
     "clean_html",
+    "extract_http_content",
     "extract_page",
+    "fetch_http_page",
+    "judge_http_content",
     "pick_preview_image",
 ]

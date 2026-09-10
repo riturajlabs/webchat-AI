@@ -360,6 +360,23 @@ class Settings(BaseSettings):
     # JSON array from the environment. Relative paths only; they are kept
     # same-origin with the website, so SSRF/hostname/robots rules still apply.
     crawl_priority_url_paths: Annotated[list[str], NoDecode] = []
+    # HTTP-first crawling: fetch pages over plain HTTP/HTTPS and only open the
+    # shared headless Chromium instance for pages judged to need JavaScript.
+    # Keeps the 1 GiB worker far below the browser's resident footprint for the
+    # large majority of static/SSR sites.
+    crawl_http_first: bool = True
+    # Cleaned text below this length makes a *large* shell-marked document a
+    # JavaScript candidate (aligned with knowledge_min_content_chars, the
+    # crawler's own insufficient-content gate).
+    crawl_http_min_content_chars: int = 100
+    # Documents smaller than this are never considered JS shells (no fallback),
+    # so thin pages and small error pages stay on the HTTP path.
+    crawl_http_js_shell_min_bytes: int = 8000
+    # Cleaned text must contain at least this many real words before a shell-
+    # marked page is treated as meaningful server-rendered content. Stops a
+    # large page of placeholder chrome (repeated "Loading...", login menu
+    # strings) from being mistaken for actual content.
+    crawl_http_min_content_words: int = 12
 
     # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
     # Versioned answer prompt selected from backend/prompts/rag.py.
