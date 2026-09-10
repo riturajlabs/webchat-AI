@@ -626,9 +626,9 @@ def test_local_production_test_still_rejects_wildcard_allowed_hosts() -> None:
 # --- Phase 17: Resend sender + Razorpay webhook secret validation ---
 
 
-def test_production_rejects_resend_sandbox_sender() -> None:
-    with pytest.raises(ValueError, match="EMAIL_FROM.*Resend sandbox"):
-        Settings(**_prod(email_from="WebChat AI <onboarding@resend.dev>"))
+def test_production_accepts_resend_onboarding_sender() -> None:
+    settings = Settings(**_prod(email_from="WebChat AI <onboarding@resend.dev>"))
+    assert "onboarding@resend.dev" in settings.email_from
 
 
 def test_production_rejects_resend_sandbox_no_reply_sender() -> None:

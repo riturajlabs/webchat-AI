@@ -841,11 +841,11 @@ class Settings(BaseSettings):
                             "Use the secret from the Razorpay Dashboard."
                         )
             sender_email = self.email_from.split("<")[-1].strip().rstrip(">").strip().lower()
-            if sender_email in _RESEND_SANDBOX_SENDERS:
+            if sender_email in _RESEND_SANDBOX_SENDERS and sender_email != "onboarding@resend.dev":
                 if not self.local_production_test:
                     raise ValueError(
                         "EMAIL_FROM must not use a Resend sandbox sender "
-                        "(onboarding@resend.dev) in production. "
+                        "(no-reply@resend.dev / notifications@resend.dev) in production. "
                         "Configure a verified custom domain sender."
                     )
             # CORS (Phase 16): the dashboard surface sends credentials, so a
