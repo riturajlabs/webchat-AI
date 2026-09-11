@@ -82,13 +82,23 @@ export function CrawlJobProgressBar({ job, progress, sseConnected }: CrawlJobPro
   }
 
   if (job.status === 'failed') {
+    const firstError = job.errors[0];
     return (
       <div
         role="alert"
         className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
       >
         <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-        <p>{job.error_message ?? `Crawl failed \u2014 ${job.errors.length} page(s) had errors.`}</p>
+        <div>
+          <p>
+            {job.error_message ?? `Crawl failed \u2014 ${job.errors.length} page(s) had errors.`}
+          </p>
+          {firstError ? (
+            <p>
+              {firstError.url}: {firstError.message}
+            </p>
+          ) : null}
+        </div>
       </div>
     );
   }

@@ -258,6 +258,46 @@ async def _run_crawl_job_impl(
         # `crawl_max_concurrent` ever drive the shared headless browser.
         async with crawl_semaphore():
             stored = await session.run()
+        if stored == 0:
+            job.errors = session.errors
+            job.pages_completed = 0
+            job.status = CRAWL_STATUS_FAILED
+            job.completed_at = utcnow()
+            job.error_message = "No pages were fetched."
+            job.updated_at = utcnow()
+            await crawl_jobs.update(job)
+            await crawl_events.publish_failed(job.id, error=job.error_message)
+
+            existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
+            if existing_pages == 0:
+                website.status = WEBSITE_STATUS_FAILED
+                website.pages_indexed = 0
+            else:
+                website.status = WEBSITE_STATUS_READY
+                website.pages_indexed = existing_pages
+            website.updated_at = utcnow()
+            await websites.update(website)
+
+            await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
+            record_crawl_failed(reason="no_pages")
+            if session.errors:
+                first_error = session.errors[0]
+                logger.warning(
+                    "crawl_failed job_id=%s tenant_id=%s reason=no_pages "
+                    "first_error_url=%s first_error=%s errors=%d",
+                    crawl_job_id,
+                    job.tenant_id,
+                    first_error.url,
+                    first_error.message,
+                    len(session.errors),
+                )
+            else:
+                logger.warning(
+                    "crawl_failed job_id=%s tenant_id=%s reason=no_pages errors=0",
+                    crawl_job_id,
+                    job.tenant_id,
+                )
+            return {"status": "failed", "pages": 0}
         # Audit R-02: incremental crawls only upsert discovered pages, so
         # documents whose URL vanished from the site must be reconciled away
         # (including their embedded chunks). Best-effort: a reconciliation

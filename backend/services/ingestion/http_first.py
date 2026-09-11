@@ -38,6 +38,7 @@ logger = logging.getLogger("webchat_ai")
 # browser path.
 _MAX_REDIRECTS = 20
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
+_RECOVERABLE_STATUS_CODES = frozenset({403, 429, 500, 502, 503, 504})
 
 _HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 # Sitemaps, robots.txt and plain-text listings are fetched (robots.txt must be
@@ -286,10 +287,16 @@ async def fetch_http_page(
                 try:
                     response = await client.send(request, stream=True, follow_redirects=False)
                 except httpx.HTTPError as exc:
-                    raise FetchError(f"Could not reach {url}: {exc.__class__.__name__}") from exc
+                    raise FetchError(
+                        f"Could not reach {url}: {exc.__class__.__name__}",
+                        recoverable=True,
+                    ) from exc
                 if response.status_code >= 400:
                     await response.aclose()
-                    raise FetchError(f"HTTP {response.status_code} for {url}.")
+                    raise FetchError(
+                        f"HTTP {response.status_code} for {url}.",
+                        recoverable=response.status_code in _RECOVERABLE_STATUS_CODES,
+                    )
                 location = response.headers.get("location")
                 if response.status_code in _REDIRECT_CODES and location:
                     await response.aclose()
@@ -313,7 +320,8 @@ async def fetch_http_page(
                     size += len(data)
             except httpx.HTTPError as exc:
                 raise FetchError(
-                    f"Interrupted while reading {url}: {exc.__class__.__name__}"
+                    f"Interrupted while reading {url}: {exc.__class__.__name__}",
+                    recoverable=True,
                 ) from exc
             finally:
                 await response.aclose()
@@ -341,7 +349,7 @@ async def fetch_http_page(
                 verdict=verdict,
             )
     except TimeoutError:
-        raise FetchError(f"Timed out loading {url}.") from None
+        raise FetchError(f"Timed out loading {url}.", recoverable=True) from None
 
 
 def _default_http_client() -> httpx.AsyncClient:
@@ -373,7 +381,13 @@ class HybridPageFetcher:
 
     async def fetch(self, url: str) -> FetchedPage:
         await self._guard.validate_async(url)
-        result = await fetch_http_page(url, client=self._get_http(), guard=self._guard)
+        try:
+            result = await fetch_http_page(url, client=self._get_http(), guard=self._guard)
+        except FetchError as exc:
+            if not exc.recoverable:
+                raise
+            logger.info("http_fetch_fallback url=%s reason=%s", url, exc)
+            return await self._get_browser_fetcher().fetch(url)
         if result.verdict is HttpContentVerdict.JS_REQUIRED:
             logger.info("js_content_required url=%s using chromium fallback", url)
             return await self._get_browser_fetcher().fetch(url)

@@ -278,6 +278,72 @@ async def test_worker_enqueues_knowledge_pass_after_success(patch_dns) -> None:
     assert enqueued == [job.website_id]
 
 
+async def test_zero_page_crawl_fails_and_preserves_errors(patch_dns, caplog) -> None:
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    ctx["crawler_fetcher"] = FakePageFetcher({})
+    enqueued: list[str] = []
+
+    async def fake_enqueue(website_id: str) -> None:
+        enqueued.append(website_id)
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+        enqueue_knowledge=fake_enqueue,
+    )
+
+    assert result == {"status": "failed", "pages": 0}
+    stored_job = jobs.jobs[job.id]
+    assert stored_job.status == CRAWL_STATUS_FAILED
+    assert stored_job.error_message == "No pages were fetched."
+    assert stored_job.errors
+    assert stored_job.errors[0].url == SEED
+    assert stored_job.errors[0].message == f"Not found: {SEED}"
+    assert enqueued == []
+    assert websites.websites[job.website_id].status == "failed"
+    assert "first_error_url=https://acme.example/" in caplog.text
+
+
+async def test_zero_page_recrawl_preserves_existing_documents(patch_dns) -> None:
+    from backend.models.document import Document
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    existing = Document.new(
+        tenant_id="tenant-a",
+        website_id=job.website_id,
+        url=SEED,
+        title="Existing home",
+        content="Existing indexed content",
+        checksum="c" * 64,
+    )
+    await documents.upsert(existing)
+    website = websites.websites[job.website_id]
+    website.status = WEBSITE_STATUS_READY
+    website.pages_indexed = 1
+    await websites.update(website)
+    ctx["crawler_fetcher"] = FakePageFetcher({})
+
+    result = await _run_crawl_job(
+        ctx,
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result["status"] == "failed"
+    assert documents.documents[existing.id].content == "Existing indexed content"
+    assert websites.websites[job.website_id].status == WEBSITE_STATUS_READY
+    assert websites.websites[job.website_id].pages_indexed == 1
+
+
 async def test_worker_skips_knowledge_pass_on_failure(patch_dns) -> None:
     """No knowledge handoff on a failed crawl (nothing new to embed)."""
     ctx, job, jobs, documents, websites, audit, usage = await _env()

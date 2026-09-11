@@ -473,14 +473,126 @@ async def test_one_js_page_only_falls_back_for_that_url(guard, monkeypatch) -> N
     assert browser.closed is True
 
 
-async def test_fetch_failure_does_not_launch_chromium(guard, monkeypatch) -> None:
-    monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _never_browser)
-    client = _mock_client(lambda request: httpx.Response(500))
+class _FallbackBrowser:
+    def __init__(self, result: FetchedPage | Exception) -> None:
+        self.result = result
+        self.closed = False
+        self.calls: list[str] = []
+
+    async def fetch(self, url: str) -> FetchedPage:
+        self.calls.append(url)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("status", [403, 429, 500, 502, 503, 504])
+async def test_recoverable_http_status_falls_back_to_browser(guard, monkeypatch, status) -> None:
+    browser = _FallbackBrowser(FetchedPage(url=SEED, html=GUIDE_PAGE))
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: browser,
+    )
+    client = _mock_client(lambda request: httpx.Response(status))
     fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
-    with pytest.raises(FetchError, match="HTTP 500"):
+    page = await fetcher.fetch(SEED)
+    await fetcher.close()
+    assert page.html == GUIDE_PAGE
+    assert browser.calls == [SEED]
+    assert browser.closed is True
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("timeout"), httpx.ConnectError("network")])
+async def test_http_network_failure_falls_back_to_browser(guard, monkeypatch, error) -> None:
+    browser = _FallbackBrowser(FetchedPage(url=SEED, html=GUIDE_PAGE))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: browser,
+    )
+    client = _mock_client(handler)
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    page = await fetcher.fetch(SEED)
+    await fetcher.close()
+    assert page.html == GUIDE_PAGE
+    assert browser.closed is True
+
+
+async def test_http_404_does_not_fall_back_to_browser(guard, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: pytest.fail("404 must not launch Chromium"),
+    )
+    client = _mock_client(lambda request: httpx.Response(404))
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    with pytest.raises(FetchError, match="HTTP 404"):
         await fetcher.fetch(SEED)
     await fetcher.close()
-    assert fetcher._browser_fetcher is None
+
+
+async def test_http_failure_and_browser_failure_are_recorded(guard, monkeypatch) -> None:
+    browser = _FallbackBrowser(FetchError("browser timeout"))
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: browser,
+    )
+    client = _mock_client(lambda request: httpx.Response(503))
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    documents = FakeDocumentRepository()
+    session = CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=documents,
+        guard=guard,
+        settings=_crawl_settings(),
+    )
+    assert await session.run() == 0
+    assert session.errors[0].url == SEED
+    assert session.errors[0].message == "browser timeout"
+    assert browser.closed is True
+
+
+async def test_successful_browser_fallback_is_stored(guard, monkeypatch) -> None:
+    browser = _FallbackBrowser(FetchedPage(url=SEED, html=GUIDE_PAGE))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                200,
+                content=b"User-agent: *\nAllow: /\n",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(503)
+
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: browser,
+    )
+    client = _mock_client(handler)
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    documents = FakeDocumentRepository()
+    session = CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=documents,
+        guard=guard,
+        settings=_crawl_settings(),
+    )
+
+    assert await session.run() == 1
+    assert {document.url for document in documents.documents.values()} == {SEED}
+    assert session.errors == []
+    assert browser.closed is True
 
 
 # --------------------------------------------------------------------------

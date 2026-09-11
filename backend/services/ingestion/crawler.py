@@ -52,6 +52,10 @@ def _current_rss_mb() -> int:
 class FetchError(Exception):
     """A page could not be fetched (timeout, network error, blocked request)."""
 
+    def __init__(self, message: str, *, recoverable: bool = False) -> None:
+        super().__init__(message)
+        self.recoverable = recoverable
+
 
 @dataclass(frozen=True)
 class FetchedPage:
