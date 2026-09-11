@@ -7,13 +7,17 @@ so `max_jobs` never translates into N Chromium instances (memory safety).
 """
 
 import asyncio
+import logging
 from typing import Any
 
 from playwright.async_api import Browser, BrowserContext, async_playwright
 
 from backend.core.config import get_settings
+from backend.core.errors import InvalidUrlError
 from backend.services.ingestion.crawler import FetchedPage, FetchError
 from backend.services.ingestion.ssrf_guard import SsrFGuard
+
+logger = logging.getLogger("webchat_ai")
 
 _playwright: Any = None
 _browser: Browser | None = None
@@ -56,8 +60,22 @@ async def get_browser() -> Browser:
         args = ["--disable-dev-shm-usage"]
         if settings.crawl_no_sandbox:
             args.append("--no-sandbox")
+        logger.info(
+            "crawl_browser_launch no_sandbox=%s browser_args=%s",
+            settings.crawl_no_sandbox,
+            args,
+        )
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=True, args=args)
+        try:
+            _browser = await _playwright.chromium.launch(headless=True, args=args)
+        except Exception as exc:  # noqa: BLE001 - surfaces the real launch error
+            logger.warning(
+                "crawl_browser_launch_failed error_type=%s error=%s",
+                type(exc).__name__,
+                exc,
+            )
+            raise
+        logger.info("crawl_browser_launch_success")
         return _browser
 
 
@@ -96,27 +114,52 @@ class BrowserPageFetcher:
 
     async def fetch(self, url: str) -> FetchedPage:
         await self._guard.validate_async(url)
-        context = await self._ensure_context()
-        page = await context.new_page()
+        logger.info("crawl_browser_fetch_start url=%s", url)
         try:
-            await self._install_route_guard(page)
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            if response is None:
-                raise FetchError(f"No response for {url}.")
-            if response.status >= 400:
-                raise FetchError(f"HTTP {response.status} for {url}.")
-            # Response size limit: cap the serialized DOM so a pathological page
-            # never floods the worker's memory (docs/06, Phase 4 resource limits).
-            html = await page.content()
-            if len(html) > self._max_html_bytes:
-                html = html[: self._max_html_bytes]
-            return FetchedPage(url=page.url, html=html)
+            context = await self._ensure_context()
+            page = await context.new_page()
+            try:
+                await self._install_route_guard(page)
+                logger.info("crawl_browser_navigation url=%s", url)
+                response = await page.goto(
+                    url, wait_until="domcontentloaded", timeout=self._timeout_ms
+                )
+                if response is None:
+                    raise FetchError(f"No response for {url}.")
+                if response.status >= 400:
+                    logger.warning(
+                        "crawl_browser_http_error url=%s status=%d",
+                        url,
+                        response.status,
+                    )
+                    raise FetchError(f"HTTP {response.status} for {url}.")
+                # Response size limit: cap the serialized DOM so a pathological page
+                # never floods the worker's memory (docs/06, Phase 4 resource limits).
+                html = await page.content()
+                if len(html) > self._max_html_bytes:
+                    html = html[: self._max_html_bytes]
+                logger.info(
+                    "crawl_browser_success url=%s final_url=%s html_bytes=%d",
+                    url,
+                    page.url,
+                    len(html),
+                )
+                return FetchedPage(url=page.url, html=html)
+            finally:
+                await page.close()
         except FetchError:
             raise
-        except Exception as exc:  # Playwright failures (timeout, net::ERR_*)
-            raise FetchError(f"Could not load {url}: {type(exc).__name__}") from exc
-        finally:
-            await page.close()
+        except InvalidUrlError:
+            raise
+        except Exception as exc:  # Playwright failures (timeout, net::ERR_*, launch)
+            message = f"Could not load {url}: {type(exc).__name__}: {exc}"
+            logger.warning(
+                "crawl_browser_failure url=%s error_type=%s error=%s",
+                url,
+                type(exc).__name__,
+                exc,
+            )
+            raise FetchError(message) from exc
 
     async def close(self) -> None:
         if self._context is not None:

@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Callable
 import httpx
 import pytest
 from backend.core.config import Settings
+from backend.core.errors import InvalidUrlError
 from backend.services.ingestion import (
     CrawlSession,
     FetchError,
@@ -593,6 +594,170 @@ async def test_successful_browser_fallback_is_stored(guard, monkeypatch) -> None
     assert {document.url for document in documents.documents.values()} == {SEED}
     assert session.errors == []
     assert browser.closed is True
+
+
+# --------------------------------------------------------------------------
+# Railway 403 fallback: browser launch/context/navigation failures must be
+# wrapped as FetchError (never escape as raw Playwright errors) and pages
+# must store when the browser succeeds.
+# --------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, status: int) -> None:
+        self.status = status
+
+
+class _FakePage:
+    def __init__(self, status: int, html: str, final_url: str = SEED) -> None:
+        self._status = status
+        self._html = html
+        self.url = final_url
+        self.closed = False
+
+    async def goto(self, url: str, *, wait_until: str, **kwargs) -> _FakeResponse:
+        return _FakeResponse(self._status)
+
+    async def content(self) -> str:
+        return self._html
+
+    async def route(self, *args, **kwargs) -> None:
+        return None
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeContext:
+    def __init__(self, page: _FakePage) -> None:
+        self._page = page
+        self.closed = False
+
+    async def new_page(self) -> _FakePage:
+        return self._page
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self, page: _FakePage) -> None:
+        self._page = page
+        self.closed = False
+
+    async def new_context(self, **kwargs) -> _FakeContext:
+        return _FakeContext(self._page)
+
+
+def _patch_browser(monkeypatch, browser) -> None:
+    async def _fake_get_browser():
+        return browser
+
+    monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _fake_get_browser)
+
+
+def _crawl_session(fetcher, guard, documents) -> CrawlSession:
+    return CrawlSession(
+        tenant_id="tenant-a",
+        website_id="website-a",
+        seed_url=SEED,
+        fetcher=fetcher,
+        documents=documents,
+        guard=guard,
+        settings=_crawl_settings(),
+    )
+
+
+async def test_http_403_browser_success_is_stored(guard, monkeypatch) -> None:
+    _patch_browser(monkeypatch, _FakeBrowser(_FakePage(status=200, html=GUIDE_PAGE)))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                200,
+                content=b"User-agent: *\nAllow: /\n",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(403)
+
+    client = _mock_client(handler)
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    documents = FakeDocumentRepository()
+    assert await _crawl_session(fetcher, guard, documents).run() == 1
+    assert {document.url for document in documents.documents.values()} == {SEED}
+    assert all(document.content for document in documents.documents.values())
+    await fetcher.close()
+
+
+async def test_browser_launch_failure_wrapped_and_recorded(guard, monkeypatch) -> None:
+    async def _raise_launch():
+        raise RuntimeError("browserType.launch: Process failed to launch")
+
+    monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _raise_launch)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                200,
+                content=b"User-agent: *\nAllow: /\n",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(403)
+
+    client = _mock_client(handler)
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    documents = FakeDocumentRepository()
+    session = _crawl_session(fetcher, guard, documents)
+    assert await session.run() == 0
+    assert [error.url for error in session.errors] == [SEED]
+    message = session.errors[0].message
+    assert "RuntimeError" in message
+    assert "Process failed to launch" in message
+    assert SEED in message
+    await fetcher.close()
+
+
+async def test_browser_403_records_identical_http_message(guard, monkeypatch) -> None:
+    _patch_browser(monkeypatch, _FakeBrowser(_FakePage(status=403, html="")))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                200,
+                content=b"User-agent: *\nAllow: /\n",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(403)
+
+    client = _mock_client(handler)
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    documents = FakeDocumentRepository()
+    session = _crawl_session(fetcher, guard, documents)
+    assert await session.run() == 0
+    assert session.errors[0].url == SEED
+    assert session.errors[0].message == "HTTP 403 for https://acme.example/."
+    await fetcher.close()
+
+
+async def test_ssrf_invalid_url_never_falls_back(guard, monkeypatch) -> None:
+    async def _block(url: str) -> None:
+        raise InvalidUrlError(f"Blocked: {url}")
+
+    monkeypatch.setattr(guard, "validate_async", _block)
+    monkeypatch.setattr(
+        "backend.services.ingestion.http_first.BrowserPageFetcher",
+        lambda *, guard: pytest.fail("SSRF-blocked URLs must not launch Chromium"),
+    )
+    client = _mock_client(
+        lambda request: httpx.Response(
+            200, content=SSR_PAGE.encode(), headers={"Content-Type": "text/html"}
+        )
+    )
+    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    with pytest.raises(InvalidUrlError):
+        await fetcher.fetch(SEED)
+    await fetcher.close()
+    assert fetcher._browser_fetcher is None
 
 
 # --------------------------------------------------------------------------

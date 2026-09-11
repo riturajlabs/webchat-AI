@@ -387,6 +387,7 @@ class HybridPageFetcher:
             if not exc.recoverable:
                 raise
             logger.info("http_fetch_fallback url=%s reason=%s", url, exc)
+            logger.info("crawl_browser_fallback_start url=%s", url)
             return await self._get_browser_fetcher().fetch(url)
         if result.verdict is HttpContentVerdict.JS_REQUIRED:
             logger.info("js_content_required url=%s using chromium fallback", url)
