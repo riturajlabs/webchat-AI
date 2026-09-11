@@ -70,6 +70,11 @@ export type CrawlJobStatus = 'pending' | 'running' | 'processing' | 'completed' 
 export interface CrawlJobError {
   url: string;
   message: string;
+  /** Egress-hardening classification (target_blocked, target_rate_limited, ...). */
+  classification?: string | null;
+  status_code?: number | null;
+  method?: string | null;
+  attempt?: number | null;
 }
 
 export interface CrawlJob {

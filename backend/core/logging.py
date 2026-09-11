@@ -114,6 +114,13 @@ def configure_logging(level: int | None = None) -> None:
     for handler in list(root.handlers):
         root.removeHandler(handler)
 
+    # The `httpx`/`httpcore` loggers emit the full request URL — including
+    # query strings — at INFO. Crawler egress must never leak URLs or tokens
+    # into logs (our structured crawl logs already carry host/path-only
+    # fields), so these are pinned to WARNING.
+    for noisy_logger in ("httpx", "httpcore"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
     handler = logging.StreamHandler(sys.stdout)
     if settings.environment.lower() == "development":
         handler.setFormatter(ReadableFormatter())

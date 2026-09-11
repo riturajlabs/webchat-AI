@@ -16,6 +16,10 @@ class StartCrawlResponse(BaseModel):
 class CrawlJobErrorOut(BaseModel):
     url: str
     message: str
+    classification: str | None = None
+    status_code: int | None = None
+    method: str | None = None
+    attempt: int | None = None
 
 
 class CrawlJobOut(BaseModel):
@@ -39,7 +43,17 @@ class CrawlJobOut(BaseModel):
             status=job.status,
             pages_total=job.pages_total,
             pages_completed=job.pages_completed,
-            errors=[CrawlJobErrorOut(url=e.url, message=e.message) for e in job.errors],
+            errors=[
+                CrawlJobErrorOut(
+                    url=e.url,
+                    message=e.message,
+                    classification=e.classification,
+                    status_code=e.status_code,
+                    method=e.method,
+                    attempt=e.attempt,
+                )
+                for e in job.errors
+            ],
             started_at=job.started_at,
             completed_at=job.completed_at,
             error_message=job.error_message,

@@ -29,10 +29,20 @@ CRAWL_STATUSES = CRAWL_ACTIVE_STATUSES | {CRAWL_STATUS_COMPLETED, CRAWL_STATUS_F
 
 
 class CrawlJobError(BaseModel):
-    """A per-URL failure collected during a crawl run."""
+    """A per-URL failure collected during a crawl run.
+
+    ``url``/``message`` stay as before; the optional classification metadata
+    lets the dashboard and metrics distinguish a target blocked/rate-limited
+    website from a generic worker failure without parsing message text
+    (docs/CRAWL_EGRESS_HARDENING.md).
+    """
 
     url: str
     message: str
+    classification: str | None = None
+    status_code: int | None = None
+    method: str | None = None
+    attempt: int | None = None
 
 
 class CrawlJob(BaseModel):

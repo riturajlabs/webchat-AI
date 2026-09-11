@@ -83,18 +83,29 @@ export function CrawlJobProgressBar({ job, progress, sseConnected }: CrawlJobPro
 
   if (job.status === 'failed') {
     const firstError = job.errors[0];
+    const blocked = firstError?.classification === 'target_blocked';
+    const rateLimited = firstError?.classification === 'target_rate_limited';
+    const failureKind = blocked
+      ? 'Crawl blocked'
+      : rateLimited
+        ? 'Crawl rate-limited'
+        : 'Crawl failed';
+    const pagesIndexed = job.pages_completed ?? 0;
     return (
       <div
         role="alert"
         className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
       >
         <AlertTriangle className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
-        <div>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p className="font-medium">{failureKind}</p>
           <p>
-            {job.error_message ?? `Crawl failed \u2014 ${job.errors.length} page(s) had errors.`}
+            {job.error_message ?? `${failureKind} \u2014 ${job.errors.length} page(s) had errors.`}
           </p>
-          {firstError ? (
-            <p>
+          {blocked || rateLimited ? (
+            <p>Pages indexed: {pagesIndexed}</p>
+          ) : firstError ? (
+            <p className="truncate">
               {firstError.url}: {firstError.message}
             </p>
           ) : null}

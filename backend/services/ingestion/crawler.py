@@ -28,6 +28,10 @@ from backend.models.document import Document
 from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_FAILED
 from backend.repositories import DocumentRepository
 from backend.services.ingestion.cleaner import clean_html
+from backend.services.ingestion.crawl_failure import (
+    CrawlFailureClassification,
+    safe_url_parts,
+)
 from backend.services.ingestion.extractor import extract_page, pick_preview_image
 from backend.services.ingestion.priority import score_crawl_candidate
 from backend.services.ingestion.ssrf_guard import SsrFGuard
@@ -50,11 +54,32 @@ def _current_rss_mb() -> int:
 
 
 class FetchError(Exception):
-    """A page could not be fetched (timeout, network error, blocked request)."""
+    """A page could not be fetched (timeout, network error, blocked request).
 
-    def __init__(self, message: str, *, recoverable: bool = False) -> None:
+    In addition to ``recoverable`` (drives browser fallback), the fetch path
+    attaches classification metadata so the worker, dashboard and metrics can
+    distinguish a hostile/rejecting target from a generic worker failure
+    without parsing message text (Phase 2, egress hardening).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        recoverable: bool = False,
+        classification: str | None = None,
+        status_code: int | None = None,
+        method: str | None = None,
+        attempt: int | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.recoverable = recoverable
+        self.classification = classification
+        self.status_code = status_code
+        self.method = method
+        self.attempt = attempt
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -119,6 +144,11 @@ class CrawlSession:
         # INGEST-04: set when the crawl was stopped early because the process
         # RSS exceeded the configured ceiling, so callers can surface it.
         self.memory_pressure_aborted: bool = False
+        # Egress hardening: set when the site rejected enough pages as blocked
+        # or rate-limited that the crawl stopped to stop wasting budget.
+        self.blocked_host_aborted: bool = False
+        # Per-host count of terminal blocked/rate-limited pages this run.
+        self._blocked_sites: dict[str, int] = {}
 
     async def run(self) -> int:
         """Crawl the site and persist cleaned pages. Returns pages stored."""
@@ -221,7 +251,32 @@ class CrawlSession:
                     await asyncio.sleep(self._robots.crawl_delay)
                 page = await self._fetcher.fetch(normalized)
             except (FetchError, InvalidUrlError) as exc:
-                self._record_error(normalized, str(exc))
+                self._record_error(normalized, str(exc), failed_fetch=exc)
+                # Egress hardening (Phase 3): stop wasting crawl budget once a
+                # site rejects enough pages as blocked/rate-limited. 404 and
+                # content errors never count toward the cap.
+                classification = getattr(exc, "classification", None)
+                if self._blocked_pages_allowance() and classification in (
+                    "target_blocked",
+                    "target_rate_limited",
+                ):
+                    if self._mark_blocked_page(seed_host):
+                        self._record_error(
+                            seed,
+                            "Crawl stopped: the site rejected automated crawling "
+                            "on multiple pages.",
+                        )
+                        logger.warning(
+                            "Crawl aborted: site %s rejected %d page(s) (blocked/"
+                            "rate-limited) exceeding crawl_max_blocked_pages_per_host "
+                            "(tenant=%s website=%s pages_stored=%d)",
+                            seed_host,
+                            self._settings.crawl_max_blocked_pages_per_host,
+                            self._tenant_id,
+                            self._website_id,
+                            stored,
+                        )
+                        break
                 continue
 
             # Response size limit: the browser truncates rendered HTML at this
@@ -265,6 +320,16 @@ class CrawlSession:
             await self._documents.upsert(document)
             stored += 1
             self.stored_urls.append(final_url)
+            # Egress observability (Phase 4): identify the stored page by host
+            # and path only - the full URL can carry tokens in its query string.
+            host, path = safe_url_parts(final_url)
+            logger.info(
+                "crawl_page_stored hostname=%s path=%s pages_stored=%d checksum_prefix=%s",
+                host,
+                path,
+                stored,
+                checksum[:8],
+            )
             if self._on_progress is not None:
                 await self._on_progress(stored, max_pages)
 
@@ -318,7 +383,13 @@ class CrawlSession:
             return RobotsTxt.allow_all()
         return RobotsTxt.parse(page.html)
 
-    def _record_error(self, url: str, message: str) -> None:
+    def _record_error(
+        self,
+        url: str,
+        message: str,
+        *,
+        failed_fetch: Exception | None = None,
+    ) -> None:
         if len(self.errors) >= _MAX_RECORDED_ERRORS:
             # Phase 7 (INGEST P3): the error buffer is bounded, but drops must
             # be visible rather than silent so diagnosis past the cap is not
@@ -330,7 +401,34 @@ class CrawlSession:
                 url,
             )
             return
-        self.errors.append(CrawlJobError(url=url, message=message))
+        classification = getattr(failed_fetch, "classification", None)
+        if classification is None and isinstance(failed_fetch, InvalidUrlError):
+            classification = CrawlFailureClassification.INVALID_URL.value
+        self.errors.append(
+            CrawlJobError(
+                url=url,
+                message=message,
+                classification=classification,
+                status_code=getattr(failed_fetch, "status_code", None),
+                method=getattr(failed_fetch, "method", None),
+                attempt=getattr(failed_fetch, "attempt", None),
+            )
+        )
+
+    def _blocked_pages_allowance(self) -> bool:
+        """True when the per-host blocked-page cap is enabled and not exhausted."""
+        cap = self._settings.crawl_max_blocked_pages_per_host
+        return cap > 0 and len(self._blocked_sites) < cap
+
+    def _mark_blocked_page(self, host: str) -> bool:
+        """Record one blocked page for `host`; True when the cap was hit."""
+        count = self._blocked_sites.get(host, 0) + 1
+        cap = self._settings.crawl_max_blocked_pages_per_host
+        if cap > 0 and count >= cap:
+            self.blocked_host_aborted = True
+            return True
+        self._blocked_sites[host] = count
+        return False
 
     @staticmethod
     def _site_host(url: str) -> str:

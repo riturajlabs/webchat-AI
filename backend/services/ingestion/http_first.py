@@ -17,16 +17,24 @@ import asyncio
 import codecs
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
 from urllib.parse import urljoin
 
 import httpx
 
-from backend.core.config import get_settings
+from backend.core.config import Settings, get_settings
+from backend.core.metrics import record_crawl_fetch_failure
 from backend.services.ingestion.browser import BrowserPageFetcher
 from backend.services.ingestion.cleaner import clean_html
+from backend.services.ingestion.crawl_failure import (
+    CrawlFailureClassification,
+    classify_http_status,
+    classify_network_error,
+    is_http_recoverable,
+    safe_url_parts,
+)
 from backend.services.ingestion.crawler import FetchedPage, FetchError
 from backend.services.ingestion.extractor import extract_page
 from backend.services.ingestion.ssrf_guard import SsrFGuard
@@ -38,7 +46,17 @@ logger = logging.getLogger("webchat_ai")
 # browser path.
 _MAX_REDIRECTS = 20
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
-_RECOVERABLE_STATUS_CODES = frozenset({403, 429, 500, 502, 503, 504})
+
+# Classifications that may be retried over HTTP (bounded) before the browser
+# fallback; 403 is deliberately missing (Phase 3, TRD).
+_HTTP_RETRYABLE = frozenset(
+    {
+        CrawlFailureClassification.TARGET_RATE_LIMITED.value,
+        CrawlFailureClassification.TARGET_SERVER_ERROR.value,
+        CrawlFailureClassification.RETRYABLE_NETWORK_ERROR.value,
+        CrawlFailureClassification.CRAWL_TIMEOUT.value,
+    }
+)
 
 _HTML_MEDIA_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 # Sitemaps, robots.txt and plain-text listings are fetched (robots.txt must be
@@ -237,6 +255,17 @@ def extract_http_content(html: str, url: str) -> ExtractionResult:
     )
 
 
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Parse a `Retry-After` seconds value (HTTP-date replies fall back to None)."""
+    value = response.headers.get("retry-after")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 async def fetch_http_page(
     url: str,
     *,
@@ -248,6 +277,7 @@ async def fetch_http_page(
     js_shell_min_bytes: int | None = None,
     user_agent: str | None = None,
     overall_timeout_seconds: float | None = None,
+    attempt: int = 1,
 ) -> HTTPFetchResult:
     """Fetch one URL over plain HTTP/HTTPS with redirect + size + type limits.
 
@@ -287,21 +317,43 @@ async def fetch_http_page(
                 try:
                     response = await client.send(request, stream=True, follow_redirects=False)
                 except httpx.HTTPError as exc:
-                    raise FetchError(
+                    raise _http_fetch_failure(
                         f"Could not reach {url}: {exc.__class__.__name__}",
+                        url=url,
+                        classification=classify_network_error(exc),
                         recoverable=True,
+                        attempt=attempt,
                     ) from exc
                 if response.status_code >= 400:
                     await response.aclose()
-                    raise FetchError(
+                    classification = classify_http_status(response.status_code)
+                    error_host, error_path = safe_url_parts(url)
+                    logger.warning(
+                        "crawl_http_error hostname=%s path=%s status=%d classification=%s",
+                        error_host,
+                        error_path,
+                        response.status_code,
+                        classification.value,
+                    )
+                    raise _http_fetch_failure(
                         f"HTTP {response.status_code} for {url}.",
-                        recoverable=response.status_code in _RECOVERABLE_STATUS_CODES,
+                        url=url,
+                        classification=classification,
+                        status_code=response.status_code,
+                        recoverable=is_http_recoverable(response.status_code),
+                        attempt=attempt,
+                        retry_after_seconds=_retry_after_seconds(response),
                     )
                 location = response.headers.get("location")
                 if response.status_code in _REDIRECT_CODES and location:
                     await response.aclose()
                     if hop == _MAX_REDIRECTS:
-                        raise FetchError(f"Too many redirects for {url}.")
+                        raise _http_fetch_failure(
+                            f"Too many redirects for {url}.",
+                            url=url,
+                            classification=CrawlFailureClassification.UNKNOWN_FAILURE,
+                            attempt=attempt,
+                        )
                     current = await guard.validate_async(urljoin(current, location))
                     continue
                 break
@@ -319,9 +371,12 @@ async def fetch_http_page(
                     chunks.append(data)
                     size += len(data)
             except httpx.HTTPError as exc:
-                raise FetchError(
+                raise _http_fetch_failure(
                     f"Interrupted while reading {url}: {exc.__class__.__name__}",
+                    url=url,
+                    classification=classify_network_error(exc),
                     recoverable=True,
+                    attempt=attempt,
                 ) from exc
             finally:
                 await response.aclose()
@@ -330,7 +385,12 @@ async def fetch_http_page(
             html = _decode_html(raw, content_type)
             media = content_type.split(";", 1)[0].strip().lower()
             if not _accepted_media(media, html):
-                raise FetchError(f"Unsupported content type {media or 'unknown'} for {url}.")
+                raise _http_fetch_failure(
+                    f"Unsupported content type {media or 'unknown'} for {url}.",
+                    url=url,
+                    classification=CrawlFailureClassification.UNSUPPORTED_CONTENT,
+                    attempt=attempt,
+                )
             verdict = (
                 judge_http_content(
                     html,
@@ -349,13 +409,80 @@ async def fetch_http_page(
                 verdict=verdict,
             )
     except TimeoutError:
-        raise FetchError(f"Timed out loading {url}.", recoverable=True) from None
+        raise _http_fetch_failure(
+            f"Timed out loading {url}.",
+            url=url,
+            classification=CrawlFailureClassification.CRAWL_TIMEOUT,
+            recoverable=True,
+            attempt=attempt,
+        ) from None
 
 
 def _default_http_client() -> httpx.AsyncClient:
     """Per-fetcher `httpx.AsyncClient`; tests inject their own factory."""
     settings = get_settings()
     return httpx.AsyncClient(timeout=httpx.Timeout(settings.crawl_navigation_timeout_ms / 1000.0))
+
+
+def _http_fetch_failure(
+    message: str,
+    *,
+    url: str,
+    classification: CrawlFailureClassification,
+    status_code: int | None = None,
+    recoverable: bool = False,
+    attempt: int = 1,
+    retry_after_seconds: float | None = None,
+) -> FetchError:
+    """Build a classified, metrics-recorded HTTP `FetchError` (egress hardening).
+
+    Every failed HTTP attempt is counted in `crawl_fetch_failures_total`
+    (classification/status/method labels only, bounded cardinality), and the
+    resulting error carries the metadata the worker, dashboard and retry loop
+    need without parsing message text.
+    """
+    record_crawl_fetch_failure(
+        classification=classification.value,
+        status_code=status_code,
+        method="http",
+    )
+    return FetchError(
+        message,
+        recoverable=recoverable,
+        classification=classification.value,
+        status_code=status_code,
+        method="http",
+        attempt=attempt,
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
+def _http_retry_delay_seconds(
+    failure: FetchError,
+    *,
+    attempt: int,
+    settings: Settings,
+) -> float:
+    """Bounded delay before the NEXT HTTP attempt for a retryable failure.
+
+    - 429: honour `Retry-After` (seconds) capped at `crawl_retry_max_wait_seconds`;
+      without a usable header, retry immediately (bounded by the attempt cap).
+    - 5xx: exponential backoff `base * 2**(attempt-1)`, capped.
+    - timeouts/network: retry immediately (still bounded by the attempt cap).
+    """
+    if failure.classification == CrawlFailureClassification.TARGET_RATE_LIMITED.value:
+        if failure.retry_after_seconds is not None:
+            return max(
+                0.0,
+                min(failure.retry_after_seconds, settings.crawl_retry_max_wait_seconds),
+            )
+        return 0.0
+    if failure.classification == CrawlFailureClassification.TARGET_SERVER_ERROR.value:
+        base = max(0.0, settings.crawl_retry_backoff_base_seconds)
+        cap = max(base, settings.crawl_retry_backoff_cap_seconds)
+        return float(min(base * (2 ** max(0, attempt - 1)), cap))
+    # Timeout / network errors: retry immediately (attempt cap still bounds us).
+    return 0.0
 
 
 class HybridPageFetcher:
@@ -373,26 +500,72 @@ class HybridPageFetcher:
         *,
         guard: SsrFGuard,
         http_client_factory: Callable[[], httpx.AsyncClient] = _default_http_client,
+        sleep_fn: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._guard = guard
         self._http_client_factory = http_client_factory
+        self._sleep_fn = sleep_fn
         self._http_client: httpx.AsyncClient | None = None
         self._browser_fetcher: BrowserPageFetcher | None = None
 
     async def fetch(self, url: str) -> FetchedPage:
         await self._guard.validate_async(url)
-        try:
-            result = await fetch_http_page(url, client=self._get_http(), guard=self._guard)
-        except FetchError as exc:
-            if not exc.recoverable:
-                raise
-            logger.info("http_fetch_fallback url=%s reason=%s", url, exc)
-            logger.info("crawl_browser_fallback_start url=%s", url)
-            return await self._get_browser_fetcher().fetch(url)
-        if result.verdict is HttpContentVerdict.JS_REQUIRED:
-            logger.info("js_content_required url=%s using chromium fallback", url)
-            return await self._get_browser_fetcher().fetch(url)
-        return FetchedPage(url=result.final_url, html=result.html)
+        settings = get_settings()
+        max_attempts = max(1, settings.crawl_http_max_attempts)
+        attempt = 0
+        last_http: FetchError | None = None
+        while True:
+            attempt += 1
+            host, path = safe_url_parts(url)
+            logger.info(
+                "crawl_fetch_attempt hostname=%s path=%s method=http attempt=%d",
+                host,
+                path,
+                attempt,
+            )
+            try:
+                result = await fetch_http_page(
+                    url,
+                    client=self._get_http(),
+                    guard=self._guard,
+                    attempt=attempt,
+                )
+            except FetchError as exc:
+                last_http = exc
+                if not exc.recoverable:
+                    raise
+                # 403/429/5xx/network/timeout may fall back to the browser, but
+                # 429/5xx/network/timeout get a BOUNDED HTTP retry first (403 is
+                # never retried over HTTP per Phase 3). No retry storms.
+                if exc.classification in _HTTP_RETRYABLE and attempt < max_attempts:
+                    delay = _http_retry_delay_seconds(exc, attempt=attempt, settings=settings)
+                    if delay > 0:
+                        retry_host, retry_path = safe_url_parts(url)
+                        logger.info(
+                            "crawl_http_retry hostname=%s path=%s attempt=%d "
+                            "delay_seconds=%.2f classification=%s",
+                            retry_host,
+                            retry_path,
+                            attempt,
+                            delay,
+                            exc.classification,
+                        )
+                        await self._sleep_fn(delay)
+                    continue
+                # Do not retry HTTP further: fall back to the browser exactly once.
+                break
+            if result.verdict is HttpContentVerdict.JS_REQUIRED:
+                logger.info("js_content_required url=%s using chromium fallback", url)
+                return await self._get_browser_fetcher().fetch(url)
+            return FetchedPage(url=result.final_url, html=result.html)
+        fallback_host, fallback_path = safe_url_parts(url)
+        logger.info(
+            "crawl_browser_fallback_start hostname=%s path=%s classification=%s",
+            fallback_host,
+            fallback_path,
+            last_http.classification if last_http is not None else None,
+        )
+        return await self._get_browser_fetcher().fetch(url)
 
     def _get_http(self) -> httpx.AsyncClient:
         if self._http_client is None:

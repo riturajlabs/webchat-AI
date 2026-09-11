@@ -55,6 +55,13 @@ def _mock_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.As
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+class _InstantSleeper:
+    """Zero-delay `sleep_fn` so bounded-retry tests never stall the suite."""
+
+    async def __call__(self, delay: float) -> None:
+        return None
+
+
 def _html(body: str, *, title: str = "Docs", lang: str = "en") -> str:
     return (
         f"<!doctype html><html lang='{lang}'><head><title>{title}</title></head>"
@@ -420,7 +427,9 @@ def _never_browser() -> None:
 async def _hybrid(guard, handler, monkeypatch) -> tuple[HybridPageFetcher, httpx.AsyncClient]:
     monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _never_browser)
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     return fetcher, client
 
 
@@ -457,7 +466,9 @@ async def test_one_js_page_only_falls_back_for_that_url(guard, monkeypatch) -> N
 
     monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _never_browser)
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     browser = FakeBrowser()
     monkeypatch.setattr(
         "backend.services.ingestion.http_first.BrowserPageFetcher",
@@ -498,7 +509,9 @@ async def test_recoverable_http_status_falls_back_to_browser(guard, monkeypatch,
         lambda *, guard: browser,
     )
     client = _mock_client(lambda request: httpx.Response(status))
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     page = await fetcher.fetch(SEED)
     await fetcher.close()
     assert page.html == GUIDE_PAGE
@@ -518,7 +531,9 @@ async def test_http_network_failure_falls_back_to_browser(guard, monkeypatch, er
         lambda *, guard: browser,
     )
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     page = await fetcher.fetch(SEED)
     await fetcher.close()
     assert page.html == GUIDE_PAGE
@@ -531,7 +546,9 @@ async def test_http_404_does_not_fall_back_to_browser(guard, monkeypatch) -> Non
         lambda *, guard: pytest.fail("404 must not launch Chromium"),
     )
     client = _mock_client(lambda request: httpx.Response(404))
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     with pytest.raises(FetchError, match="HTTP 404"):
         await fetcher.fetch(SEED)
     await fetcher.close()
@@ -544,7 +561,9 @@ async def test_http_failure_and_browser_failure_are_recorded(guard, monkeypatch)
         lambda *, guard: browser,
     )
     client = _mock_client(lambda request: httpx.Response(503))
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     session = CrawlSession(
         tenant_id="tenant-a",
@@ -578,7 +597,9 @@ async def test_successful_browser_fallback_is_stored(guard, monkeypatch) -> None
         lambda *, guard: browser,
     )
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     session = CrawlSession(
         tenant_id="tenant-a",
@@ -681,7 +702,9 @@ async def test_http_403_browser_success_is_stored(guard, monkeypatch) -> None:
         return httpx.Response(403)
 
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     assert await _crawl_session(fetcher, guard, documents).run() == 1
     assert {document.url for document in documents.documents.values()} == {SEED}
@@ -705,7 +728,9 @@ async def test_browser_launch_failure_wrapped_and_recorded(guard, monkeypatch) -
         return httpx.Response(403)
 
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     session = _crawl_session(fetcher, guard, documents)
     assert await session.run() == 0
@@ -730,7 +755,9 @@ async def test_browser_403_records_identical_http_message(guard, monkeypatch) ->
         return httpx.Response(403)
 
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     session = _crawl_session(fetcher, guard, documents)
     assert await session.run() == 0
@@ -753,7 +780,9 @@ async def test_ssrf_invalid_url_never_falls_back(guard, monkeypatch) -> None:
             200, content=SSR_PAGE.encode(), headers={"Content-Type": "text/html"}
         )
     )
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     with pytest.raises(InvalidUrlError):
         await fetcher.fetch(SEED)
     await fetcher.close()
@@ -859,7 +888,9 @@ async def test_crawl_session_honours_robots_depth_and_static_extraction(guard, m
 
     monkeypatch.setattr("backend.services.ingestion.browser.get_browser", _never_browser)
     client = _mock_client(handler)
-    fetcher = HybridPageFetcher(guard=guard, http_client_factory=lambda: client)
+    fetcher = HybridPageFetcher(
+        guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
+    )
     documents = FakeDocumentRepository()
     session = CrawlSession(
         tenant_id="tenant-a",

@@ -50,11 +50,25 @@ from backend.services.ingestion import (
     SsrFGuard,
 )
 from backend.services.ingestion.browser import crawl_semaphore
+from backend.services.ingestion.crawl_failure import (
+    CrawlFailureClassification,
+    safe_url_parts,
+    user_facing_reason,
+)
 from backend.workers.jobs.knowledge import enqueue_process_website_documents
 
 logger = logging.getLogger("webchat_ai")
 
 _pool: ConnectionPool | None = None
+
+# Terminal failure reasons that get a safe, user-facing sentence instead of the
+# generic "No pages were fetched." (docs/CRAWL_EGRESS_HARDENING.md, Phase 5).
+_SAFE_ZERO_PAGE_REASONS = frozenset(
+    {
+        CrawlFailureClassification.TARGET_BLOCKED.value,
+        CrawlFailureClassification.TARGET_RATE_LIMITED.value,
+    }
+)
 
 
 def _make_page_fetcher(ctx: dict[str, Any], guard: SsrFGuard) -> PageFetcher:
@@ -263,7 +277,18 @@ async def _run_crawl_job_impl(
             job.pages_completed = 0
             job.status = CRAWL_STATUS_FAILED
             job.completed_at = utcnow()
-            job.error_message = "No pages were fetched."
+            first_error = session.errors[0] if session.errors else None
+            # Phase 5 (egress hardening): score the outcome from the FIRST useful
+            # failure - the URL and classification that prove the target (not the
+            # worker) rejected automated crawling. Never expose network/egress
+            # internals to the dashboard.
+            classification = first_error.classification if first_error is not None else None
+            if classification in _SAFE_ZERO_PAGE_REASONS:
+                job.error_message = user_facing_reason(CrawlFailureClassification(classification))
+                failure_reason = classification
+            else:
+                job.error_message = "No pages were fetched."
+                failure_reason = "no_pages"
             job.updated_at = utcnow()
             await crawl_jobs.update(job)
             await crawl_events.publish_failed(job.id, error=job.error_message)
@@ -275,27 +300,88 @@ async def _run_crawl_job_impl(
             else:
                 website.status = WEBSITE_STATUS_READY
                 website.pages_indexed = existing_pages
+                # Surface that the previous knowledge base survives a blocked
+                # refresh (existing documents are never deleted by a zero-page
+                # recrawl).
+                job.error_message = (
+                    f"{job.error_message} Your existing knowledge base is still available."
+                )
             website.updated_at = utcnow()
             await websites.update(website)
 
             await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
-            record_crawl_failed(reason="no_pages")
-            if session.errors:
-                first_error = session.errors[0]
+            record_crawl_failed(reason=failure_reason)
+            elapsed = (
+                (job.completed_at - job.started_at).total_seconds()
+                if job.started_at is not None
+                else 0.0
+            )
+            if failure_reason in _SAFE_ZERO_PAGE_REASONS and first_error is not None:
+                host, path = safe_url_parts(first_error.url)
+                event_name = (
+                    "crawl_target_blocked"
+                    if failure_reason == CrawlFailureClassification.TARGET_BLOCKED.value
+                    else "crawl_target_rate_limited"
+                )
                 logger.warning(
-                    "crawl_failed job_id=%s tenant_id=%s reason=no_pages "
-                    "first_error_url=%s first_error=%s errors=%d",
+                    "%s job_id=%s tenant_id=%s website_id=%s hostname=%s path=%s "
+                    "status_code=%s method=%s attempt=%s existing_pages=%d elapsed_seconds=%.2f "
+                    "pages_stored=0",
+                    event_name,
                     crawl_job_id,
                     job.tenant_id,
-                    first_error.url,
-                    first_error.message,
+                    job.website_id,
+                    host,
+                    path,
+                    first_error.status_code if first_error.status_code is not None else "",
+                    first_error.method or "",
+                    first_error.attempt if first_error.attempt is not None else "",
+                    existing_pages,
+                    elapsed,
+                )
+            if failure_reason in _SAFE_ZERO_PAGE_REASONS:
+                logger.warning(
+                    "crawl_finished job_id=%s tenant_id=%s website_id=%s status=failed "
+                    "reason=%s pages_stored=%d pages_total=%d elapsed_seconds=%.2f",
+                    crawl_job_id,
+                    job.tenant_id,
+                    job.website_id,
+                    failure_reason,
+                    0,
+                    job.pages_total,
+                    elapsed,
+                )
+            else:
+                logger.info(
+                    "crawl_finished job_id=%s tenant_id=%s website_id=%s status=failed "
+                    "reason=%s pages_stored=%d pages_total=%d elapsed_seconds=%.2f",
+                    crawl_job_id,
+                    job.tenant_id,
+                    job.website_id,
+                    failure_reason,
+                    0,
+                    job.pages_total,
+                    elapsed,
+                )
+            if session.errors:
+                first_error_log = session.errors[0]
+                logger.warning(
+                    "crawl_failed job_id=%s tenant_id=%s reason=%s "
+                    "first_error_url=%s first_error=%s classification=%s errors=%d",
+                    crawl_job_id,
+                    job.tenant_id,
+                    failure_reason,
+                    first_error_log.url,
+                    first_error_log.message,
+                    first_error_log.classification or "",
                     len(session.errors),
                 )
             else:
                 logger.warning(
-                    "crawl_failed job_id=%s tenant_id=%s reason=no_pages errors=0",
+                    "crawl_failed job_id=%s tenant_id=%s reason=%s errors=0",
                     crawl_job_id,
                     job.tenant_id,
+                    failure_reason,
                 )
             return {"status": "failed", "pages": 0}
         # Audit R-02: incremental crawls only upsert discovered pages, so
@@ -360,6 +446,7 @@ async def _run_crawl_job_impl(
                     exc_info=True,
                 )
         record_crawl_completed()
+        elapsed = (job.completed_at - job.started_at).total_seconds()
         logger.info(
             "crawl_completed job_id=%s tenant_id=%s website_id=%s pages=%d",
             job.id,
@@ -367,6 +454,29 @@ async def _run_crawl_job_impl(
             job.website_id,
             stored,
         )
+        if session.blocked_host_aborted:
+            logger.warning(
+                "crawl_finished job_id=%s tenant_id=%s website_id=%s status=completed "
+                "reason=blocked_host_aborted pages_stored=%d pages_total=%d "
+                "elapsed_seconds=%.2f",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                stored,
+                job.pages_total,
+                elapsed,
+            )
+        else:
+            logger.info(
+                "crawl_finished job_id=%s tenant_id=%s website_id=%s status=completed "
+                "reason=success pages_stored=%d pages_total=%d elapsed_seconds=%.2f",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                stored,
+                job.pages_total,
+                elapsed,
+            )
         return {"status": "completed", "pages": stored}
     except InvalidUrlError as exc:
         # Deterministic failure: the seed is not crawlable (SSRF-blocked,

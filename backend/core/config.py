@@ -377,6 +377,24 @@ class Settings(BaseSettings):
     # large page of placeholder chrome (repeated "Loading...", login menu
     # strings) from being mistaken for actual content.
     crawl_http_min_content_words: int = 12
+    # Bounded egress hardening (docs/CRAWL_EGRESS_HARDENING.md). 403 is never
+    # retried over HTTP (the spec falls straight to the browser); 429/5xx/
+    # timeouts/network errors may be retried up to `crawl_http_max_attempts`
+    # total attempts before the browser fallback. Defaults favour being quiet
+    # on hostile sites - raising these values is a per-site opt-in, not a code
+    # default.
+    crawl_http_max_attempts: int = 2
+    # Cap (seconds) honoured for a `Retry-After` header - a hostile/WAF reply
+    # can demand very long waits and the crawler must never honour them.
+    crawl_retry_max_wait_seconds: float = 30.0
+    # Exponential backoff for server/network retries (base and ceiling seconds).
+    crawl_retry_backoff_base_seconds: float = 1.0
+    crawl_retry_backoff_cap_seconds: float = 5.0
+    # Per-domain terminal-failure budget (403/429 only): once this many pages
+    # on the crawl site are rejected as blocked/rate-limited, the crawl stops
+    # wasting budget on that host and finishes deterministically. 0 disables
+    # the early stop (preserves pre-existing behaviour).
+    crawl_max_blocked_pages_per_host: int = 10
 
     # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
     # Versioned answer prompt selected from backend/prompts/rag.py.

@@ -38,6 +38,7 @@ __all__ = [
     "record_crawl_started",
     "record_crawl_completed",
     "record_crawl_failed",
+    "record_crawl_fetch_failure",
     "record_mongodb_command_duration",
     "render_prometheus",
     "reset_registry",
@@ -366,6 +367,14 @@ CRAWL_FAILED_TOTAL = Counter(
     ("reason",),
 )
 
+CRAWL_FETCH_FAILURES_TOTAL = Counter(
+    "crawl_fetch_failures_total",
+    "Per-attempt page fetch failures by classification, HTTP status and method"
+    " (http|browser). Low-cardinality labels only: never full URLs, tenant ids"
+    " or job ids (docs/CRAWL_EGRESS_HARDENING.md).",
+    ("classification", "status_code", "method"),
+)
+
 MONGODB_QUERY_DURATION_SECONDS = Histogram(
     "mongodb_query_duration_seconds",
     "MongoDB command duration in seconds (excludes heartbeats), by command.",
@@ -499,6 +508,26 @@ def record_crawl_completed() -> None:
 def record_crawl_failed(reason: str) -> None:
     """Record a crawl job failure."""
     CRAWL_FAILED_TOTAL.inc(reason=reason)
+
+
+def record_crawl_fetch_failure(
+    *,
+    classification: str,
+    status_code: int | None = None,
+    method: str = "http",
+) -> None:
+    """Record one page-fetch failure attempt (egress diagnosability, Phase 4).
+
+    Labels are fixed and bounded (see the metric declaration): classification
+    is one of the `CrawlFailureClassification` values, status_code is the HTTP
+    status or "" when unknown, method is `http` or `browser`. Full URLs,
+    tenant ids and job ids are never used as labels.
+    """
+    CRAWL_FETCH_FAILURES_TOTAL.inc(
+        classification=classification,
+        status_code=str(status_code) if status_code is not None else "",
+        method=method or "",
+    )
 
 
 def record_mongodb_command_duration(*, command: str, duration_seconds: float) -> None:
