@@ -48,6 +48,65 @@ def _usage_ttl_seconds() -> int:
     return get_settings().usage_retention_days * 24 * 60 * 60
 
 
+# Phase 16 subscriptions payment_id index name (used for migration detection).
+_SUBSCRIPTION_PAYMENT_ID_INDEX = "payment_id_1"
+_SUBSCRIPTION_PAYMENT_ID_PARTIAL_FILTER = {"payment_id": {"$type": "string"}}
+
+
+async def _ensure_subscription_payment_id_index(db: AsyncIOMotorDatabase[Any]) -> None:
+    """Create/migrate the subscriptions payment_id index.
+
+    Paid subscriptions use payment_id as a gateway idempotency key and
+    require uniqueness across the collection. Admin grants intentionally
+    leave payment_id empty (None) because they carry no gateway id.
+
+    The original non-partial unique index treated null as a single value,
+    so inserting two admin grants anywhere in the collection always
+    collided (E11000 on payment_id). A partial unique index restricted
+    to string payment_ids preserves webhook idempotency for paid subs
+    while allowing any number of grants.
+    """
+    collection = db["subscriptions"]
+    info = await collection.index_information()
+    current = info.get(_SUBSCRIPTION_PAYMENT_ID_INDEX)
+    already_desired = (
+        current is not None
+        and current.get("unique") is True
+        and current.get("partialFilterExpression") == _SUBSCRIPTION_PAYMENT_ID_PARTIAL_FILTER
+    )
+    if already_desired:
+        return
+
+    # Verify existing string payment_ids are unique before rebuilding the
+    # index so a drop+create never masks data corruption.
+    dupes = await collection.aggregate(
+        [
+            {"$match": {"payment_id": {"$type": "string"}}},
+            {"$group": {"_id": "$payment_id", "count": {"$sum": 1}}},
+            {"$match": {"count": {"$gt": 1}}},
+            {"$limit": 1},
+        ]
+    ).to_list(1)
+    if dupes:
+        raise RuntimeError(
+            "Duplicate payment_id values detected in subscriptions; "
+            "fix data before migrating the payment_id index."
+        )
+
+    # Drop the legacy non-partial (or mismatched partial) unique index and
+    # create the correct partial unique index. OperationFailure on drop is
+    # expected on a fresh database where the index never existed.
+    try:
+        await collection.drop_index(_SUBSCRIPTION_PAYMENT_ID_INDEX)
+    except OperationFailure:
+        pass
+    await collection.create_index(
+        "payment_id",
+        unique=True,
+        partialFilterExpression=_SUBSCRIPTION_PAYMENT_ID_PARTIAL_FILTER,
+    )
+
+
 # Heartbeat/control commands that would only ever log as noise.
 _NOISE_COMMANDS = {"ping", "hello", "ismaster", "saslStart", "saslContinue"}
 
@@ -225,6 +284,8 @@ class MongoDB:
         websites(tenant,url), widgets.widget_id, widgets(tenant,website),
         chat_sessions.session_id, usage_records(tenant,website,date),
         api_keys.hashed_secret.
+        Partial unique: subscriptions.payment_id (string-only, for webhook
+        idempotency; admin grants leave payment_id empty, §16).
         TTL: refresh_tokens.expires_at (40 days, ADR-005 §5.4),
         audit_logs.created_at (1 year, ADR-005 §5.7),
         crawl_jobs.created_at (30 days, ADR-005 §5.7),
@@ -354,7 +415,10 @@ class MongoDB:
         # resolution) and the webhook idempotency lookup keyed by provider id.
         await db["subscriptions"].create_index([("tenant_id", 1), ("created_at", -1)])
         await db["subscriptions"].create_index([("tenant_id", 1), ("status", 1), ("end_date", 1)])
-        await db["subscriptions"].create_index("payment_id", unique=True)
+        # payment_id unique *among real gateway ids* only: admin grants leave it
+        # empty (§16), so the index is partial on string values. The helper
+        # migrates the legacy non-partial index where one exists.
+        await _ensure_subscription_payment_id_index(db)
         # API key management (docs/05 §12).
         await db["api_keys"].create_index("hashed_secret", unique=True)
         await db["api_keys"].create_index("tenant_id")
