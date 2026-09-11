@@ -175,7 +175,7 @@ function DeleteAccountDialog({
 }
 
 function DangerZone() {
-  const { user, logout } = useAuth();
+  const { user, clearAuth } = useAuth();
   const router = useRouter();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isPending, setIsPending] = useState(false);
@@ -191,10 +191,12 @@ function DangerZone() {
     setIsPending(true);
     try {
       await api.delete('/api/auth/me', { password });
-      // Server has already purged the account and revoked the session; the
-      // context logout clears the local auth user state so the navbar does not
+      // The server has already purged the account and revoked the session, so
+      // we clear local auth state directly (no /auth/logout call, which would
+      // 401 on a revoked session and hard-redirect to /login under the old
+      // api-client behavior). clearAuth resets the user so the navbar does not
       // keep showing a stale signed-in user after the redirect.
-      await logout();
+      clearAuth();
       router.push('/');
     } catch (error) {
       setIsPending(false);

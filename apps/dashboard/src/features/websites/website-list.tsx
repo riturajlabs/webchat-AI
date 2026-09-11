@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -13,81 +12,53 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 import { AddWebsiteDialog } from './add-website-dialog';
 import { ConfirmDialog } from '@/features/admin/confirm-dialog';
-import {
-  TERMINAL_CRAWL_STATUSES,
-  useCrawlJob,
-  useCrawlProgress,
-  useDeleteWebsite,
-  useStartCrawl,
-  useWebsites,
-  websitesKeys,
-} from './hooks';
+import { TERMINAL_CRAWL_STATUSES, useDeleteWebsite, useStartCrawl, useWebsites } from './hooks';
+import { activeCrawlStore } from './active-crawl-store';
+import { useCrawlActivity } from './crawl-activity-context';
 import { WebsiteCard } from './website-card';
-import type { CrawlJob, CrawlProgressEvent, Website } from './types';
+import type { Website } from './types';
 
 /* ------------------------------------------------------------------ */
-/*  SessionStorage persistence for active crawl jobs (Phase 7)          */
+/*  WebsiteCardWithActivity — consumes the app-wide crawl monitor      */
 /* ------------------------------------------------------------------ */
 
-const ACTIVE_JOBS_KEY = 'webchat_active_crawl_jobs';
-
-function loadActiveJobs(): Map<string, string> {
-  try {
-    const raw = sessionStorage.getItem(ACTIVE_JOBS_KEY);
-    if (!raw) return new Map();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Map(parsed as [string, string][]);
-    return new Map();
-  } catch {
-    return new Map();
-  }
-}
-
-function saveActiveJobs(jobs: Map<string, string>): void {
-  try {
-    if (jobs.size === 0) {
-      sessionStorage.removeItem(ACTIVE_JOBS_KEY);
-    } else {
-      sessionStorage.setItem(ACTIVE_JOBS_KEY, JSON.stringify([...jobs]));
-    }
-  } catch {
-    // sessionStorage may be unavailable; silently ignore.
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/*  CrawlJobTracker — calls hooks for a single job, passes state down  */
-/* ------------------------------------------------------------------ */
-
-function CrawlJobTracker({
-  jobId,
-  onJobCompleted,
-  children,
+function WebsiteCardWithActivity({
+  website,
+  crawlPending,
+  onJobTerminal,
+  onCrawl,
+  onEdit,
+  onDelete,
 }: {
-  jobId: string;
-  onJobCompleted?: (websiteId: string) => void;
-  children: (state: {
-    crawlJob: CrawlJob;
-    crawlProgress: CrawlProgressEvent | null;
-    sseConnected: boolean;
-  }) => React.ReactNode;
+  website: Website;
+  crawlPending: boolean;
+  onJobTerminal: () => void;
+  onCrawl: (website: Website) => void;
+  onEdit: (website: Website) => void;
+  onDelete: (website: Website) => void;
 }) {
-  const { progress, connected } = useCrawlProgress(jobId);
-  // Phase 8: pass sseConnected so polling is disabled while SSE provides
-  // real-time updates. Falls back to 3s polling when SSE is disconnected.
-  const { data } = useCrawlJob(jobId, connected);
-  const queryClient = useQueryClient();
+  const { crawlJob, crawlProgress, sseConnected } = useCrawlActivity(website.id);
 
+  // A terminal job means the crawl (or its knowledge phase) finished server
+  // side — clear any transient start-crawl error banner shown for this site.
   useEffect(() => {
-    if (data && TERMINAL_CRAWL_STATUSES.has(data.status)) {
-      void queryClient.invalidateQueries({ queryKey: websitesKeys.all });
-      onJobCompleted?.(data.website_id);
+    if (crawlJob && TERMINAL_CRAWL_STATUSES.has(crawlJob.status)) {
+      onJobTerminal();
     }
-  }, [data, queryClient, onJobCompleted]);
+  }, [crawlJob, onJobTerminal]);
 
-  if (!data) return null;
-
-  return <>{children({ crawlJob: data, crawlProgress: progress, sseConnected: connected })}</>;
+  return (
+    <WebsiteCard
+      website={website}
+      crawlJob={crawlJob}
+      crawlProgress={crawlProgress}
+      sseConnected={sseConnected}
+      crawlPending={crawlPending}
+      onCrawl={onCrawl}
+      onEdit={onEdit}
+      onDelete={onDelete}
+    />
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -101,17 +72,11 @@ export function WebsiteList() {
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Website | null>(null);
-  const [activeJobs, setActiveJobs] = useState<Map<string, string>>(loadActiveJobs);
   const [pendingWebsiteId, setPendingWebsiteId] = useState<string | null>(null);
   const [crawlError, setCrawlError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Website | null>(null);
 
   const websites = data ?? [];
-
-  // Persist activeJobs to sessionStorage whenever they change.
-  useEffect(() => {
-    saveActiveJobs(activeJobs);
-  }, [activeJobs]);
 
   function openCreate() {
     setEditing(null);
@@ -149,11 +114,9 @@ export function WebsiteList() {
     setPendingWebsiteId(website.id);
     try {
       const result = await startCrawl.mutateAsync(website.id);
-      setActiveJobs((prev) => {
-        const next = new Map(prev);
-        next.set(website.id, result.crawl_job_id);
-        return next;
-      });
+      // Registers the job with the app-wide monitor (single SSE stream + poll
+      // per job), persisted across pages and reloads via active-crawl-store.
+      activeCrawlStore.set(website.id, result.crawl_job_id);
       toast.success(`Crawl started for "${website.name}"`);
     } catch (e) {
       setCrawlError(e instanceof Error ? e.message : 'Failed to start crawl.');
@@ -161,55 +124,6 @@ export function WebsiteList() {
     } finally {
       setPendingWebsiteId(null);
     }
-  }
-
-  function renderWebsiteCard(website: Website) {
-    const jobId = activeJobs.get(website.id);
-
-    const card = (
-      <WebsiteCard
-        website={website}
-        crawlJob={null}
-        crawlProgress={null}
-        sseConnected={false}
-        crawlPending={pendingWebsiteId === website.id}
-        onCrawl={(site) => void handleCrawl(site)}
-        onEdit={openEdit}
-        onDelete={(site) => void handleDelete(site)}
-      />
-    );
-
-    if (!jobId) return card;
-
-    return (
-      <CrawlJobTracker
-        key={jobId}
-        jobId={jobId}
-        onJobCompleted={(completedWebsiteId) => {
-          setCrawlError(null);
-          // Remove completed/failed jobs from active jobs so they don't persist
-          // forever in sessionStorage.
-          setActiveJobs((prev) => {
-            const next = new Map(prev);
-            next.delete(completedWebsiteId);
-            return next;
-          });
-        }}
-      >
-        {({ crawlJob, crawlProgress, sseConnected }) => (
-          <WebsiteCard
-            website={website}
-            crawlJob={crawlJob}
-            crawlProgress={crawlProgress}
-            sseConnected={sseConnected}
-            crawlPending={pendingWebsiteId === website.id}
-            onCrawl={(site) => void handleCrawl(site)}
-            onEdit={openEdit}
-            onDelete={(site) => void handleDelete(site)}
-          />
-        )}
-      </CrawlJobTracker>
-    );
   }
 
   return (
@@ -248,7 +162,7 @@ export function WebsiteList() {
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 space-y-2">
                   <Skeleton className="h-5 w-32" />
-                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-5 w-48" />
                 </div>
                 <Skeleton className="h-5 w-16" />
               </div>
@@ -286,7 +200,16 @@ export function WebsiteList() {
       {!isPending && !isError && websites.length > 0 ? (
         <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {websites.map((website) => (
-            <li key={website.id}>{renderWebsiteCard(website)}</li>
+            <li key={website.id}>
+              <WebsiteCardWithActivity
+                website={website}
+                crawlPending={pendingWebsiteId === website.id}
+                onJobTerminal={() => setCrawlError(null)}
+                onCrawl={(site) => void handleCrawl(site)}
+                onEdit={openEdit}
+                onDelete={(site) => void handleDelete(site)}
+              />
+            </li>
           ))}
         </ul>
       ) : null}

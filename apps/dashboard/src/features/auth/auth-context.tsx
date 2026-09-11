@@ -30,6 +30,12 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<UserOut>;
   register: (name: string, email: string, password: string) => Promise<UserOut>;
   logout: () => Promise<void>;
+  /**
+   * Clears the local session ("forget who we are") without hitting the
+   * backend. Used after account deletion, where the server session has
+   * already been revoked and an explicit logout would 401 and redirect.
+   */
+  clearAuth: () => void;
   refreshSession: () => Promise<boolean>;
   updateUser: (patch: Partial<Pick<UserOut, 'name' | 'avatar_url'>>) => void;
 }
@@ -114,11 +120,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await api.post<MessageResponse>('/api/auth/logout');
+      // Suppress the automatic /login redirect: logout is an explicit flow
+      // that clears local auth state and lets the caller navigate (e.g. to
+      // `/`) itself. Without suppression, a 401 here (already-revoked or
+      // expired session) would hard-redirect to /login and hijack that.
+      await api.post<MessageResponse>('/api/auth/logout', undefined, {
+        suppressSessionRedirect: true,
+      });
     } finally {
       clearSession();
       setUser(null);
     }
+  }, []);
+
+  const clearAuth = useCallback(() => {
+    clearSession();
+    setUser(null);
   }, []);
 
   const updateUser = useCallback((patch: Partial<Pick<UserOut, 'name' | 'avatar_url'>>) => {
@@ -133,10 +150,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       login,
       register,
       logout,
+      clearAuth,
       refreshSession,
       updateUser,
     }),
-    [user, status, login, register, logout, refreshSession, updateUser],
+    [user, status, login, register, logout, clearAuth, refreshSession, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

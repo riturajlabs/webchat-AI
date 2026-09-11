@@ -31,7 +31,7 @@ import { useTheme } from 'next-themes';
 const mockedUseAuth = vi.mocked(useAuth);
 const mockedUseTheme = vi.mocked(useTheme);
 const mockedDelete = vi.mocked(api.delete);
-const mockLogout = vi.fn();
+const mockClearAuth = vi.fn();
 
 const USER = {
   id: 'user-1',
@@ -48,7 +48,7 @@ function mockAuth() {
   mockedUseAuth.mockReturnValue({
     user: USER,
     status: 'ready',
-    logout: mockLogout,
+    clearAuth: mockClearAuth,
   } as never);
 }
 
@@ -98,7 +98,7 @@ describe('SettingsPage', () => {
     expect(confirmButton).toBeEnabled();
   });
 
-  it('deletes the account with the password, logs out and redirects home', async () => {
+  it('deletes the account with the password, clears auth locally and redirects home', async () => {
     render(<SettingsPage />);
     fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
 
@@ -109,7 +109,9 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(mockedDelete).toHaveBeenCalledWith('/api/auth/me', { password: 'Str0ng!Pass' });
     });
-    expect(mockLogout).toHaveBeenCalled();
+    // The account was already deleted server-side; the session is cleared
+    // locally without a redundant (and 401-ing) /auth/logout call.
+    expect(mockClearAuth).toHaveBeenCalled();
     expect(push).toHaveBeenCalledWith('/');
   });
 

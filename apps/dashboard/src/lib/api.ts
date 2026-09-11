@@ -13,7 +13,9 @@
  * - A 401 on an authenticated request triggers a single silent refresh via
  *   the httpOnly refresh cookie, then retries the original request once.
  *   If the refresh fails the session is cleared and the user is redirected
- *   to /login. The retry flag prevents infinite refresh loops.
+ *   to /login (unless the caller opted out via `suppressSessionRedirect`,
+ *   used by explicit sign-out and account deletion flows). The retry flag
+ *   prevents infinite refresh loops.
  * - Every request runs with a client-side timeout (30s default, override via
  *   `timeoutMs`); a hang aborts the request and rejects with a
  *   `RequestTimeoutError` instead of leaving the request pending forever.
@@ -165,21 +167,28 @@ function redirectToLogin(): void {
   window.location.assign(`/login?redirect=${redirect}`);
 }
 
-async function refreshSession(): Promise<boolean> {
+async function refreshSession(suppressSessionRedirect = false): Promise<boolean> {
   if (refreshInFlight) {
     return refreshInFlight;
   }
 
-  refreshInFlight = performRefreshSession();
+  refreshInFlight = performRefreshSession(suppressSessionRedirect);
   return refreshInFlight;
 }
 
-async function performRefreshSession(): Promise<boolean> {
+async function performRefreshSession(suppressSessionRedirect: boolean): Promise<boolean> {
   const csrf = getCsrfToken() ?? readCsrfCookie();
   const headers = new Headers();
   if (csrf) {
     headers.set('X-CSRF-Token', csrf);
   }
+  const fail = (): false => {
+    clearSession();
+    if (!suppressSessionRedirect) {
+      redirectToLogin();
+    }
+    return false;
+  };
   try {
     const response = await fetchWithTimeout(`${API_BASE_URL}/api/auth/refresh`, {
       method: 'POST',
@@ -187,27 +196,21 @@ async function performRefreshSession(): Promise<boolean> {
       credentials: 'include',
     });
     if (!response.ok) {
-      clearSession();
-      redirectToLogin();
-      return false;
+      return fail();
     }
     const payload = (await response.json()) as {
       access_token?: string;
       csrf_token?: string;
     };
     if (typeof payload.access_token !== 'string') {
-      clearSession();
-      redirectToLogin();
-      return false;
+      return fail();
     }
     // setAccessToken mirrors the token to the SSE cookie automatically.
     setAccessToken(payload.access_token);
     setCsrfToken(payload.csrf_token ?? readCsrfCookie());
     return true;
   } catch {
-    clearSession();
-    redirectToLogin();
-    return false;
+    return fail();
   } finally {
     refreshInFlight = null;
   }
@@ -215,12 +218,19 @@ async function performRefreshSession(): Promise<boolean> {
 
 interface RequestOptions {
   retry?: boolean;
+  /**
+   * When true, a failed session refresh clears local session state but does
+   * NOT hard-redirect to /login. Used by explicit sign-out and account
+   * deletion flows, where the server session is already being revoked and a
+   * redirect would hijack the caller's own navigation (e.g. back to `/`).
+   */
+  suppressSessionRedirect?: boolean;
 }
 
 export async function request<T>(
   path: string,
   init: ApiRequestInit = {},
-  { retry = true }: RequestOptions = {},
+  { retry = true, suppressSessionRedirect = false }: RequestOptions = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   const token = getAccessToken();
@@ -244,9 +254,9 @@ export async function request<T>(
   });
 
   if (response.status === 401 && token && retry) {
-    const refreshed = await refreshSession();
+    const refreshed = await refreshSession(suppressSessionRedirect);
     if (refreshed) {
-      return request<T>(path, init, { retry: false });
+      return request<T>(path, init, { retry: false, suppressSessionRedirect });
     }
     throw new ApiError(401, 'session_expired', 'Session expired. Please sign in again.');
   }
@@ -280,11 +290,15 @@ export const api = {
   get<T>(path: string): Promise<T> {
     return request<T>(path);
   },
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return request<T>(path, {
-      method: 'POST',
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+  post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    return request<T>(
+      path,
+      {
+        method: 'POST',
+        body: body === undefined ? undefined : JSON.stringify(body),
+      },
+      options,
+    );
   },
   patch<T>(path: string, body: unknown): Promise<T> {
     return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });

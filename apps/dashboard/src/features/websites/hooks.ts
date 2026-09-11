@@ -21,6 +21,10 @@ export const websitesKeys = {
   all: ['websites'] as const,
 };
 
+export const websiteKeys = {
+  detail: (websiteId: string) => ['website', websiteId] as const,
+};
+
 export const crawlJobKeys = {
   detail: (jobId: string) => ['crawl-job', jobId] as const,
 };
@@ -31,6 +35,26 @@ export function useWebsites() {
   return useQuery({
     queryKey: websitesKeys.all,
     queryFn: () => api.get<Website[]>('/api/websites'),
+  });
+}
+
+/**
+ * Single-website query used by the crawl-activity monitor for targeted live
+ * polling while a crawl (or its knowledge-base embedding phase) is running.
+ */
+export function useWebsite(
+  websiteId: string,
+  options?: {
+    refetchInterval?:
+      | number
+      | false
+      | ((query: { state: { data: Website | undefined } }) => number | false | undefined);
+  },
+) {
+  return useQuery({
+    queryKey: websiteKeys.detail(websiteId),
+    queryFn: () => api.get<Website>(`/api/websites/${websiteId}`),
+    refetchInterval: options?.refetchInterval ?? false,
   });
 }
 

@@ -183,6 +183,45 @@ describe('api client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('clears the session without redirecting when suppressSessionRedirect is set', async () => {
+    setAccessToken('expired-token');
+    const assign = vi.fn();
+    stubLocation(assign);
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ error: { code: 'token_expired' } }, 401))
+      .mockResolvedValueOnce(jsonResponse({}, 401));
+
+    await expect(request('/api/auth/me', {}, { suppressSessionRedirect: true })).rejects.toThrow(
+      'Session expired',
+    );
+
+    expect(getAccessToken()).toBeNull();
+    expect(getCsrfToken()).toBeNull();
+    expect(assign).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('api.post forwards suppressSessionRedirect for explicit sign-out flows', async () => {
+    setAccessToken('expired-token');
+    const assign = vi.fn();
+    stubLocation(assign);
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({}, 401))
+      .mockResolvedValueOnce(jsonResponse({}, 401));
+
+    // The logout endpoint 401s (session already revoked) and the silent
+    // refresh also fails. Without suppression this would hard-redirect to
+    // /login and hijack the logout flow's own navigation to `/`.
+    await expect(
+      api.post('/api/auth/logout', undefined, { suppressSessionRedirect: true }),
+    ).rejects.toThrow('Session expired');
+
+    expect(assign).not.toHaveBeenCalled();
+    expect(getAccessToken()).toBeNull();
+  });
+
   it('sends the CSRF header from memory for protected endpoints', async () => {
     setAccessToken('access-1');
     setCsrfToken('csrf-memory');

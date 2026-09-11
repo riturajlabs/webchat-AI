@@ -1,24 +1,18 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useCrawlProgress } from './hooks';
+import { api } from '@/lib/api';
+import { useCrawlJob, useCrawlProgress } from './hooks';
+import type { CrawlJob } from './types';
 
 vi.mock('@/lib/api', () => ({
   API_BASE_URL: 'http://localhost:8000',
-  api: new Proxy(
-    {},
-    {
-      get: (_target: object, prop: string | symbol) => {
-        if (typeof prop === 'string') {
-          if (prop === 'post') return vi.fn().mockResolvedValue(undefined);
-          return () => {
-            throw new Error(`api.${prop} not mocked`);
-          };
-        }
-        return undefined;
-      },
-    },
-  ),
+  api: {
+    get: vi.fn(() => Promise.reject(new Error('api.get not mocked'))),
+    post: vi.fn(() => Promise.resolve(undefined)),
+  },
 }));
 
 /* ------------------------------------------------------------------ */
@@ -388,5 +382,94 @@ describe('useCrawlProgress', () => {
     rerender({ id: null as unknown as string });
 
     expect(es.readyState).toBe(2);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  useCrawlJob                                                        */
+/* ------------------------------------------------------------------ */
+
+const JOB: CrawlJob = {
+  id: 'job-1',
+  website_id: 'site-1',
+  status: 'running',
+  pages_total: 5,
+  pages_completed: 2,
+  errors: [],
+  started_at: '2026-08-01T00:00:00Z',
+  completed_at: null,
+  error_message: null,
+  created_at: '2026-08-01T00:00:00Z',
+  updated_at: '2026-08-01T00:00:00Z',
+};
+
+describe('useCrawlJob', () => {
+  const mockedGetApi = vi.mocked(api.get);
+  let queryClient: QueryClient;
+
+  function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    mockedGetApi.mockImplementation((path: string) => {
+      if (path === '/api/crawl-jobs/job-1') return Promise.resolve(JOB);
+      return Promise.reject(new Error(`Unexpected path ${path}`));
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('polls every 3 s while SSE is disconnected and stops once the job is terminal', async () => {
+    const { result } = renderHook(() => useCrawlJob('job-1', false), { wrapper: Wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.data).toEqual(JOB);
+    const calls = mockedGetApi.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_001);
+    });
+    expect(mockedGetApi.mock.calls.length).toBe(calls + 1);
+
+    // The next poll observes a terminal status, which disables polling.
+    mockedGetApi.mockImplementation((path: string) => {
+      if (path === '/api/crawl-jobs/job-1') return Promise.resolve({ ...JOB, status: 'completed' });
+      return Promise.reject(new Error(`Unexpected path ${path}`));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_001);
+    });
+    const callsAfterTerminal = mockedGetApi.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(mockedGetApi.mock.calls.length).toBe(callsAfterTerminal);
+  });
+
+  it('does not poll while the SSE stream is connected', async () => {
+    const { result } = renderHook(() => useCrawlJob('job-1', true), { wrapper: Wrapper });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.data).toBeTruthy();
+    const calls = mockedGetApi.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(mockedGetApi.mock.calls.length).toBe(calls);
   });
 });

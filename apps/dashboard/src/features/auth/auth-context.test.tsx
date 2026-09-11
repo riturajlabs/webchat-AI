@@ -170,7 +170,9 @@ describe('AuthProvider', () => {
       await result.current.logout();
     });
 
-    expect(mockedPost).toHaveBeenCalledWith('/api/auth/logout');
+    expect(mockedPost).toHaveBeenCalledWith('/api/auth/logout', undefined, {
+      suppressSessionRedirect: true,
+    });
     expect(result.current.user).toBeNull();
     expect(result.current.isAuthenticated).toBe(false);
     expect(getAccessToken()).toBeNull();
@@ -189,6 +191,28 @@ describe('AuthProvider', () => {
       });
     });
 
+    expect(result.current.isAuthenticated).toBe(false);
+    expect(getAccessToken()).toBeNull();
+  });
+
+  it('clears auth locally without any server call', async () => {
+    mockedPost.mockResolvedValueOnce({
+      access_token: 'access-1',
+      token_type: 'bearer',
+      expires_in: 3600,
+      user: USER,
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+
+    setAccessToken('access-1');
+    await act(async () => {
+      result.current.clearAuth();
+    });
+
+    expect(mockedPost).not.toHaveBeenCalledWith('/api/auth/logout');
+    expect(result.current.user).toBeNull();
     expect(result.current.isAuthenticated).toBe(false);
     expect(getAccessToken()).toBeNull();
   });
