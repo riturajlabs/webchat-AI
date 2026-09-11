@@ -284,6 +284,226 @@ repeated failures.
 
 ---
 
+# 🧭 Future Crawler Scalability & Website Access Strategy
+
+> **Planned architecture.** This section is a **future roadmap** direction for
+> crawler scalability and website access. It describes what _can be used_ and
+> the planned architecture direction — **not** necessarily what is implemented
+> today. The current crawler is described in the
+> [Website Crawler](#-website-crawler) section.
+
+## Current baseline
+
+WebChat AI currently uses a **cloud-based HTTP-first hybrid crawler**:
+
+- HTTP-first fetching
+- Playwright/Chromium fallback for JavaScript-heavy pages
+- Bounded retries
+- `robots.txt` and sitemap handling
+- SSRF protection
+- Failure classification
+- Graceful handling of inaccessible websites
+- Crawling → extraction → chunking → embeddings → knowledge base → RAG
+
+## Why some websites may not be crawlable
+
+Public websites can still reject a cloud crawler for **target-side or
+infrastructure reasons** such as:
+
+- WAF / anti-bot protection (Cloudflare, Akamai, Imperva, or custom rules)
+- Datacenter IP blocking
+- HTTP 403 responses
+- HTTP 429 rate limiting
+- CAPTCHA / human verification
+- Login / private content
+- Unstable target servers
+- JavaScript / interaction-heavy applications
+- `robots.txt` restrictions
+
+These are **crawler limitations, target-side restrictions, or infrastructure
+limitations** — they are **not** crawler software bugs. Software bugs are
+tracked and fixed separately through the normal test suite.
+
+As a general example, a target such as **Indira University** may return
+HTTP 403 to a cloud/datacenter crawler — a possible/observed target-side
+blocking scenario where the target's WAF or firewall rejects datacenter
+egress, not an indication that the crawler is broken. The exact cause is not
+claimed to be conclusively proven.
+
+See also:
+[`docs/CRAWL_EGRESS_HARDENING.md`](docs/CRAWL_EGRESS_HARDENING.md)
+
+## Future multi-mode crawling architecture
+
+The planned architecture routes every ingestion request through a **crawler
+gateway** that selects the most appropriate access mode:
+
+```mermaid
+flowchart TB
+
+    GATEWAY["Crawler Gateway"]
+
+    CLOUD["Cloud Crawl"]
+    AGENT["Customer Agent"]
+    IMPORT["API Import"]
+
+    KB[("Knowledge Base")]
+    RAG["RAG"]
+
+    GATEWAY --> CLOUD
+    GATEWAY --> AGENT
+    GATEWAY --> IMPORT
+
+    CLOUD --> KB
+    AGENT --> KB
+    IMPORT --> KB
+
+    KB --> RAG
+```
+
+### A. Cloud Crawler
+
+- Default for normal public websites.
+- Runs from WebChat AI infrastructure.
+- Uses the existing HTTP-first + browser fallback strategy.
+
+### B. Customer-side Crawler / Crawler Agent
+
+- For enterprise customers whose WAF/firewall blocks external cloud crawlers.
+- The customer runs a WebChat AI crawler agent inside their own
+  infrastructure/network.
+- The agent accesses the customer's website locally/internally.
+- The agent securely sends extracted/indexable content to WebChat AI through
+  an authenticated ingestion API.
+- This avoids requiring the customer's WAF to allow WebChat AI's cloud
+  crawler IP.
+- Credentials/tokens must remain server-side and must never be exposed in the
+  customer's frontend.
+
+### C. API / CMS / Direct Content Import
+
+- For customers that already have a CMS, internal API, documentation system,
+  sitemap, or content pipeline.
+- The customer can push content into WebChat AI through an authenticated
+  ingestion API.
+- WebChat AI performs chunking, embedding, indexing, and RAG processing.
+- This can be preferable to crawling when structured source content is
+  already available.
+
+## Future WAF allowlisting strategy
+
+Enterprise customers may optionally allowlist WebChat AI crawler egress IPs
+in their WAF/firewall:
+
+```text
+Customer WAF
+    |
+    +-- WebChat AI crawler IP -> ALLOW
+    |
+    +-- Unknown traffic -> normal WAF policy
+```
+
+Stable/static outbound IP infrastructure may be required for reliable
+allowlisting.
+
+> **Important:** a static IP does **not** guarantee bypassing a WAF. It only
+> provides a stable source IP that the customer can allowlist.
+
+## Railway / free-plan limitation
+
+This is an **infrastructure consideration**, not a permanent product
+limitation:
+
+- Free/shared cloud infrastructure may not provide the stable outbound IP
+  characteristics required by some enterprise WAF allowlists.
+- A future production crawler deployment can use infrastructure with
+  controlled/static egress.
+- The architecture must not be dependent on Railway Free.
+- Customer-side crawler / API ingestion remains an alternative when WAF
+  restrictions cannot be solved through allowlisting.
+
+## Recommended future decision matrix
+
+| Website / Environment           | Recommended ingestion mode                        |
+| ------------------------------- | ------------------------------------------------- |
+| Normal public website           | Cloud crawler                                     |
+| JS-heavy public website         | Cloud crawler + browser fallback                  |
+| Temporary 429/5xx               | Cloud crawler + bounded retry                     |
+| WAF blocks cloud crawler        | WAF allowlisting                                  |
+| Stable egress required          | Static/controlled crawler egress                  |
+| Strict enterprise firewall      | Customer-side crawler agent                       |
+| Private/login-only content      | Authenticated customer-controlled ingestion       |
+| Existing CMS/API                | API/CMS import                                    |
+| Sitemap available               | Sitemap-assisted crawling                         |
+| CAPTCHA/human verification      | Customer-controlled/API ingestion where permitted |
+| `robots.txt` disallows crawling | Respect restriction                               |
+
+## Future enterprise architecture
+
+Conceptually, the future ingestion modes feed one pipeline:
+
+```text
+Customer Website
+      |
+      +---------------- Cloud Crawl ----------------+
+      |                                              |
+      +------ Customer Crawler Agent ---------------+
+      |                                              |
+      +------ CMS/API Import -----------------------+
+                                                     |
+                                                     v
+                                           WebChat AI Ingestion
+                                                     |
+                                                     v
+                                              Chunking/Embedding
+                                                     |
+                                                     v
+                                             Knowledge Base
+                                                     |
+                                                     v
+                                                    RAG
+                                                     |
+                                                     v
+                                                  Chatbot
+```
+
+The goal is:
+
+> **Maximum accessible public-web coverage while providing enterprise
+> customers with controlled alternatives when their network/security policies
+> prevent cloud crawling.**
+
+## Non-goals / security principles
+
+WebChat AI should **not** rely on:
+
+- Random rotating proxies
+- Arbitrary third-party proxy services
+- Bypassing CAPTCHA / human verification
+- Bypassing customer WAF / security policies
+- Disabling TLS verification
+- Bypassing `robots.txt`
+- Weakening SSRF protections
+
+The preferred enterprise approach is: **controlled egress + customer
+allowlisting**, **customer-side crawling**, or **authenticated content/API
+ingestion**.
+
+## Future implementation phases
+
+**FUTURE roadmap** — these phases are not implemented today.
+
+- **Phase A** — controlled/static crawler egress, customer WAF allowlisting
+  documentation.
+- **Phase B** — customer-side WebChat AI crawler agent, secure crawler
+  registration/authentication, authenticated ingestion API.
+- **Phase C** — CMS/API connectors, scheduled incremental sync,
+  source-specific ingestion strategies.
+- **Phase D** — enterprise observability, per-tenant crawl policies, crawl
+  quotas, source health monitoring, incremental recrawling.
+
+---
+
 # 🏗️ Architecture
 
 ## Application architecture
