@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Menu, X } from 'lucide-react';
+import { Menu, X } from 'lucide-react';
 
+import { LogoMark } from '@/components/brand/logo-mark';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/features/auth/auth-context';
 import { NavLinks } from '@/components/layout/nav-links';
@@ -85,9 +86,7 @@ export function MobileNav() {
                 className="flex items-center gap-2 font-semibold"
                 onClick={close}
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <Bot className="size-4" aria-hidden="true" />
-                </span>
+                <LogoMark alt="" className="h-7 w-7" />
                 WebChat AI
               </Link>
               <Button

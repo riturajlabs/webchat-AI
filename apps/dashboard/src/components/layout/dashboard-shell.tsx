@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Bot, LogOut } from 'lucide-react';
+import { LogOut } from 'lucide-react';
 import { useState } from 'react';
 
+import { LogoMark } from '@/components/brand/logo-mark';
 import { useAuth } from '@/features/auth/auth-context';
 import { VerificationReminder } from '@/features/auth/verification-reminder';
 import { Button } from '@/components/ui/button';
@@ -36,9 +37,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen overflow-hidden bg-muted/30">
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-background md:flex">
         <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Bot className="size-4" aria-hidden="true" />
-          </span>
+          <LogoMark alt="" className="h-7 w-7" />
           WebChat AI
         </Link>
         <nav className="flex-1 overflow-y-auto px-3 pb-4" aria-label="Main navigation">

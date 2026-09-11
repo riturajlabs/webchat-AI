@@ -1,8 +1,14 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { ImageResponse } from 'next/og';
 
 export const alt = 'WebChat AI - AI Chatbot for Your Website';
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
+
+const logoDataUri = `data:image/png;base64,${readFileSync(
+  path.join(process.cwd(), 'public/logo.png'),
+).toString('base64')}`;
 
 export default function OpengraphImage() {
   return new ImageResponse(
@@ -40,30 +46,7 @@ export default function OpengraphImage() {
         }}
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-        <div
-          style={{
-            width: 96,
-            height: 96,
-            borderRadius: 24,
-            backgroundColor: '#2563eb',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <svg
-            width="56"
-            height="56"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#ffffff"
-            strokeWidth="2"
-          >
-            <path d="M12 8V4H8" />
-            <rect width="16" height="12" x="4" y="8" rx="2" />
-            <path d="M2 14h2M20 14h2M15 13v2M9 13v2" />
-          </svg>
-        </div>
+        <img src={logoDataUri} width={96} height={96} alt="" style={{ objectFit: 'contain' }} />
         <div style={{ fontSize: 64, fontWeight: 700, color: '#0a0a0a' }}>WebChat AI</div>
       </div>
       <div style={{ marginTop: 32, fontSize: 40, color: '#52525b' }}>

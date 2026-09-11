@@ -56,7 +56,7 @@ describe('Navbar', () => {
     mockAuth({ user: { ...USER, avatar_url: 'data:image/png;base64,AA==' } });
     const { container } = render(<Navbar />);
 
-    const img = container.querySelector('img');
+    const img = container.querySelector('img[src^="data:image"]');
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute('src', 'data:image/png;base64,AA==');
   });
@@ -65,7 +65,7 @@ describe('Navbar', () => {
     mockAuth({ user: { ...USER, avatar_url: null } });
     const { container } = render(<Navbar />);
 
-    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('img[src^="data:image"]')).toBeNull();
     const badge = container.querySelector('span[aria-hidden="true"]');
     expect(badge?.textContent).toBe('JD');
   });

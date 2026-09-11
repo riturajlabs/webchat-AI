@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { LayoutDashboard, LogOut, Menu, X } from 'lucide-react';
 
+import { LogoMark } from '@/components/brand/logo-mark';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/features/auth/auth-context';
@@ -93,7 +94,8 @@ export function MobileMenu() {
             aria-label="Mobile"
             className="mx-auto flex max-w-6xl flex-col gap-1 overflow-y-auto px-4 py-4 sm:px-6"
           >
-            <div className="px-3 pb-2">
+            <div className="flex items-center gap-2 px-3 pb-2">
+              <LogoMark alt="" className="h-6 w-6" />
               <p className="font-semibold">WebChat AI</p>
             </div>
             {MARKETING_NAV_LINKS.map(({ href, label }) => (

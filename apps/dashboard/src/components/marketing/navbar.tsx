@@ -2,9 +2,10 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Bot, ChevronDown, LayoutDashboard, LogOut } from 'lucide-react';
+import { ChevronDown, LayoutDashboard, LogOut } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { LogoMark } from '@/components/brand/logo-mark';
 import { Button } from '@/components/ui/button';
 import { Avatar } from '@/components/ui/avatar';
 import { useAuth } from '@/features/auth/auth-context';
@@ -25,9 +26,7 @@ export const MARKETING_NAV_LINKS = [
 export function BrandMark() {
   return (
     <Link href="/" className="flex items-center gap-2 font-semibold" aria-label="WebChat AI home">
-      <span className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-600 text-white shadow-sm">
-        <Bot className="size-4" aria-hidden="true" />
-      </span>
+      <LogoMark alt="" className="h-8 w-8" />
       WebChat AI
     </Link>
   );
