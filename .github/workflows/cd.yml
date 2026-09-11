@@ -180,6 +180,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          limit-severities-for-sarif: true
 
       - name: Scan Worker image
         id: trivy-worker
@@ -192,6 +193,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          limit-severities-for-sarif: true
 
       - name: Scan Dashboard image
         id: trivy-dashboard
@@ -204,6 +206,7 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          limit-severities-for-sarif: true
 
       - name: Scan Widget image
         id: trivy-widget
@@ -216,22 +219,50 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          limit-severities-for-sarif: true
 
-      - name: Upload Trivy SARIF
+      - name: Upload Trivy SARIF (API)
+        # One SARIF file per image, each with its own CodeQL category. Uploading
+        # SARIF as a directory with a single (default) category fails: GitHub
+        # rejects the run with "The CodeQL Action does not support uploading
+        # multiple SARIF runs with the same category." A unique stable category
+        # per image keeps every scan visible in the Security tab.
+        #
         # always() so findings still get uploaded after a scan reports
         # HIGH/CRITICAL (continue-on-error on the scans); hashFiles gates on
-        # actual SARIF output existing at runtime. If publishing failed before
-        # scans ran (no SARIF files), this is skipped cleanly — no misleading
-        # secondary failure. The Trivy gate step below still fails the job on
-        # any real HIGH/CRITICAL finding.
-        if: always() && hashFiles('trivy-*.sarif') != ''
+        # the specific SARIF file existing at runtime. If publishing failed
+        # before scans ran (no SARIF file), this is skipped cleanly — no
+        # misleading secondary failure. The Trivy gate step below still fails
+        # the job on any real HIGH/CRITICAL finding.
+        if: always() && hashFiles('trivy-api.sarif') != ''
         # Pinned to the immutable SHA of github/codeql-action v4 (the current
         # maintained major; v3 is deprecated Dec 2026). SHA-pinned to match the
         # repo's supply-chain policy for security-sensitive actions.
         uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9 (commit SHA)
         with:
-          sarif_file: .
-          category: trivy
+          sarif_file: trivy-api.sarif
+          category: trivy-api
+
+      - name: Upload Trivy SARIF (Worker)
+        if: always() && hashFiles('trivy-worker.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9 (commit SHA)
+        with:
+          sarif_file: trivy-worker.sarif
+          category: trivy-worker
+
+      - name: Upload Trivy SARIF (Dashboard)
+        if: always() && hashFiles('trivy-dashboard.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9 (commit SHA)
+        with:
+          sarif_file: trivy-dashboard.sarif
+          category: trivy-dashboard
+
+      - name: Upload Trivy SARIF (Widget)
+        if: always() && hashFiles('trivy-widget.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9 (commit SHA)
+        with:
+          sarif_file: trivy-widget.sarif
+          category: trivy-widget
 
       - name: Trivy gate (fail on HIGH/CRITICAL)
         # Only enforce the gate when scans actually ran (SARIF was produced —
