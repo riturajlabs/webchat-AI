@@ -115,25 +115,29 @@ def _seed_job(admin_env, *, tenant_id: str, status: str = "completed") -> CrawlJ
 
 def test_admin_requires_authentication(client) -> None:
     test_client, _ = client
-    for path in (
-        "/api/admin/tenants",
-        "/api/admin/tenants/t-1",
-        "/api/admin/users",
-        "/api/admin/stats",
-        "/api/admin/crawl-jobs",
-        "/api/admin/audit-logs",
-        "/api/admin/overview",
-        "/api/admin/usage",
-        "/api/admin/revenue",
-        "/api/admin/system-health",
-        "/api/admin/audit",
+    for method, path in (
+        ("GET", "/api/admin/tenants"),
+        ("GET", "/api/admin/tenants/t-1"),
+        ("GET", "/api/admin/users"),
+        ("GET", "/api/admin/stats"),
+        ("GET", "/api/admin/crawl-jobs"),
+        ("GET", "/api/admin/audit-logs"),
+        ("GET", "/api/admin/overview"),
+        ("GET", "/api/admin/usage"),
+        ("GET", "/api/admin/revenue"),
+        ("GET", "/api/admin/system-health"),
+        ("GET", "/api/admin/audit"),
+        ("POST", "/api/admin/tenants/t-1/grant-plan"),
+        ("POST", "/api/admin/tenants/t-1/revoke-plan"),
     ):
-        assert test_client.get(path).status_code == 401
+        response = getattr(test_client, method.lower())(path)
+        assert response.status_code == 401, path
 
 
 def test_owner_cannot_access_admin_endpoints(client) -> None:
     test_client, _ = client
     headers = _register(test_client)["headers"]
+    owner_account = _register(test_client)
 
     for method, path in (
         ("GET", "/api/admin/tenants"),
@@ -146,12 +150,13 @@ def test_owner_cannot_access_admin_endpoints(client) -> None:
         ("GET", "/api/admin/revenue"),
         ("GET", "/api/admin/system-health"),
         ("GET", "/api/admin/audit"),
+        ("POST", f"/api/admin/tenants/{owner_account['tenant_id']}/grant-plan"),
+        ("POST", f"/api/admin/tenants/{owner_account['tenant_id']}/revoke-plan"),
     ):
         response = getattr(test_client, method.lower())(path, headers=headers)
         assert response.status_code == 403, path
         assert response.json()["error"]["code"] == "FORBIDDEN"
 
-    owner_account = _register(test_client)
     response = test_client.patch(
         f"/api/admin/tenants/{owner_account['tenant_id']}",
         json={"status": "suspended"},
@@ -883,3 +888,259 @@ def test_admin_audit_dedicated_trail_viewer(client) -> None:
     assert body["total"] == 1
     assert body["items"][0]["plan_id"] == "pro"
     assert body["items"][0]["tenant_id"] == tenant_id
+
+
+# ------------------------------------------------- phase 16: plan grants
+
+
+def _grant_plan(test_client, admin, tenant_id, **overrides: Any) -> Any:
+    body: dict[str, Any] = {"plan": overrides.pop("plan", "pro")}
+    if "expires_at" in overrides:
+        body["expires_at"] = overrides.pop("expires_at")
+    if "reason" in overrides:
+        body["reason"] = overrides.pop("reason")
+    return test_client.post(
+        f"/api/admin/tenants/{tenant_id}/grant-plan",
+        json=body,
+        headers=admin["headers"],
+    )
+
+
+def test_admin_grants_pro_without_checkout(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    tenant_id = target["tenant_id"]
+
+    response = _grant_plan(test_client, admin, tenant_id, reason="Onboarding partner")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"] is True
+    assert body["tenant"]["plan"] == "free"
+    assert body["tenant"]["effective_plan"] == "pro"
+    assert body["tenant"]["entitlement_source"] == "admin_grant"
+    assert body["grant"]["source"] == "admin_grant"
+    assert body["grant"]["payment_provider"] == "admin"
+    assert body["grant"]["payment_id"] is None
+    assert body["grant"]["amount_cents"] == 0
+    assert body["grant"]["grant_reason"] == "Onboarding partner"
+    assert body["grant"]["granted_by"] == admin["user_id"]
+    assert body["grant"]["status"] == "active"
+
+    # Both audit trails: the shared tenant audit and the dedicated admin trail.
+    assert any(
+        log.action == "PLAN_GRANTED"
+        and log.tenant_id == tenant_id
+        and log.user_id == admin["user_id"]
+        for log in admin_env.auth.audit.logs
+    )
+    admin_log = next(log for log in admin_env.admin_audit.logs if log.action == "PLAN_GRANTED")
+    assert admin_log.actor_user_id == admin["user_id"]
+    assert admin_log.plan_id == "pro"
+    assert admin_log.grant_reason == "Onboarding partner"
+
+
+def test_admin_regrant_is_idempotent(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+
+    first = _grant_plan(test_client, admin, target["tenant_id"])
+    second = _grant_plan(test_client, admin, target["tenant_id"])
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["changed"] is True
+    assert second.json()["changed"] is False
+    assert second.json()["grant"]["id"] == first.json()["grant"]["id"]
+    grants = [s for s in admin_env.subscriptions.subscriptions if s.source == "admin_grant"]
+    assert len(grants) == 1
+    # Only the first grant writes an audit entry.
+    assert len([log for log in admin_env.admin_audit.logs if log.action == "PLAN_GRANTED"]) == 1
+
+
+def test_admin_grant_rejects_unknown_plan(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+
+    response = _grant_plan(test_client, admin, target["tenant_id"], plan="gold")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "PLAN_NOT_FOUND"
+    assert admin_env.subscriptions.subscriptions == []
+
+
+def test_admin_grant_rejects_free_plan(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+
+    response = _grant_plan(test_client, admin, target["tenant_id"], plan="free")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "PLAN_NOT_PURCHASABLE"
+
+
+def test_admin_grant_rejects_past_expiration(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+
+    response = _grant_plan(
+        test_client,
+        admin,
+        target["tenant_id"],
+        expires_at=(datetime.now(UTC) - timedelta(days=1)).isoformat(),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_GRANT"
+
+
+def test_admin_cannot_grant_own_tenant(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+
+    response = _grant_plan(test_client, admin, admin["tenant_id"])
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_admin_revokes_grant_and_falls_back(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    tenant_id = target["tenant_id"]
+    _seed_subscription(admin_env, tenant_id=tenant_id, amount_cents=4900)
+    grant = _grant_plan(test_client, admin, tenant_id)
+
+    response = test_client.post(
+        f"/api/admin/tenants/{tenant_id}/revoke-plan", headers=admin["headers"]
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"] is True
+    assert body["grant"] is None
+    assert body["tenant"]["effective_plan"] == "pro"
+    assert body["tenant"]["entitlement_source"] == "subscription"
+    revoked = [
+        log
+        for log in admin_env.admin_audit.logs
+        if log.action == "PLAN_REVOKED" and log.tenant_id == tenant_id
+    ]
+    assert len(revoked) == 1
+    assert revoked[0].actor_user_id == admin["user_id"]
+    assert revoked[0].plan_id == "pro"
+    assert any(
+        log.action == "PLAN_REVOKED"
+        and log.tenant_id == tenant_id
+        and log.user_id == admin["user_id"]
+        for log in admin_env.auth.audit.logs
+    )
+    # The paid subscription is untouched and the grant is cancelled, not deleted.
+    active_grants = [
+        s
+        for s in admin_env.subscriptions.subscriptions
+        if s.source == "admin_grant" and s.status in ("active", "trialing")
+    ]
+    assert active_grants == []
+    assert grant.json()["grant"]["id"] in {s.id for s in admin_env.subscriptions.subscriptions}
+
+
+def test_admin_revoke_without_active_grant_is_noop(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+
+    response = test_client.post(
+        f"/api/admin/tenants/{target['tenant_id']}/revoke-plan",
+        headers=admin["headers"],
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["changed"] is False
+    assert body["grant"] is None
+    assert admin_env.admin_audit.logs == []
+
+
+def test_tenant_list_surfaces_effective_plan_and_source(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    granted = _register(test_client, name="Granted Co")
+    _register(test_client, name="Plain Co")
+    _grant_plan(test_client, admin, granted["tenant_id"])
+
+    response = test_client.get("/api/admin/tenants", headers=admin["headers"])
+
+    assert response.status_code == 200
+    by_name = {item["company_name"]: item for item in response.json()["items"]}
+    assert by_name["Granted Co"]["effective_plan"] == "pro"
+    assert by_name["Granted Co"]["entitlement_source"] == "admin_grant"
+    assert by_name["Plain Co"]["effective_plan"] == "free"
+    assert by_name["Plain Co"]["entitlement_source"] == "tenant_plan"
+    assert by_name["Root"]["effective_plan"] == "free"
+    assert by_name["Root"]["entitlement_source"] == "tenant_plan"
+
+
+def test_tenant_detail_includes_active_subscription(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    _grant_plan(test_client, admin, target["tenant_id"], reason="Detail view")
+
+    response = test_client.get(
+        f"/api/admin/tenants/{target['tenant_id']}", headers=admin["headers"]
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["effective_plan"] == "pro"
+    assert body["entitlement_source"] == "admin_grant"
+    assert body["active_subscription"]["source"] == "admin_grant"
+    assert body["active_subscription"]["plan_id"] == "pro"
+    assert body["active_subscription"]["grant_reason"] == "Detail view"
+
+
+def test_user_list_surfaces_effective_plan(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    target = _register(test_client, name="Target Co")
+    _grant_plan(test_client, admin, target["tenant_id"])
+
+    response = test_client.get("/api/admin/users", headers=admin["headers"])
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    target_user = next(item for item in items if item["tenant_id"] == target["tenant_id"])
+    assert target_user["effective_plan"] == "pro"
+    assert target_user["entitlement_source"] == "admin_grant"
+    root_user = next(item for item in items if item["tenant_id"] == admin["tenant_id"])
+    assert root_user["effective_plan"] == "free"
+    assert root_user["entitlement_source"] == "tenant_plan"
+
+
+def test_admin_grants_do_not_inflate_revenue(client) -> None:
+    test_client, admin_env = client
+    admin = _register_admin(test_client, admin_env, name="Root")
+    paying = _register(test_client, name="Paying Co")
+    _seed_subscription(admin_env, tenant_id=paying["tenant_id"], amount_cents=4900)
+    _grant_plan(
+        test_client,
+        admin,
+        _register(test_client, name="Granted Co")["tenant_id"],
+    )
+
+    response = test_client.get("/api/admin/revenue", headers=admin["headers"])
+
+    assert response.status_code == 200
+    body = response.json()
+    # The grant is zero-amount and not counted as a paid subscription.
+    assert body["active_subscriptions"] == 1
+    assert body["total_revenue_cents"] == 4900
+    assert body["paid_payments"] == 1
+    assert all(payment["source"] == "payment" for payment in body["recent_payments"])

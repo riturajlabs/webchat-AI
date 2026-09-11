@@ -30,6 +30,7 @@ from backend.core.security import utcnow
 from backend.models.plan import Plan, get_plan
 from backend.models.subscription import (
     SUBSCRIPTION_LIVE_STATUSES,
+    SUBSCRIPTION_SOURCE_PAYMENT,
     SUBSCRIPTION_STATUS_ACTIVE,
     SUBSCRIPTION_STATUS_EXPIRED,
     Subscription,
@@ -114,6 +115,7 @@ class SubscriptionService:
             tenant_id=event.tenant_id,
             plan_id=plan.id,
             status=SUBSCRIPTION_STATUS_ACTIVE,
+            source=SUBSCRIPTION_SOURCE_PAYMENT,
             payment_provider=self._provider.name,
             payment_id=event.payment_id,
             start_date=now,

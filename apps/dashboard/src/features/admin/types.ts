@@ -9,9 +9,14 @@ export interface AdminTenant {
   company_name: string;
   plan: string;
   status: string;
+  effective_plan: string;
+  entitlement_source: EntitlementSource;
   created_at: string;
   updated_at: string;
 }
+
+/** Where a tenant's current plan comes from (Phase 16 manual grants). */
+export type EntitlementSource = 'admin_grant' | 'subscription' | 'tenant_plan';
 
 export interface AdminTenantUsage {
   conversations: number;
@@ -25,6 +30,7 @@ export interface AdminTenantDetail extends AdminTenant {
   user_count: number;
   active_crawl_jobs: number;
   usage: AdminTenantUsage;
+  active_subscription: AdminSubscription | null;
 }
 
 export interface AdminTenantListResponse {
@@ -42,6 +48,8 @@ export interface AdminUser {
   status: string;
   email_verified: boolean;
   tenant_id: string;
+  effective_plan: string;
+  entitlement_source: EntitlementSource;
   last_login: string | null;
   created_at: string;
 }
@@ -127,18 +135,22 @@ export interface AdminOverview {
   currency: string;
 }
 
-/** A payment-history row (`/api/admin/revenue`, Phase 15). */
+/** A subscription-history row (`/api/admin/revenue`, Phase 15). */
 export interface AdminSubscription {
   id: string;
   tenant_id: string;
   plan_id: string;
   status: string;
+  source: 'payment' | 'admin_grant';
   payment_provider: string | null;
   payment_id: string | null;
   start_date: string;
   end_date: string | null;
   amount_cents: number | null;
   currency: string | null;
+  granted_by: string | null;
+  granted_at: string | null;
+  grant_reason: string | null;
   created_at: string;
 }
 
@@ -189,4 +201,18 @@ export interface AdminAdminAuditLogListResponse {
   total: number;
   page: number;
   per_page: number;
+}
+
+/** Grant/revoke request body (`POST .../grant-plan`, Phase 16). */
+export interface AdminGrantPlanRequest {
+  plan: string;
+  expires_at?: string | null;
+  reason?: string | null;
+}
+
+/** Grant/revoke response (`AdminGrantResultOut`, Phase 16). */
+export interface AdminGrantResult {
+  tenant: AdminTenant;
+  grant: AdminSubscription | null;
+  changed: boolean;
 }

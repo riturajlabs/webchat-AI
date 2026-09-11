@@ -405,3 +405,14 @@ class PlanNotPurchasableError(AppError):
 
     status_code = 400
     code = "PLAN_NOT_PURCHASABLE"
+
+
+class InvalidGrantError(AppError):
+    """A manual plan grant could not be issued (Phase 16 admin grants).
+
+    Raised when an operator-supplied grant is malformed: the free plan is not
+    grantable, or the requested expiration lies in the past.
+    """
+
+    status_code = 400
+    code = "INVALID_GRANT"

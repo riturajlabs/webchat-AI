@@ -25,6 +25,16 @@ Phase 15 (SaaS operations panel):
     GET    /api/admin/system-health                  dependency probes + collection counts
     GET    /api/admin/audit                          dedicated admin trail (Phase 15)
 
+Phase 16 (manual Pro grants):
+
+    POST   /api/admin/tenants/{tenant_id}/grant-plan  issue a complimentary paid plan
+    POST   /api/admin/tenants/{tenant_id}/revoke-plan revoke an active admin grant
+
+    Granting writes a `source="admin_grant"` subscription record (zero amount,
+    never touches the payment gateway); the effective plan resolution prefers an
+    active admin grant over paid subscriptions over `tenants.plan`. Tenant and
+    user list/detail responses expose the resolved entitlement.
+
 Every route requires a bearer access token resolving to the platform
 `super_admin` role (`require_admin`), granted only through `SUPER_ADMIN_EMAILS`
 configuration (backend/core/rbac.py). Owners/tenants below receive the existing
@@ -34,7 +44,7 @@ configuration (backend/core/rbac.py). Owners/tenants below receive the existing
 """
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 
@@ -60,6 +70,8 @@ from backend.schemas.admin import (
     AdminCrawlJobListResponse,
     AdminCrawlJobOut,
     AdminCrawlStats,
+    AdminGrantPlanRequest,
+    AdminGrantResultOut,
     AdminOverviewOut,
     AdminRevenuePeriodOut,
     AdminRevenueReportOut,
@@ -125,6 +137,12 @@ def _stats_out(stats: PlatformStats) -> AdminStatsOut:
     )
 
 
+async def _tenant_out(service: AdminService, tenant: Any) -> AdminTenantOut:
+    """Map a tenant onto its admin response, including the resolved entitlement."""
+    entitlements = await service.resolve_entitlements([tenant])
+    return AdminTenantOut.from_tenant(tenant, entitlement=entitlements[tenant.id])
+
+
 @router.get("/overview", response_model=AdminOverviewOut)
 async def overview(
     service: Annotated[AdminService, Depends(get_admin_service)],
@@ -162,8 +180,12 @@ async def list_tenants(
         page=page, per_page=per_page, search=search, plan=plan, status=status
     )
     response.headers["X-Total-Count"] = str(total)
+    entitlements = await service.resolve_entitlements(items)
     return AdminTenantListResponse(
-        items=[AdminTenantOut.from_tenant(item) for item in items],
+        items=[
+            AdminTenantOut.from_tenant(item, entitlement=entitlements.get(item.id))
+            for item in items
+        ],
         total=total,
         page=page,
         per_page=per_page,
@@ -178,11 +200,15 @@ async def get_tenant_detail(
 ) -> AdminTenantDetailOut:
     detail = await service.get_tenant_detail(tenant_id)
     tenant = detail.tenant
+    entitlements = await service.resolve_entitlements([tenant])
+    entitlement = entitlements[tenant.id]
     return AdminTenantDetailOut(
         id=tenant.id,
         company_name=tenant.company_name,
         plan=tenant.plan,
         status=tenant.status,
+        effective_plan=entitlement.effective_plan,
+        entitlement_source=entitlement.source,
         created_at=tenant.created_at,
         updated_at=tenant.updated_at,
         website_count=detail.website_count,
@@ -193,6 +219,11 @@ async def get_tenant_detail(
             messages=detail.usage.messages,
             input_tokens=detail.usage.input_tokens,
             output_tokens=detail.usage.output_tokens,
+        ),
+        active_subscription=(
+            AdminSubscriptionOut.from_subscription(entitlement.subscription)
+            if entitlement.subscription is not None
+            else None
         ),
     )
 
@@ -208,7 +239,7 @@ async def update_tenant(
 ) -> AdminTenantOut:
     if body.status is None and body.plan is None:
         detail = await service.get_tenant_detail(tenant_id)
-        return AdminTenantOut.from_tenant(detail.tenant)
+        return await _tenant_out(service, detail.tenant)
     tenant = await service.update_tenant(
         tenant_id=tenant_id,
         status=body.status,
@@ -218,7 +249,7 @@ async def update_tenant(
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return AdminTenantOut.from_tenant(tenant)
+    return await _tenant_out(service, tenant)
 
 
 @router.post("/tenants/{tenant_id}/suspend", response_model=AdminTenantOut, status_code=200)
@@ -236,7 +267,7 @@ async def suspend_tenant(
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return AdminTenantOut.from_tenant(tenant)
+    return await _tenant_out(service, tenant)
 
 
 @router.post("/tenants/{tenant_id}/activate", response_model=AdminTenantOut, status_code=200)
@@ -254,7 +285,7 @@ async def activate_tenant(
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return AdminTenantOut.from_tenant(tenant)
+    return await _tenant_out(service, tenant)
 
 
 @router.post("/tenants/{tenant_id}/plan", response_model=AdminTenantOut, status_code=200)
@@ -274,7 +305,75 @@ async def change_tenant_plan(
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
-    return AdminTenantOut.from_tenant(tenant)
+    return await _tenant_out(service, tenant)
+
+
+@router.post("/tenants/{tenant_id}/grant-plan", response_model=AdminGrantResultOut, status_code=200)
+async def grant_plan(
+    tenant_id: str,
+    body: AdminGrantPlanRequest,
+    request: Request,
+    principal: Annotated[Principal, Depends(current_user)],
+    service: Annotated[AdminService, Depends(get_admin_service)],
+    _: Annotated[None, Depends(admin_limiter)],
+) -> AdminGrantResultOut:
+    """Issue a complimentary paid plan for a workspace (Phase 16).
+
+    Never touches the payment provider: writes a zero-amount `admin_grant`
+    subscription so the tenant's effective plan updates instantly. Re-granting
+    the identical plan is idempotent (`changed=False`, no audit entry).
+    """
+    result = await service.grant_plan(
+        tenant_id=tenant_id,
+        plan_id=body.plan,
+        admin_user_id=principal.user_id,
+        admin_tenant_id=principal.tenant_id,
+        expires_at=body.expires_at,
+        reason=body.reason,
+        ip_address=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return AdminGrantResultOut(
+        tenant=AdminTenantOut.from_tenant(result.tenant, entitlement=result.entitlement),
+        grant=(
+            AdminSubscriptionOut.from_subscription(result.grant)
+            if result.grant is not None
+            else None
+        ),
+        changed=result.changed,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/revoke-plan",
+    response_model=AdminGrantResultOut,
+    status_code=200,
+)
+async def revoke_plan(
+    tenant_id: str,
+    request: Request,
+    principal: Annotated[Principal, Depends(current_user)],
+    service: Annotated[AdminService, Depends(get_admin_service)],
+    _: Annotated[None, Depends(admin_limiter)],
+) -> AdminGrantResultOut:
+    """Revoke an active admin grant (Phase 16).
+
+    The grant record is marked `cancelled` and the effective plan falls back to
+    the newest paid subscription, then `tenants.plan`. A tenant without an
+    active grant is a no-op (`changed=False`, `grant=None`).
+    """
+    result = await service.revoke_plan(
+        tenant_id=tenant_id,
+        admin_user_id=principal.user_id,
+        admin_tenant_id=principal.tenant_id,
+        ip_address=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    return AdminGrantResultOut(
+        tenant=AdminTenantOut.from_tenant(result.tenant, entitlement=result.entitlement),
+        grant=None,
+        changed=result.changed,
+    )
 
 
 @router.get("/users", response_model=AdminUserListResponse)
@@ -293,8 +392,12 @@ async def list_users(
         page=page, per_page=per_page, search=search, status=status
     )
     response.headers["X-Total-Count"] = str(total)
+    entitlements = await service.resolve_entitlements_for_users(items)
     return AdminUserListResponse(
-        items=[AdminUserOut.from_user(item) for item in items],
+        items=[
+            AdminUserOut.from_user(item, entitlement=entitlements.get(item.tenant_id))
+            for item in items
+        ],
         total=total,
         page=page,
         per_page=per_page,

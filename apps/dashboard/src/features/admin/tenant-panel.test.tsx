@@ -6,11 +6,13 @@ import { TenantPanel } from './tenant-panel';
 import {
   useAdminActivateTenant,
   useAdminChangeTenantPlan,
+  useAdminGrantPlan,
+  useAdminRevokePlan,
   useAdminSuspendTenant,
   useAdminTenantDetail,
   useAdminTenants,
 } from './hooks';
-import type { AdminTenantDetail, AdminTenantListResponse } from './types';
+import type { AdminGrantResult, AdminTenantDetail, AdminTenantListResponse } from './types';
 
 vi.mock('./hooks', () => ({
   useAdminTenants: vi.fn(),
@@ -18,6 +20,8 @@ vi.mock('./hooks', () => ({
   useAdminSuspendTenant: vi.fn(),
   useAdminActivateTenant: vi.fn(),
   useAdminChangeTenantPlan: vi.fn(),
+  useAdminGrantPlan: vi.fn(),
+  useAdminRevokePlan: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
@@ -31,6 +35,8 @@ const mockedUseAdminTenantDetail = vi.mocked(useAdminTenantDetail);
 const mockedUseAdminSuspendTenant = vi.mocked(useAdminSuspendTenant);
 const mockedUseAdminActivateTenant = vi.mocked(useAdminActivateTenant);
 const mockedUseAdminChangeTenantPlan = vi.mocked(useAdminChangeTenantPlan);
+const mockedUseAdminGrantPlan = vi.mocked(useAdminGrantPlan);
+const mockedUseAdminRevokePlan = vi.mocked(useAdminRevokePlan);
 
 const TENANT_LIST: AdminTenantListResponse = {
   items: [
@@ -39,6 +45,8 @@ const TENANT_LIST: AdminTenantListResponse = {
       company_name: 'Acme Inc',
       plan: 'pro',
       status: 'active',
+      effective_plan: 'pro',
+      entitlement_source: 'subscription',
       created_at: '2026-08-01T00:00:00Z',
       updated_at: '2026-08-01T00:00:00Z',
     },
@@ -47,6 +55,8 @@ const TENANT_LIST: AdminTenantListResponse = {
       company_name: 'Globex',
       plan: 'free',
       status: 'suspended',
+      effective_plan: 'free',
+      entitlement_source: 'tenant_plan',
       created_at: '2026-07-01T00:00:00Z',
       updated_at: '2026-08-01T00:00:00Z',
     },
@@ -56,12 +66,49 @@ const TENANT_LIST: AdminTenantListResponse = {
   per_page: 20,
 };
 
+const GRANTED_TENANT: AdminTenantListResponse['items'][number] = {
+  id: 'tenant-3',
+  company_name: 'Initech',
+  plan: 'free',
+  status: 'active',
+  effective_plan: 'enterprise',
+  entitlement_source: 'admin_grant',
+  created_at: '2026-06-01T00:00:00Z',
+  updated_at: '2026-08-01T00:00:00Z',
+};
+
 const TENANT_DETAIL: AdminTenantDetail = {
   ...TENANT_LIST.items[0],
   website_count: 4,
   user_count: 6,
   active_crawl_jobs: 1,
   usage: { conversations: 100, messages: 300, input_tokens: 40000, output_tokens: 15000 },
+  active_subscription: null,
+};
+
+const GRANTED_TENANT_DETAIL: AdminTenantDetail = {
+  ...GRANTED_TENANT,
+  website_count: 2,
+  user_count: 3,
+  active_crawl_jobs: 0,
+  usage: { conversations: 10, messages: 20, input_tokens: 1000, output_tokens: 500 },
+  active_subscription: {
+    id: 'sub-1',
+    tenant_id: 'tenant-3',
+    plan_id: 'enterprise',
+    status: 'active',
+    source: 'admin_grant',
+    payment_provider: 'admin',
+    payment_id: null,
+    start_date: '2026-08-01T00:00:00Z',
+    end_date: '2026-12-31T00:00:00Z',
+    amount_cents: 0,
+    currency: 'usd',
+    granted_by: 'owner-1',
+    granted_at: '2026-08-01T00:00:00Z',
+    grant_reason: 'onboarding partner',
+    created_at: '2026-08-01T00:00:00Z',
+  },
 };
 
 function makeQueryClient() {
@@ -102,6 +149,14 @@ function mockMutations() {
     mutateAsync: vi.fn().mockResolvedValue(TENANT_LIST.items[0]),
     isPending: false,
   } as unknown as ReturnType<typeof useAdminChangeTenantPlan>);
+  mockedUseAdminGrantPlan.mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  } as unknown as ReturnType<typeof useAdminGrantPlan>);
+  mockedUseAdminRevokePlan.mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  } as unknown as ReturnType<typeof useAdminRevokePlan>);
   mockedUseAdminTenantDetail.mockReturnValue({
     data: TENANT_DETAIL,
     isPending: false,
@@ -239,6 +294,91 @@ describe('TenantPanel', () => {
       expect(mutateAsync).toHaveBeenCalledWith({ tenantId: 'tenant-1', plan: 'enterprise' }),
     );
     expect(toast.success).toHaveBeenCalledWith('Plan changed to enterprise');
+  });
+
+  it('shows an Admin Grant badge for tenants with a manual grant', () => {
+    mockTenants({
+      data: { items: [...TENANT_LIST.items, GRANTED_TENANT], total: 3, page: 1, per_page: 20 },
+    });
+    renderPanel();
+    expect(screen.getByText('Acme Inc')).toBeInTheDocument();
+    expect(screen.getByText('Initech')).toBeInTheDocument();
+    expect(screen.getByText('Admin Grant')).toBeInTheDocument();
+  });
+
+  it('grants a paid plan from the tenant detail dialog', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({
+      tenant: {
+        ...TENANT_LIST.items[0],
+        effective_plan: 'enterprise',
+        entitlement_source: 'admin_grant',
+      },
+      grant: null,
+      changed: true,
+    } as AdminGrantResult);
+    mockedUseAdminGrantPlan.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useAdminGrantPlan>);
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/ })[0]);
+    const dialog = screen.getByRole('dialog', { name: 'Acme Inc' });
+    expect(within(dialog).getByText('Pro — Paid subscription')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Grant plan' }));
+    fireEvent.change(within(dialog).getByLabelText('Grant plan'), {
+      target: { value: 'enterprise' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Reason (optional)'), {
+      target: { value: 'partner promo' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Expires (optional)'), {
+      target: { value: '2026-12-31' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm grant' }));
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith({
+        tenantId: 'tenant-1',
+        plan: 'enterprise',
+        expiresAt: new Date('2026-12-31T23:59:59').toISOString(),
+        reason: 'partner promo',
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith('Granted enterprise to Acme Inc');
+  });
+
+  it('revokes an active admin grant from the tenant detail dialog', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({
+      tenant: { ...GRANTED_TENANT, effective_plan: 'free', entitlement_source: 'tenant_plan' },
+      grant: null,
+      changed: true,
+    } as AdminGrantResult);
+    mockedUseAdminRevokePlan.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+    } as unknown as ReturnType<typeof useAdminRevokePlan>);
+    mockedUseAdminTenantDetail.mockReturnValue({
+      data: GRANTED_TENANT_DETAIL,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ReturnType<typeof useAdminTenantDetail>);
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Details/ })[0]);
+    const dialog = screen.getByRole('dialog', { name: 'Initech' });
+    expect(within(dialog).getByText('Enterprise — Admin Grant')).toBeInTheDocument();
+    expect(within(dialog).getByText(/onboarding partner/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke grant' }));
+    expect(screen.getByText('Revoke manual grant?')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+    expect(await mutateAsync).toHaveBeenCalledWith({ tenantId: 'tenant-3' });
+    expect(toast.success).toHaveBeenCalledWith('Revoked the manual grant for Initech');
   });
 
   it('shows a tenant error state when the list fails', () => {

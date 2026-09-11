@@ -28,6 +28,10 @@ class TenantRepository(Protocol):
 
     async def find_by_id(self, tenant_id: str) -> Tenant | None: ...
 
+    # Phase 16: batch lookup for the admin user list's entitlement resolution
+    # (bounded by the admin page size).
+    async def find_many(self, tenant_ids: list[str]) -> list[Tenant]: ...
+
     # Phase 12.5 admin surface (ADR-006). Phase 15 adds `plan`/`status`
     # filters so the SaaS operations panel can segment the tenant base.
     async def list_tenants(
@@ -63,6 +67,12 @@ class MongoTenantRepository:
     async def find_by_id(self, tenant_id: str) -> Tenant | None:
         doc = await self._collection.find_one({"_id": tenant_id})
         return Tenant.from_doc(doc) if doc else None
+
+    async def find_many(self, tenant_ids: list[str]) -> list[Tenant]:
+        if not tenant_ids:
+            return []
+        cursor = self._collection.find({"_id": {"$in": tenant_ids}})
+        return [Tenant.from_doc(doc) async for doc in cursor]
 
     async def list_tenants(
         self,

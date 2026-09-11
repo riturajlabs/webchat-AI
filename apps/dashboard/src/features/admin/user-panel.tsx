@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 
 import { ConfirmDialog } from './confirm-dialog';
-import { formatDate, statusLabel } from './format';
+import { entitlementLabel, formatDate, statusLabel } from './format';
 import { useAdminForceLogout, useAdminSuspendUser, useAdminUsers, type AdminUser } from './hooks';
 
 const DEFAULT_PER_PAGE = 20;
@@ -196,6 +196,9 @@ export function UserPanel() {
                       Role
                     </th>
                     <th scope="col" className="py-2 pr-4 font-medium">
+                      Plan
+                    </th>
+                    <th scope="col" className="py-2 pr-4 font-medium">
                       Status
                     </th>
                     <th scope="col" className="py-2 pr-4 font-medium">
@@ -212,6 +215,18 @@ export function UserPanel() {
                       <td className="py-3 pr-4 font-medium">{user.name}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{user.email}</td>
                       <td className="py-3 pr-4 capitalize">{user.role}</td>
+                      <td className="py-3 pr-4">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            user.entitlement_source === 'admin_grant'
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-muted text-muted-foreground'
+                          }`}
+                          title={entitlementLabel(user.effective_plan, user.entitlement_source)}
+                        >
+                          {user.effective_plan}
+                        </span>
+                      </td>
                       <td className="py-3 pr-4">
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${

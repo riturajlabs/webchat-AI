@@ -15,6 +15,7 @@ import type {
   AdminAuditLogListResponse,
   AdminCrawlJob,
   AdminCrawlJobListResponse,
+  AdminGrantResult,
   AdminOverview,
   AdminRevenueReport,
   AdminStats,
@@ -158,6 +159,71 @@ export function useAdminChangeTenantPlan() {
   });
 }
 
+/** Refetch every surface that shows effective-plan / grant state (Phase 16). */
+function invalidateGrantSurfaces(queryClient: ReturnType<typeof useQueryClient>, tenantId: string) {
+  void queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.tenantDetail(tenantId) });
+  void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.revenue });
+  void queryClient.invalidateQueries({ queryKey: ['admin', 'audit'] });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.stats });
+  void queryClient.invalidateQueries({ queryKey: adminKeys.overview });
+}
+
+export function useAdminGrantPlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      tenantId,
+      plan,
+      expiresAt,
+      reason,
+    }: {
+      tenantId: string;
+      plan: string;
+      expiresAt?: string | null;
+      reason?: string | null;
+    }) =>
+      api.post<AdminGrantResult>(`/api/admin/tenants/${tenantId}/grant-plan`, {
+        plan,
+        expires_at: expiresAt ?? null,
+        reason: reason ?? null,
+      }),
+    onSuccess: (data) => {
+      applyGrantResultToDetail(queryClient, data);
+      invalidateGrantSurfaces(queryClient, data.tenant.id);
+    },
+  });
+}
+
+export function useAdminRevokePlan() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ tenantId }: { tenantId: string }) =>
+      api.post<AdminGrantResult>(`/api/admin/tenants/${tenantId}/revoke-plan`),
+    onSuccess: (data) => {
+      applyGrantResultToDetail(queryClient, data);
+      invalidateGrantSurfaces(queryClient, data.tenant.id);
+    },
+  });
+}
+
+function applyGrantResultToDetail(
+  queryClient: ReturnType<typeof useQueryClient>,
+  data: AdminGrantResult,
+) {
+  queryClient.setQueryData<AdminTenantDetail>(adminKeys.tenantDetail(data.tenant.id), (current) =>
+    current
+      ? {
+          ...current,
+          effective_plan: data.tenant.effective_plan,
+          entitlement_source: data.tenant.entitlement_source,
+          active_subscription: data.grant,
+        }
+      : current,
+  );
+}
+
 export function useAdminUsers(page: number, perPage: number, search: string, status: string) {
   const query = queryParams({ page: String(page), per_page: String(perPage), search, status });
   return useQuery({
@@ -235,6 +301,7 @@ export type {
   AdminAdminAuditLog,
   AdminAuditLog,
   AdminCrawlJob,
+  AdminGrantResult,
   AdminOverview,
   AdminRevenueReport,
   AdminStats,

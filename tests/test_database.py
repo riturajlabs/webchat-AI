@@ -414,9 +414,7 @@ async def test_init_indexes_migration_is_idempotent(monkeypatch) -> None:
     await MongoDB.init_indexes()
 
     assert db["subscriptions"].dropped == dropped_snapshot
-    payment_creates = [
-        entry for entry in db["subscriptions"].indexes if entry[0] == "payment_id"
-    ]
+    payment_creates = [entry for entry in db["subscriptions"].indexes if entry[0] == "payment_id"]
     assert len(payment_creates) == 1
     assert payment_creates[0][1] == {
         "unique": True,

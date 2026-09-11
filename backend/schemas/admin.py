@@ -1,4 +1,5 @@
-"""Pydantic v2 schemas for the admin API (Phase 12.5, ADR-006).
+"""Pydantic v2 schemas for the admin API (Phase 12.5, ADR-006; extended for
+Phase 15 SaaS ops and Phase 16 manual plan grants).
 
 Every response type mirrors an existing model; the admin surface only adds
 platform-wide fields (`tenant_id` on crawl jobs, counts on tenant detail).
@@ -12,27 +13,43 @@ from pydantic import BaseModel, Field
 
 MAX_ADMIN_PAGE_SIZE = 100
 MAX_ADMIN_SEARCH_LENGTH = 100
+MAX_ADMIN_GRANT_REASON_LENGTH = 500
+
+# Effective-plan provenance (mirrors AdminService.ENTITLEMENT_SOURCE_*).
+ENTITLEMENT_SOURCE_ADMIN_GRANT = "admin_grant"
+ENTITLEMENT_SOURCE_SUBSCRIPTION = "subscription"
+ENTITLEMENT_SOURCE_TENANT_PLAN = "tenant_plan"
 
 TenantStatus = Literal["active", "suspended"]
 
 
 class AdminTenantOut(BaseModel):
-    """A tenant row in the admin tenant list."""
+    """A tenant row in the admin tenant list.
+
+    `effective_plan` is what the workspace actually gets right now - an active
+    admin grant beats a paid subscription, which beats `tenants.plan`.
+    """
 
     id: str
     company_name: str
     plan: str
     status: str
+    effective_plan: str
+    entitlement_source: str
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_tenant(cls, tenant: Any) -> "AdminTenantOut":
+    def from_tenant(cls, tenant: Any, *, entitlement: Any | None = None) -> "AdminTenantOut":
         return cls(
             id=tenant.id,
             company_name=tenant.company_name,
             plan=tenant.plan,
             status=tenant.status,
+            effective_plan=(entitlement.effective_plan if entitlement is not None else tenant.plan),
+            entitlement_source=(
+                entitlement.source if entitlement is not None else ENTITLEMENT_SOURCE_TENANT_PLAN
+            ),
             created_at=tenant.created_at,
             updated_at=tenant.updated_at,
         )
@@ -48,12 +65,13 @@ class AdminTenantUsageOut(BaseModel):
 
 
 class AdminTenantDetailOut(AdminTenantOut):
-    """Tenant detail with the ADR-006 aggregates (websites, usage, status)."""
+    """Tenant detail with the ADR-006 aggregates and current subscription."""
 
     website_count: int
     user_count: int
     active_crawl_jobs: int
     usage: AdminTenantUsageOut
+    active_subscription: "AdminSubscriptionOut | None" = None
 
 
 class AdminTenantUpdateRequest(BaseModel):
@@ -71,7 +89,11 @@ class AdminTenantListResponse(BaseModel):
 
 
 class AdminUserOut(BaseModel):
-    """A platform user row in the admin user list."""
+    """A platform user row in the admin user list.
+
+    `effective_plan` mirrors the tenant's resolved entitlement so operators
+    can see which workspace plan the user's account falls under.
+    """
 
     id: str
     name: str
@@ -80,11 +102,13 @@ class AdminUserOut(BaseModel):
     status: str
     email_verified: bool
     tenant_id: str
+    effective_plan: str = "free"
+    entitlement_source: str = ENTITLEMENT_SOURCE_TENANT_PLAN
     last_login: datetime | None
     created_at: datetime
 
     @classmethod
-    def from_user(cls, user: Any) -> "AdminUserOut":
+    def from_user(cls, user: Any, *, entitlement: Any | None = None) -> "AdminUserOut":
         return cls(
             id=user.id,
             name=user.name,
@@ -93,6 +117,10 @@ class AdminUserOut(BaseModel):
             status=user.status,
             email_verified=user.email_verified,
             tenant_id=user.tenant_id,
+            effective_plan=(entitlement.effective_plan if entitlement is not None else "free"),
+            entitlement_source=(
+                entitlement.source if entitlement is not None else ENTITLEMENT_SOURCE_TENANT_PLAN
+            ),
             last_login=user.last_login,
             created_at=user.created_at,
         )
@@ -185,6 +213,7 @@ class AdminAuditLogOut(BaseModel):
     action: str
     ip_address: str | None
     user_agent: str | None
+    grant_reason: str | None = None
     created_at: datetime
 
     @classmethod
@@ -196,6 +225,7 @@ class AdminAuditLogOut(BaseModel):
             action=log.action,
             ip_address=log.ip_address,
             user_agent=log.user_agent,
+            grant_reason=getattr(log, "grant_reason", None),
             created_at=log.created_at,
         )
 
@@ -269,18 +299,26 @@ class AdminUsageOut(BaseModel):
 
 
 class AdminSubscriptionOut(BaseModel):
-    """A payment-history row for the revenue page (Phase 15)."""
+    """A subscription-history row for the revenue page (Phase 15).
+
+    Includes Phase 16 admin-grant provenance (`source`, `granted_*`) so paid
+    subscriptions and operator grants are distinguishable at a glance.
+    """
 
     id: str
     tenant_id: str
     plan_id: str
     status: str
+    source: str = "payment"
     payment_provider: str | None
     payment_id: str | None
     start_date: datetime
     end_date: datetime | None
     amount_cents: int | None
     currency: str | None
+    granted_by: str | None = None
+    granted_at: datetime | None = None
+    grant_reason: str | None = None
     created_at: datetime
 
     @classmethod
@@ -290,12 +328,16 @@ class AdminSubscriptionOut(BaseModel):
             tenant_id=subscription.tenant_id,
             plan_id=subscription.plan_id,
             status=subscription.status,
+            source=subscription.source,
             payment_provider=subscription.payment_provider,
             payment_id=subscription.payment_id,
             start_date=subscription.start_date,
             end_date=subscription.end_date,
             amount_cents=subscription.amount_cents,
             currency=subscription.currency,
+            granted_by=subscription.granted_by,
+            granted_at=subscription.granted_at,
+            grant_reason=subscription.grant_reason,
             created_at=subscription.created_at,
         )
 
@@ -346,6 +388,32 @@ class AdminTenantPlanRequest(BaseModel):
     plan: str = Field(min_length=1, max_length=50)
 
 
+class AdminGrantPlanRequest(BaseModel):
+    """POST body for `POST /api/admin/tenants/{tenant_id}/grant-plan` (Phase 16).
+
+    `expires_at` may be `null` for an open-ended grant; when set it must lie in
+    the future. `reason` is an optional operator note stored on the grant and
+    surfaced in audit trails.
+    """
+
+    plan: str = Field(min_length=1, max_length=50)
+    expires_at: datetime | None = None
+    reason: str | None = Field(default=None, max_length=MAX_ADMIN_GRANT_REASON_LENGTH)
+
+
+class AdminGrantResultOut(BaseModel):
+    """Response for grant/revoke operations (Phase 16).
+
+    `grant` is the active admin-grant subscription after the operation (None on
+    revoke); `changed` distinguishes a no-op idempotent re-grant (audit trail is
+    only written when `True`).
+    """
+
+    tenant: AdminTenantOut
+    grant: AdminSubscriptionOut | None
+    changed: bool
+
+
 class AdminAdminAuditLogOut(BaseModel):
     """A platform operator action row (dedicated admin trail, Phase 15)."""
 
@@ -357,6 +425,7 @@ class AdminAdminAuditLogOut(BaseModel):
     plan_id: str | None
     ip_address: str | None
     user_agent: str | None
+    grant_reason: str | None = None
     created_at: datetime
 
     @classmethod
@@ -370,6 +439,7 @@ class AdminAdminAuditLogOut(BaseModel):
             plan_id=log.plan_id,
             ip_address=log.ip_address,
             user_agent=log.user_agent,
+            grant_reason=getattr(log, "grant_reason", None),
             created_at=log.created_at,
         )
 
@@ -382,6 +452,10 @@ class AdminAdminAuditLogListResponse(BaseModel):
 
 
 __all__ = [
+    "ENTITLEMENT_SOURCE_ADMIN_GRANT",
+    "ENTITLEMENT_SOURCE_SUBSCRIPTION",
+    "ENTITLEMENT_SOURCE_TENANT_PLAN",
+    "MAX_ADMIN_GRANT_REASON_LENGTH",
     "AdminAdminAuditLogListResponse",
     "AdminAdminAuditLogOut",
     "AdminAuditLogListResponse",
@@ -390,6 +464,8 @@ __all__ = [
     "AdminCrawlJobListResponse",
     "AdminCrawlJobOut",
     "AdminCrawlStats",
+    "AdminGrantPlanRequest",
+    "AdminGrantResultOut",
     "AdminOverviewOut",
     "AdminRevenuePeriodOut",
     "AdminRevenueReportOut",

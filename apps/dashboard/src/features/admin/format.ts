@@ -62,3 +62,31 @@ export function formatCents(cents: number | null | undefined, currency = 'USD'):
     currencyDisplay: 'narrowSymbol',
   }).format(cents / 100);
 }
+
+/** Human label for a tenant/user's effective-plan provenance (Phase 16). */
+export function entitlementLabel(plan: string | undefined, source?: string): string {
+  if (!plan) {
+    return '—';
+  }
+  const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
+  switch (source) {
+    case 'admin_grant':
+      return `${planLabel} — Admin Grant`;
+    case 'subscription':
+      return `${planLabel} — Paid subscription`;
+    default:
+      return `${planLabel} — Tenant plan`;
+  }
+}
+
+/** Compact source-only badge label (Phase 16). */
+export function entitlementSourceLabel(source?: string): string {
+  switch (source) {
+    case 'admin_grant':
+      return 'Admin Grant';
+    case 'subscription':
+      return 'Paid';
+    default:
+      return 'Tenant plan';
+  }
+}

@@ -21,6 +21,7 @@ from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
 from backend.models.subscription import (
     SUBSCRIPTION_LIVE_STATUSES,
+    SUBSCRIPTION_SOURCE_ADMIN_GRANT,
     Subscription,
 )
 from backend.models.tenant import Tenant
@@ -186,6 +187,9 @@ class FakeTenantRepository:
 
     async def find_by_id(self, tenant_id: str) -> Tenant | None:
         return self._tenants.get(tenant_id)
+
+    async def find_many(self, tenant_ids: list[str]) -> list[Tenant]:
+        return [self._tenants[tenant_id] for tenant_id in tenant_ids if tenant_id in self._tenants]
 
     async def list_tenants(
         self,
@@ -1545,11 +1549,13 @@ class FakeUsageEventRepository:
 
 
 class FakeSubscriptionRepository:
-    """In-memory subscription repository (Phase 14, SaaS subscriptions).
+    """In-memory subscription repository (Phase 14, SaaS subscriptions; extended
+    Phase 16 with admin-grant precedence).
 
     Mirrors `MongoSubscriptionRepository`: subscriptions are scoped to a
-    tenant, listing is newest-first, and `find_active_by_tenant` returns the
-    newest live-status subscription whose `end_date` is `None` or in the
+    tenant, listing is newest-first, and `find_active_by_tenant` resolves the
+    current plan by precedence — an active `admin_grant` wins, then the newest
+    live-status `payment` subscription whose `end_date` is `None` or in the
     future.
     """
 
@@ -1566,19 +1572,79 @@ class FakeSubscriptionRepository:
     async def update(self, subscription: Subscription) -> None:
         self._subscriptions[subscription.id] = subscription
 
-    async def find_active_by_tenant(self, tenant_id: str, *, now: datetime) -> Subscription | None:
+    @staticmethod
+    def _is_live(subscription: Subscription, *, now: datetime) -> bool:
+        return subscription.status in SUBSCRIPTION_LIVE_STATUSES and (
+            subscription.end_date is None or subscription.end_date >= now
+        )
+
+    async def find_active_admin_grant_by_tenant(
+        self, tenant_id: str, *, now: datetime
+    ) -> Subscription | None:
         candidates = sorted(
             (
                 subscription
                 for subscription in self._subscriptions.values()
                 if subscription.tenant_id == tenant_id
-                and subscription.status in SUBSCRIPTION_LIVE_STATUSES
-                and (subscription.end_date is None or subscription.end_date >= now)
+                and subscription.source == SUBSCRIPTION_SOURCE_ADMIN_GRANT
+                and self._is_live(subscription, now=now)
             ),
             key=lambda subscription: subscription.created_at,
             reverse=True,
         )
         return candidates[0] if candidates else None
+
+    async def find_active_by_tenant(self, tenant_id: str, *, now: datetime) -> Subscription | None:
+        grant = await self.find_active_admin_grant_by_tenant(tenant_id, now=now)
+        if grant is not None:
+            return grant
+        candidates = sorted(
+            (
+                subscription
+                for subscription in self._subscriptions.values()
+                if subscription.tenant_id == tenant_id
+                and subscription.source != SUBSCRIPTION_SOURCE_ADMIN_GRANT
+                and self._is_live(subscription, now=now)
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        return candidates[0] if candidates else None
+
+    async def find_active_for_tenant_ids(
+        self, tenant_ids: list[str], *, now: datetime
+    ) -> dict[str, Subscription]:
+        """Per-tenant plan-granting subscriptions (grant-first precedence)."""
+        result: dict[str, Subscription] = {}
+        pool = [
+            subscription
+            for subscription in self._subscriptions.values()
+            if subscription.tenant_id in tenant_ids and self._is_live(subscription, now=now)
+        ]
+        grants = sorted(
+            (
+                subscription
+                for subscription in pool
+                if subscription.source == SUBSCRIPTION_SOURCE_ADMIN_GRANT
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        for grant in grants:
+            result.setdefault(grant.tenant_id, grant)
+        payments = sorted(
+            (
+                subscription
+                for subscription in pool
+                if subscription.source != SUBSCRIPTION_SOURCE_ADMIN_GRANT
+                and subscription.tenant_id not in result
+            ),
+            key=lambda subscription: subscription.created_at,
+            reverse=True,
+        )
+        for payment in payments:
+            result.setdefault(payment.tenant_id, payment)
+        return result
 
     async def find_by_payment_id(self, payment_id: str) -> Subscription | None:
         return next(
@@ -1607,8 +1673,8 @@ class FakeSubscriptionRepository:
             [
                 subscription
                 for subscription in self._subscriptions.values()
-                if subscription.status in SUBSCRIPTION_LIVE_STATUSES
-                and (subscription.end_date is None or subscription.end_date >= now)
+                if subscription.source != SUBSCRIPTION_SOURCE_ADMIN_GRANT
+                and self._is_live(subscription, now=now)
             ]
         )
 

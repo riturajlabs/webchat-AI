@@ -14,10 +14,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 
 import { ConfirmDialog } from './confirm-dialog';
-import { formatDate, statusLabel } from './format';
+import { entitlementLabel, entitlementSourceLabel, formatDate, statusLabel } from './format';
 import {
   useAdminActivateTenant,
   useAdminChangeTenantPlan,
+  useAdminGrantPlan,
+  useAdminRevokePlan,
   useAdminSuspendTenant,
   useAdminTenantDetail,
   useAdminTenants,
@@ -41,6 +43,27 @@ const STATUS_OPTIONS = [
   { value: 'suspended', label: 'Suspended' },
 ];
 
+/** Plans an operator may grant without a payment (Phase 16). */
+const GRANTABLE_PLAN_OPTIONS = [
+  { value: 'plus', label: 'Plus' },
+  { value: 'pro', label: 'Pro' },
+  { value: 'enterprise', label: 'Enterprise' },
+];
+
+function TenantEntitlementBadge({ tenant }: { tenant: AdminTenant }) {
+  const granted = tenant.entitlement_source === 'admin_grant';
+  return (
+    <span
+      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+        granted ? 'bg-amber-100 text-amber-800' : 'bg-muted text-muted-foreground'
+      }`}
+      title={entitlementLabel(tenant.effective_plan, tenant.entitlement_source)}
+    >
+      {granted ? entitlementSourceLabel(tenant.entitlement_source) : tenant.effective_plan}
+    </span>
+  );
+}
+
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -59,7 +82,14 @@ function TenantDetailDialog({
 }) {
   const { data, isPending, isError, refetch } = useAdminTenantDetail(tenantId);
   const changePlan = useAdminChangeTenantPlan();
+  const grantPlan = useAdminGrantPlan();
+  const revokePlan = useAdminRevokePlan();
   const [planInput, setPlanInput] = useState('');
+  const [grantOpen, setGrantOpen] = useState(false);
+  const [revokeConfirm, setRevokeConfirm] = useState(false);
+  const [grantPlanInput, setGrantPlanInput] = useState('pro');
+  const [grantExpiry, setGrantExpiry] = useState('');
+  const [grantReason, setGrantReason] = useState('');
   const contentRef = useRef<HTMLDivElement>(null);
 
   useAccessibleDialog({
@@ -72,9 +102,20 @@ function TenantDetailDialog({
     setPlanInput(data?.plan ?? '');
   }, [data?.plan]);
 
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    setGrantPlanInput(data.effective_plan === 'free' ? 'pro' : data.effective_plan);
+    setGrantExpiry('');
+    setGrantReason('');
+  }, [data]);
+
   if (!tenantId) {
     return null;
   }
+
+  const hasActiveGrant = data?.entitlement_source === 'admin_grant';
 
   async function handleChangePlan() {
     if (!data || planInput === data.plan) {
@@ -85,6 +126,42 @@ function TenantDetailDialog({
       toast.success(`Plan changed to ${planInput}`);
     } catch {
       toast.error('Failed to change plan');
+    }
+  }
+
+  async function handleGrant() {
+    if (!data || grantPlan.isPending) {
+      return;
+    }
+    try {
+      // A `<input type="date">` yields "YYYY-MM-DD"; interpret it as end-of-day
+      // local time so "today" still means an expiration later today.
+      const expiresAt = grantExpiry ? new Date(`${grantExpiry}T23:59:59`).toISOString() : null;
+      await grantPlan.mutateAsync({
+        tenantId: data.id,
+        plan: grantPlanInput,
+        expiresAt,
+        reason: grantReason.trim() || null,
+      });
+      toast.success(`Granted ${grantPlanInput} to ${data.company_name}`);
+      setGrantOpen(false);
+      setGrantExpiry('');
+      setGrantReason('');
+    } catch {
+      toast.error('Failed to grant plan');
+    }
+  }
+
+  async function handleRevoke() {
+    if (!data || revokePlan.isPending) {
+      return;
+    }
+    try {
+      await revokePlan.mutateAsync({ tenantId: data.id });
+      toast.success(`Revoked the manual grant for ${data.company_name}`);
+      setRevokeConfirm(false);
+    } catch {
+      toast.error('Failed to revoke grant');
     }
   }
 
@@ -141,6 +218,112 @@ function TenantDetailDialog({
               <DetailField label="Status" value={statusLabel(data.status)} />
               <DetailField label="Created" value={formatDate(data.created_at)} />
             </div>
+            <div className="flex items-center justify-between gap-3 rounded-md border p-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-muted-foreground">Effective plan</p>
+                <p className="truncate text-sm font-semibold capitalize">
+                  {entitlementLabel(data.effective_plan, data.entitlement_source)}
+                </p>
+                {hasActiveGrant && data.active_subscription ? (
+                  <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted-foreground">
+                    <span>
+                      Granted by {data.active_subscription.granted_by ?? 'an operator'}
+                      {data.active_subscription.end_date
+                        ? ` · expires ${formatDate(data.active_subscription.end_date)}`
+                        : ' · no expiration'}
+                    </span>
+                    {data.active_subscription.grant_reason ? (
+                      <span className="truncate">
+                        Reason: {data.active_subscription.grant_reason}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              {hasActiveGrant ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRevokeConfirm(true)}
+                  disabled={revokePlan.isPending}
+                  className="shrink-0"
+                >
+                  Revoke grant
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setGrantOpen((open) => !open)}
+                  className="shrink-0"
+                >
+                  Grant plan
+                </Button>
+              )}
+            </div>
+            {grantOpen ? (
+              <div className="flex flex-col gap-3 rounded-md border border-dashed p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Grant a paid plan without a payment (audited)
+                </p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <Label htmlFor="grant-plan-select">Grant plan</Label>
+                    <select
+                      id="grant-plan-select"
+                      value={grantPlanInput}
+                      onChange={(event) => setGrantPlanInput(event.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      {GRANTABLE_PLAN_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <Label htmlFor="grant-expiry">Expires (optional)</Label>
+                    <input
+                      id="grant-expiry"
+                      type="date"
+                      value={grantExpiry}
+                      onChange={(event) => setGrantExpiry(event.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="grant-reason">Reason (optional)</Label>
+                    <input
+                      id="grant-reason"
+                      type="text"
+                      maxLength={500}
+                      placeholder="e.g. onboarding partner"
+                      value={grantReason}
+                      onChange={(event) => setGrantReason(event.target.value)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setGrantOpen(false)}
+                    disabled={grantPlan.isPending}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void handleGrant()}
+                    disabled={grantPlan.isPending}
+                  >
+                    {grantPlan.isPending ? 'Granting…' : 'Confirm grant'}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             <div className="flex items-end justify-between gap-3 rounded-md border bg-muted/30 p-3">
               <div className="flex flex-col gap-1">
                 <Label htmlFor="tenant-plan-select">Plan</Label>
@@ -199,6 +382,17 @@ function TenantDetailDialog({
             Close
           </Button>
         </div>
+
+        <ConfirmDialog
+          open={revokeConfirm}
+          onOpenChange={setRevokeConfirm}
+          onConfirm={() => void handleRevoke()}
+          title="Revoke manual grant?"
+          description={`${data?.company_name ?? 'This tenant'} falls back to its paid subscription or tenant plan. Paid subscriptions are not affected.`}
+          confirmLabel="Revoke grant"
+          variant="default"
+          isPending={revokePlan.isPending}
+        />
       </div>
     </div>
   );
@@ -409,7 +603,9 @@ export function TenantPanel() {
                   {tenants.map((tenant) => (
                     <tr key={tenant.id} className="border-b">
                       <td className="py-3 pr-4 font-medium">{tenant.company_name}</td>
-                      <td className="py-3 pr-4 capitalize">{tenant.plan}</td>
+                      <td className="py-3 pr-4">
+                        <TenantEntitlementBadge tenant={tenant} />
+                      </td>
                       <td className="py-3 pr-4">
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${

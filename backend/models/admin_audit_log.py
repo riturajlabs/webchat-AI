@@ -12,6 +12,8 @@ only *platform* mutations by a super admin land here:
     USER_SUSPENDED            user suspended by a platform operator
     USER_ACTIVATED            user re-activated by a platform operator
     FORCE_LOGOUT              all refresh tokens revoked for a user
+    PLAN_GRANTED              a paid plan granted to a tenant without payment
+    PLAN_REVOKED              an operator-issued plan grant revoked
 
 The collection mirrors `audit_logs` (same shape) but is written exclusively
 by `AdminService` and read by `GET /api/admin/audit`. It is retained for the
@@ -32,6 +34,8 @@ ADMIN_AUDIT_TENANT_PLAN_CHANGED = "TENANT_PLAN_CHANGED"
 ADMIN_AUDIT_USER_SUSPENDED = "USER_SUSPENDED"
 ADMIN_AUDIT_USER_ACTIVATED = "USER_ACTIVATED"
 ADMIN_AUDIT_FORCE_LOGOUT = "FORCE_LOGOUT"
+ADMIN_AUDIT_PLAN_GRANTED = "PLAN_GRANTED"
+ADMIN_AUDIT_PLAN_REVOKED = "PLAN_REVOKED"
 
 ADMIN_AUDIT_LOG_SCHEMA_VERSION = 1
 # Platform compliance retention (docs/05 §13): 10 years.
@@ -94,6 +98,8 @@ __all__ = [
     "ADMIN_AUDIT_FORCE_LOGOUT",
     "ADMIN_AUDIT_LOG_RETENTION_SECONDS",
     "ADMIN_AUDIT_LOG_SCHEMA_VERSION",
+    "ADMIN_AUDIT_PLAN_GRANTED",
+    "ADMIN_AUDIT_PLAN_REVOKED",
     "ADMIN_AUDIT_TENANT_ACTIVATED",
     "ADMIN_AUDIT_TENANT_PLAN_CHANGED",
     "ADMIN_AUDIT_TENANT_SUSPENDED",

@@ -24,13 +24,17 @@ from typing import Any
 
 from backend.core.errors import (
     ForbiddenError,
+    InvalidGrantError,
     PlanNotFoundError,
+    PlanNotPurchasableError,
     TenantNotFoundError,
     UserNotFoundError,
 )
 from backend.core.security import utcnow
 from backend.models.admin_audit_log import (
     ADMIN_AUDIT_FORCE_LOGOUT,
+    ADMIN_AUDIT_PLAN_GRANTED,
+    ADMIN_AUDIT_PLAN_REVOKED,
     ADMIN_AUDIT_TENANT_ACTIVATED,
     ADMIN_AUDIT_TENANT_PLAN_CHANGED,
     ADMIN_AUDIT_TENANT_SUSPENDED,
@@ -40,6 +44,8 @@ from backend.models.admin_audit_log import (
 )
 from backend.models.audit_log import (
     AUDIT_FORCE_LOGOUT,
+    AUDIT_PLAN_GRANTED,
+    AUDIT_PLAN_REVOKED,
     AUDIT_TENANT_ACTIVATED,
     AUDIT_TENANT_PLAN_CHANGED,
     AUDIT_TENANT_SUSPENDED,
@@ -48,8 +54,19 @@ from backend.models.audit_log import (
     AuditLog,
 )
 from backend.models.crawl_job import CrawlJob
-from backend.models.plan import VALID_PLAN_IDS
-from backend.models.subscription import Subscription
+from backend.models.plan import (
+    PLAN_ENTERPRISE,
+    PLAN_FREE,
+    PLAN_PLUS,
+    PLAN_PRO,
+    VALID_PLAN_IDS,
+)
+from backend.models.subscription import (
+    SUBSCRIPTION_SOURCE_ADMIN_GRANT,
+    SUBSCRIPTION_STATUS_ACTIVE,
+    SUBSCRIPTION_STATUS_CANCELLED,
+    Subscription,
+)
 from backend.models.tenant import Tenant
 from backend.models.user import User
 from backend.repositories import (
@@ -72,6 +89,25 @@ from backend.repositories import (
 # Cap on the revenue report's recent-payment detail.
 REVENUE_RECENT_PAYMENTS_LIMIT = 20
 
+# Effective-plan resolution sources (what grants a tenant its current plan).
+ENTITLEMENT_SOURCE_ADMIN_GRANT = "admin_grant"
+ENTITLEMENT_SOURCE_SUBSCRIPTION = "subscription"
+ENTITLEMENT_SOURCE_TENANT_PLAN = "tenant_plan"
+
+# Plans an operator may grant without a payment. Free is the trial tier and is
+# not grantable (drop a tenant by changing/revoking instead).
+GRANTABLE_PLANS = frozenset({PLAN_PLUS, PLAN_PRO, PLAN_ENTERPRISE})
+
+
+@dataclass(frozen=True)
+class Entitlement:
+    """A tenant's resolved plan and where it comes from (Phase 16)."""
+
+    tenant_id: str
+    effective_plan: str
+    source: str  # one of the ENTITLEMENT_SOURCE_* constants
+    subscription: Subscription | None = None
+
 
 @dataclass(frozen=True)
 class TenantDetail:
@@ -82,6 +118,39 @@ class TenantDetail:
     user_count: int
     active_crawl_jobs: int
     usage: TenantUsageSummary
+
+
+@dataclass(frozen=True)
+class GrantResult:
+    """Outcome of a grant/revoke operation (phase 16 manual plan grants)."""
+
+    tenant: Tenant
+    entitlement: Entitlement
+    grant: Subscription | None
+    changed: bool
+
+
+def _entitlement_from(tenant: Tenant, subscription: Subscription | None) -> Entitlement:
+    """Resolve one tenant's entitlement from its plan-granting subscription."""
+    if subscription is None:
+        return Entitlement(
+            tenant_id=tenant.id,
+            effective_plan=tenant.plan,
+            source=ENTITLEMENT_SOURCE_TENANT_PLAN,
+        )
+    if subscription.source == SUBSCRIPTION_SOURCE_ADMIN_GRANT:
+        return Entitlement(
+            tenant_id=tenant.id,
+            effective_plan=subscription.plan_id,
+            source=ENTITLEMENT_SOURCE_ADMIN_GRANT,
+            subscription=subscription,
+        )
+    return Entitlement(
+        tenant_id=tenant.id,
+        effective_plan=subscription.plan_id,
+        source=ENTITLEMENT_SOURCE_SUBSCRIPTION,
+        subscription=subscription,
+    )
 
 
 @dataclass(frozen=True)
@@ -292,6 +361,191 @@ class AdminService:
         await action(tenant)
         await self._tenants.update(tenant)
         return tenant
+
+    # --------------------------------------------------- plan grants (Phase 16)
+
+    async def grant_plan(
+        self,
+        *,
+        tenant_id: str,
+        plan_id: str,
+        admin_user_id: str,
+        admin_tenant_id: str,
+        expires_at: datetime | None,
+        reason: str | None,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> GrantResult:
+        """Issue a complimentary plan grant for a workspace (idempotent).
+
+        Writes an `admin_grant` subscription record (zero amount, never touches
+        the payment gateway) so all users of the tenant resolve the granted
+        plan. Re-granting the identical plan/expiration/reason is a no-op; a
+        differing grant updates the single active grant in place, so at most
+        one active admin grant can exist per tenant. The free plan is not
+        grantable, and an expiration must lie in the future.
+        """
+        if plan_id not in VALID_PLAN_IDS:
+            raise PlanNotFoundError(f"Unknown plan: {plan_id}.")
+        if plan_id not in GRANTABLE_PLANS:
+            raise PlanNotPurchasableError(
+                "The free plan cannot be granted manually; change the tenant plan instead."
+            )
+        now = utcnow()
+        if expires_at is not None and expires_at <= now:
+            raise InvalidGrantError("Grant expiration must be in the future.")
+        tenant = await self._guard_tenant(tenant_id=tenant_id, admin_tenant_id=admin_tenant_id)
+
+        grant = await self._subscriptions.find_active_admin_grant_by_tenant(tenant_id, now=now)
+        changed = False
+        if grant is not None:
+            unchanged = (
+                grant.plan_id == plan_id
+                and grant.end_date == expires_at
+                and grant.grant_reason == reason
+                and grant.granted_by == admin_user_id
+            )
+            if not unchanged:
+                grant.plan_id = plan_id
+                grant.end_date = expires_at
+                grant.grant_reason = reason
+                grant.granted_by = admin_user_id
+                grant.granted_at = now
+                grant.updated_at = now
+                await self._subscriptions.update(grant)
+                changed = True
+        else:
+            grant = Subscription.new(
+                tenant_id=tenant_id,
+                plan_id=plan_id,
+                status=SUBSCRIPTION_STATUS_ACTIVE,
+                source=SUBSCRIPTION_SOURCE_ADMIN_GRANT,
+                payment_provider="admin",
+                start_date=now,
+                end_date=expires_at,
+                amount_cents=0,
+                currency=self._currency,
+                granted_by=admin_user_id,
+                granted_at=now,
+                grant_reason=reason,
+            )
+            await self._subscriptions.create(grant)
+            changed = True
+
+        if changed:
+            await self._record_audits(
+                action=AUDIT_PLAN_GRANTED,
+                admin_action=ADMIN_AUDIT_PLAN_GRANTED,
+                admin_user_id=admin_user_id,
+                tenant_id=tenant_id,
+                plan_id=plan_id,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                grant_reason=reason,
+            )
+        return GrantResult(
+            tenant=tenant,
+            entitlement=await self._entitlement_for_tenant(tenant),
+            grant=grant,
+            changed=changed,
+        )
+
+    async def revoke_plan(
+        self,
+        *,
+        tenant_id: str,
+        admin_user_id: str,
+        admin_tenant_id: str,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> GrantResult:
+        """Revoke an active admin grant, falling back to paid/tenant plan.
+
+        Marks the grant `cancelled` in the subscription log (so it stays
+        visible in history) and never touches the payment gateway: a customer's
+        paid subscription is unaffected and becomes the effective plan again.
+        Revoking without an active grant is a no-op.
+        """
+        now = utcnow()
+        tenant = await self._guard_tenant(tenant_id=tenant_id, admin_tenant_id=admin_tenant_id)
+        grant = await self._subscriptions.find_active_admin_grant_by_tenant(tenant_id, now=now)
+        if grant is None:
+            return GrantResult(
+                tenant=tenant,
+                entitlement=await self._entitlement_for_tenant(tenant),
+                grant=None,
+                changed=False,
+            )
+        grant.status = SUBSCRIPTION_STATUS_CANCELLED
+        grant.updated_at = now
+        await self._subscriptions.update(grant)
+        await self._record_audits(
+            action=AUDIT_PLAN_REVOKED,
+            admin_action=ADMIN_AUDIT_PLAN_REVOKED,
+            admin_user_id=admin_user_id,
+            tenant_id=tenant_id,
+            plan_id=grant.plan_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            grant_reason=grant.grant_reason,
+        )
+        return GrantResult(
+            tenant=tenant,
+            entitlement=await self._entitlement_for_tenant(tenant),
+            grant=None,
+            changed=True,
+        )
+
+    async def resolve_entitlements(self, tenants: list[Tenant]) -> dict[str, Entitlement]:
+        """Resolve effective plans for many tenants in one pass.
+
+        Feeds the admin read surface (tenant list, user list) without N+1
+        subscription lookups.
+        """
+        if not tenants:
+            return {}
+        by_tenant = await self._subscriptions.find_active_for_tenant_ids(
+            [tenant.id for tenant in tenants], now=utcnow()
+        )
+        return {
+            tenant.id: _entitlement_from(tenant, by_tenant.get(tenant.id)) for tenant in tenants
+        }
+
+    async def resolve_entitlements_for_users(self, users: list[User]) -> dict[str, Entitlement]:
+        """Resolve effective plans for a page of users (keyed by tenant_id).
+
+        Bounded by the admin page size: at most `per_page` distinct tenants are
+        looked up. Users whose tenant row is missing (deleted) fall back to the
+        free tenant-plan entitlement.
+        """
+        tenant_ids = sorted({user.tenant_id for user in users})
+        entitlements: dict[str, Entitlement] = {}
+        if tenant_ids:
+            tenants = await self._tenants.find_many(tenant_ids)
+            entitlements = await self.resolve_entitlements(tenants)
+        for tenant_id in tenant_ids:
+            entitlements.setdefault(
+                tenant_id,
+                Entitlement(
+                    tenant_id=tenant_id,
+                    effective_plan=PLAN_FREE,
+                    source=ENTITLEMENT_SOURCE_TENANT_PLAN,
+                ),
+            )
+        return entitlements
+
+    async def _guard_tenant(self, *, tenant_id: str, admin_tenant_id: str) -> Tenant:
+        """Self-targeting + existence guard (no mutation of the tenant row)."""
+        if tenant_id == admin_tenant_id:
+            raise ForbiddenError("Cannot change your own workspace.")
+        tenant = await self._tenants.find_by_id(tenant_id)
+        if tenant is None:
+            raise TenantNotFoundError("Tenant not found.")
+        return tenant
+
+    async def _entitlement_for_tenant(self, tenant: Tenant) -> Entitlement:
+        subscription = await self._subscriptions.find_active_by_tenant(tenant.id, now=utcnow())
+        return _entitlement_from(tenant, subscription)
 
     # ------------------------------------------------------------ user reads
 
@@ -586,30 +840,34 @@ class AdminService:
         tenant_id: str | None,
         user_id: str | None = None,
         plan_id: str | None = None,
+        grant_reason: str | None = None,
         ip_address: str | None,
         user_agent: str | None,
     ) -> None:
         """Write the shared tenant audit AND the dedicated admin trail."""
-        await self._audit.create(
-            AuditLog.new(
-                action=action,
-                tenant_id=tenant_id,
-                user_id=admin_user_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
+        shared_log = AuditLog.new(
+            action=action,
+            tenant_id=tenant_id,
+            user_id=admin_user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
-        await self._admin_audit.create(
-            AdminAuditLog.new(
-                action=admin_action,
-                actor_user_id=admin_user_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-                plan_id=plan_id,
-                ip_address=ip_address,
-                user_agent=user_agent,
-            )
+        admin_log = AdminAuditLog.new(
+            action=admin_action,
+            actor_user_id=admin_user_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            plan_id=plan_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
         )
+        if grant_reason is not None:
+            # `grant_reason` rides as an `extra="allow"` field; model_copy
+            # persists it without widening the factories' signatures.
+            shared_log = shared_log.model_copy(update={"grant_reason": grant_reason})
+            admin_log = admin_log.model_copy(update={"grant_reason": grant_reason})
+        await self._audit.create(shared_log)
+        await self._admin_audit.create(admin_log)
 
     async def _require_user_in_tenant(self, tenant_id: str, user_id: str) -> User:
         tenant = await self._tenants.find_by_id(tenant_id)
@@ -623,6 +881,12 @@ class AdminService:
 
 __all__ = [
     "AdminService",
+    "ENTITLEMENT_SOURCE_ADMIN_GRANT",
+    "ENTITLEMENT_SOURCE_SUBSCRIPTION",
+    "ENTITLEMENT_SOURCE_TENANT_PLAN",
+    "Entitlement",
+    "GRANTABLE_PLANS",
+    "GrantResult",
     "RevenuePeriod",
     "RevenueReport",
     "TenantDetail",
