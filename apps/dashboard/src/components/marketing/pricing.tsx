@@ -26,7 +26,7 @@ export function Pricing() {
           title="Simple, transparent pricing"
           description="Start free and upgrade as your assistant grows. No hidden fees."
         />
-        <div className="mt-12 grid items-stretch gap-6 lg:grid-cols-4">
+        <div className="mt-12 grid items-stretch gap-6 md:grid-cols-2 lg:grid-cols-4">
           {PLAN_CATALOG.map((plan) => {
             const href = getLandingDestination(plan.cta, isAuthenticated);
             const label = labels[plan.cta];

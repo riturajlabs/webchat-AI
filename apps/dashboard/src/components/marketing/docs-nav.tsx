@@ -129,7 +129,7 @@ export function DocsMobileNav() {
     <div className="sticky top-16 z-30 border-b border-border/60 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:hidden">
       <nav
         aria-label="Documentation"
-        className="mx-auto flex w-full max-w-6xl items-center gap-1 overflow-x-auto px-4 py-2 sm:px-6"
+        className="mx-auto flex w-full max-w-6xl items-center gap-1 overflow-x-auto px-4 py-2 sm:px-6 max-[750px]:[mask-image:linear-gradient(to_right,black_calc(100%_-_20px),transparent)] max-[750px]:[mask-size:100%_100%] max-[750px]:[mask-repeat:no-repeat]"
       >
         {DOCS_NAV_GROUPS.flatMap((group) =>
           group.items.map((item) => (

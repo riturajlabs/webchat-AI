@@ -201,10 +201,10 @@ describe('AddWebsiteDialog', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
   });
 
-  it('sets inert on background overlay', () => {
+  it('keeps the backdrop overlay interactive so it can close the dialog', () => {
     render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
     const overlay = document.querySelector('[data-dialog-overlay]');
-    expect(overlay).toHaveAttribute('inert');
+    expect(overlay).not.toHaveAttribute('inert');
   });
 
   it('traps Tab within the dialog', () => {

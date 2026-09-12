@@ -1,30 +1,44 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { useAccessibleDialog } from './use-accessible-dialog';
 
-function DialogFixture({ open, onClose }: { open: boolean; onClose: () => void }) {
+function DialogFixture({
+  open,
+  onClose,
+  preferredUnavailable = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  preferredUnavailable?: boolean;
+}) {
   const contentRef = useRef<HTMLDivElement>(null);
   useAccessibleDialog({ open, onClose, contentRef });
-
-  if (!open) {
-    return (
-      <div>
-        <button data-testid="trigger">Open dialog</button>
-      </div>
-    );
-  }
 
   return (
     <div>
       <button data-testid="trigger">Open dialog</button>
-      <div data-dialog-overlay className="overlay" aria-hidden="true" />
-      <div ref={contentRef} role="dialog" aria-modal="true" tabIndex={-1}>
-        <button data-testid="first-btn">First</button>
-        <button data-testid="second-btn">Second</button>
-        <button data-testid="last-btn">Last</button>
-      </div>
+      {open ? (
+        <>
+          <div data-dialog-overlay className="overlay" aria-hidden="true" />
+          <div ref={contentRef} role="dialog" aria-modal="true" tabIndex={-1}>
+            {preferredUnavailable ? (
+              <button data-autofocus data-testid="preferred-btn" disabled aria-label="Preferred" />
+            ) : (
+              <div
+                data-autofocus
+                data-testid="preferred-btn"
+                tabIndex={-1}
+                aria-label="Preferred"
+              />
+            )}
+            <button data-testid="first-btn">First</button>
+            <button data-testid="second-btn">Second</button>
+            <button data-testid="last-btn">Last</button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -84,25 +98,41 @@ describe('useAccessibleDialog', () => {
     expect(document.activeElement).toBe(lastBtn);
   });
 
-  it('sets inert on sibling elements of the dialog content', () => {
+  it('does not mark background elements inert (isolation is via aria-modal + focus trap)', () => {
     const onClose = vi.fn();
     render(<DialogFixture open onClose={onClose} />);
 
-    const overlay = document.querySelector('[data-dialog-overlay]');
-    expect(overlay).toHaveAttribute('inert');
+    const trigger = screen.getByTestId('trigger');
+    expect(trigger).not.toHaveAttribute('inert');
   });
 
-  it('removes inert from siblings on unmount', () => {
+  it('restores focus to the previously focused element when the dialog closes', async () => {
     const onClose = vi.fn();
-    const { unmount } = render(<DialogFixture open onClose={onClose} />);
+    const { rerender } = render(<DialogFixture open={false} onClose={onClose} />);
 
-    const overlay = document.querySelector('[data-dialog-overlay]');
-    expect(overlay).toHaveAttribute('inert');
+    const trigger = screen.getByTestId('trigger');
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
 
-    unmount();
+    rerender(<DialogFixture open onClose={onClose} />);
+    await waitFor(() => expect(screen.getByTestId('preferred-btn')).toHaveFocus());
 
-    // After unmount, the inert attribute should be cleaned up by the effect cleanup.
-    // Since the component is gone from the DOM, we verify no errors during cleanup.
+    rerender(<DialogFixture open={false} onClose={onClose} />);
+    expect(screen.getByTestId('trigger')).toHaveFocus();
+  });
+
+  it('falls back to the first focusable element when data-autofocus cannot receive focus', async () => {
+    const onClose = vi.fn();
+    render(<DialogFixture open preferredUnavailable onClose={onClose} />);
+
+    await waitFor(() => expect(screen.getByTestId('first-btn')).toHaveFocus());
+  });
+
+  it('focuses the preferred data-autofocus element on open', async () => {
+    const onClose = vi.fn();
+    render(<DialogFixture open onClose={onClose} />);
+
+    await waitFor(() => expect(screen.getByTestId('preferred-btn')).toHaveFocus());
   });
 
   it('does nothing on non-Tab keydown', () => {

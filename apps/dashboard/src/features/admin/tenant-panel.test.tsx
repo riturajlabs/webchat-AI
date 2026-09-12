@@ -427,12 +427,15 @@ describe('TenantPanel', () => {
     expect(screen.queryByRole('dialog', { name: 'Acme Inc' })).not.toBeInTheDocument();
   });
 
-  it('sets inert on background when tenant detail dialog is open', () => {
+  it('exposes the dialog as a modal and keeps the backdrop interactive', () => {
     renderPanel();
 
     fireEvent.click(screen.getAllByRole('button', { name: /Details/ })[0]);
 
-    const inertElements = document.querySelectorAll('[inert]');
-    expect(inertElements.length).toBeGreaterThan(0);
+    const dialog = screen.getByRole('dialog', { name: 'Acme Inc' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+
+    const overlay = document.querySelector('[data-dialog-overlay]');
+    expect(overlay).not.toHaveAttribute('inert');
   });
 });

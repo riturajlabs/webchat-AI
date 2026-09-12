@@ -7,6 +7,7 @@ import { Menu, X } from 'lucide-react';
 
 import { LogoMark } from '@/components/brand/logo-mark';
 import { Button } from '@/components/ui/button';
+import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 import { useAuth } from '@/features/auth/auth-context';
 import { NavLinks } from '@/components/layout/nav-links';
 
@@ -22,6 +23,12 @@ export function MobileNav() {
     triggerRef.current?.focus();
   }
 
+  useAccessibleDialog({
+    open,
+    onClose: close,
+    contentRef: panelRef,
+  });
+
   useEffect(() => {
     if (!open) {
       return;
@@ -29,23 +36,9 @@ export function MobileNav() {
     // Lock body scroll while the drawer is open.
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    panelRef.current?.focus();
     return () => {
       document.body.style.overflow = originalOverflow;
     };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        close();
-      }
-    }
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
   }, [open]);
 
   // Close the drawer after client-side navigation completes.
@@ -60,7 +53,7 @@ export function MobileNav() {
         type="button"
         variant="ghost"
         size="icon"
-        className="h-11 w-11 md:hidden"
+        className="h-11 w-11 shrink-0 md:hidden"
         aria-label="Open navigation"
         aria-expanded={open}
         aria-controls="mobile-nav"
@@ -71,7 +64,12 @@ export function MobileNav() {
 
       {open ? (
         <div id="mobile-nav" className="fixed inset-0 z-50 md:hidden">
-          <div className="absolute inset-0 bg-black/50" aria-hidden="true" onClick={close} />
+          <div
+            className="absolute inset-0 bg-black/50"
+            data-dialog-overlay
+            aria-hidden="true"
+            onClick={close}
+          />
           <div
             ref={panelRef}
             role="dialog"

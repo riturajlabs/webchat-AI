@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useAuth } from '@/features/auth/auth-context';
@@ -146,5 +146,89 @@ describe('MobileNav', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
 
     expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveFocus();
+  });
+
+  it('keeps the 44px hamburger trigger from shrinking in the header', () => {
+    render(<MobileNav />);
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveClass(
+      'shrink-0',
+      'h-11',
+      'w-11',
+    );
+  });
+
+  it('moves focus into the drawer when it opens', async () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+  });
+
+  it('keeps the focus trap inside the drawer (Tab wraps from last to first)', async () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    const focusables = Array.from(
+      dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'),
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    last.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(document.activeElement).toBe(first);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('keeps the focus trap inside the drawer (Shift+Tab wraps from first to last)', async () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+
+    const focusables = Array.from(
+      dialog.querySelectorAll<HTMLElement>('a[href], button:not([disabled])'),
+    );
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    first.focus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(last);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('closes the drawer when the backdrop is clicked (backdrop stays interactive)', () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    const overlay = document.querySelector('[data-dialog-overlay]');
+    expect(overlay).not.toHaveAttribute('inert');
+    expect(screen.getByRole('dialog', { name: 'Navigation' })).toBeInTheDocument();
+
+    fireEvent.click(overlay as Element);
+
+    expect(screen.queryByRole('dialog', { name: 'Navigation' })).not.toBeInTheDocument();
+  });
+
+  it('locks body scroll while open and restores it on close', () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+    expect(document.body.style.overflow).toBe('hidden');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close navigation' }));
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('exposes the drawer to assistive technology as a modal dialog', () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Navigation' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(document.querySelector('[data-dialog-overlay]')).toHaveAttribute('aria-hidden', 'true');
   });
 });

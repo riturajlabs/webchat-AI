@@ -69,7 +69,7 @@ export function MobileMenu() {
   const getStartedHref = getLandingDestination('get-started', isAuthenticated);
 
   return (
-    <div className="md:hidden">
+    <div className="lg:hidden">
       <button
         ref={triggerRef}
         type="button"

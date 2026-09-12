@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Check, Copy, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
 
 import { useCreateApiKey } from './hooks';
 import type { CreateApiKeyResponse } from './types';
@@ -17,6 +18,7 @@ export function CreateApiKeyDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const createApiKey = useCreateApiKey();
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const [name, setName] = useState('');
   const [result, setResult] = useState<CreateApiKeyResponse | null>(null);
@@ -30,6 +32,12 @@ export function CreateApiKeyDialog({
     setResult(null);
     setCopied(false);
   }
+
+  useAccessibleDialog({
+    open,
+    onClose: close,
+    contentRef,
+  });
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -70,15 +78,24 @@ export function CreateApiKeyDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="create-api-key-title"
+      aria-describedby="create-api-key-description"
     >
-      <div className="absolute inset-0 bg-black/50" onClick={close} aria-hidden="true" />
-      <div className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg">
+      <div
+        className="absolute inset-0 bg-black/50"
+        data-dialog-overlay
+        onClick={close}
+        aria-hidden="true"
+      />
+      <div
+        ref={contentRef}
+        className="relative z-10 w-full max-w-md rounded-lg border bg-background p-6 shadow-lg"
+      >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 id="create-api-key-title" className="font-sans text-lg font-semibold">
               Create API key
             </h2>
-            <p className="text-sm text-muted-foreground">
+            <p id="create-api-key-description" className="text-sm text-muted-foreground">
               {result
                 ? 'Save the secret now - it is shown only once.'
                 : 'Name a key for your integration.'}
@@ -145,6 +162,7 @@ export function CreateApiKeyDialog({
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Production"
+                data-autofocus
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
               />
             </div>

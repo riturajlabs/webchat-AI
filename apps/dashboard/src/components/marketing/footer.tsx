@@ -68,7 +68,7 @@ function FooterColumn({
           <li key={label}>
             <Link
               href={href}
-              className="text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+              className="inline-block py-1 text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
             >
               {label}
             </Link>
@@ -122,7 +122,7 @@ export function Footer() {
                 <li key={label}>
                   <Link
                     href={href}
-                    className="text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                    className="inline-block py-1 text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
                   >
                     {label}
                   </Link>
@@ -133,7 +133,7 @@ export function Footer() {
                   <li>
                     <Link
                       href={signInHref}
-                      className="text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                      className="inline-block py-1 text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
                     >
                       {isAuthenticated ? 'Dashboard' : 'Sign in'}
                     </Link>
@@ -141,7 +141,7 @@ export function Footer() {
                   <li>
                     <Link
                       href={getStartedHref}
-                      className="text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
+                      className="inline-block py-1 text-sm text-muted-foreground transition-colors hover:text-blue-600 dark:hover:text-blue-400"
                     >
                       Get started
                     </Link>
