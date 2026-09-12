@@ -19,7 +19,12 @@ from backend.models.crawl_job import (
     CrawlJob,
 )
 from backend.models.usage_record import usage_date_key
-from backend.models.website import WEBSITE_STATUS_READY, Website
+from backend.models.website import (
+    WEBSITE_STATUS_CRAWLING,
+    WEBSITE_STATUS_FAILED,
+    WEBSITE_STATUS_READY,
+    Website,
+)
 from backend.services.ingestion import SsrFGuard
 from backend.workers.jobs.crawl import _run_crawl_job
 
@@ -1000,3 +1005,199 @@ async def test_worker_memory_guard_final_retry_marks_failed(patch_dns, monkeypat
     assert website.status == "failed"
     assert any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
     assert ctx["crawler_fetcher"].closed is True
+
+
+# ---------------------------------------------------------------------------
+# FIND-08: per-task crawl timeout + cancellation-safe terminalization
+# ---------------------------------------------------------------------------
+
+
+async def _env_with_crawling_website(*, pages: dict[str, str] | None = None):
+    """Like `_env` but mirrors production: the website sits in `crawling`
+    while the ARQ job runs (CrawlService.start_crawl sets it)."""
+    env = await _env(pages=pages)
+    ctx, job, jobs, documents, websites, audit, usage = env
+    websites.websites[job.website_id].status = WEBSITE_STATUS_CRAWLING
+    await websites.update(websites.websites[job.website_id])
+    return env
+
+
+async def test_worker_cancellation_terminalizes_job_with_partial_pages(patch_dns) -> None:
+    """FIND-08: ARQ job-timeout cancellation is terminal + re-crawlable.
+
+    The seed page is stored, then the second fetch is cancelled the way ARQ's
+    `crawl_job_timeout_seconds` does (asyncio.CancelledError bypasses the
+    `except Exception` handlers). The job must land on `failed`/inactive, the
+    website must leave `crawling`, partial pages must be preserved, and no
+    knowledge pass may fire for a cancelled crawl.
+    """
+    ctx, job, jobs, documents, websites, audit, usage = await _env_with_crawling_website()
+    # Cancel the second fetch (about) so exactly one page was stored.
+    ctx["crawler_fetcher"].fail("https://acme.example/about", asyncio.CancelledError())
+    enqueued: list[str] = []
+
+    async def fake_enqueue(website_id: str) -> None:
+        enqueued.append(website_id)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+            enqueue_knowledge=fake_enqueue,
+        )
+
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    assert stored.active is False
+    assert stored.error_message is not None
+    assert "timed out" in stored.error_message
+    assert "pages stored=1" in stored.error_message
+    assert stored.pages_completed == 1
+    assert "https://" not in stored.error_message
+    website = websites.websites[job.website_id]
+    assert website.status != WEBSITE_STATUS_CRAWLING
+    assert website.status == WEBSITE_STATUS_READY
+    assert website.pages_indexed == 1
+    # Partial pages stored before the cancellation are preserved, not deleted.
+    assert len(documents.documents) == 1
+    assert any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
+    # No knowledge handoff for a cancelled crawl.
+    assert enqueued == []
+    # Browser/context cleanup still ran during the cancellation unwind.
+    assert ctx["crawler_fetcher"].closed is True
+
+
+async def test_cancellation_emits_timeout_telemetry(patch_dns, caplog, monkeypatch) -> None:
+    """FIND-08: the timeout path emits the same failure observability as other
+    terminal failures (metric reason=timeout, structured log, no secrets)."""
+    from unittest.mock import MagicMock
+
+    record_failed = MagicMock()
+    monkeypatch.setattr("backend.workers.jobs.crawl.record_crawl_failed", record_failed)
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env_with_crawling_website()
+    ctx["crawler_fetcher"].fail("https://acme.example/about", asyncio.CancelledError())
+
+    with (
+        caplog.at_level(logging.WARNING, logger="webchat_ai"),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+
+    record_failed.assert_called_once_with(reason="timeout")
+    assert "crawl_failed" in caplog.text
+    assert "reason=timeout" in caplog.text
+    # Safe host/path only (FIND-03): full URLs and page content never surface.
+    assert "hostname=acme.example path=/" in caplog.text
+    assert "first_error_url=" not in caplog.text
+
+
+async def test_worker_cancellation_zero_pages_fails_website(patch_dns) -> None:
+    """FIND-08: a cancel before any page lands fails the website (not READY)."""
+    ctx, job, jobs, documents, websites, audit, usage = await _env_with_crawling_website(
+        pages={SEED: SAMPLE_HTML}
+    )
+    ctx["crawler_fetcher"].fail(SEED, asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    assert stored.error_message is not None
+    assert "pages stored=0" in stored.error_message
+    website = websites.websites[job.website_id]
+    assert website.status != WEBSITE_STATUS_CRAWLING
+    assert website.status == WEBSITE_STATUS_FAILED
+    assert documents.documents == {}
+    assert ctx["crawler_fetcher"].closed is True
+
+
+async def test_crawl_cancel_terminal_write_is_fenced(patch_dns) -> None:
+    """FIND-08 single-terminator: only the active owner's `finish_if_active`
+    may emit terminal side effects; a stale re-delivery cannot repeat them."""
+    from types import SimpleNamespace
+
+    from backend.workers.jobs.crawl import _finalize_crawl_cancelled
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()  # noqa: F841
+    website = websites.websites[job.website_id]
+    session = SimpleNamespace(stored_urls=["https://acme.example/"], errors=[])
+
+    await _finalize_crawl_cancelled(
+        job=job,
+        website=website,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        crawl_job_id=job.id,
+        session=session,
+    )
+
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    assert stored.active is False
+    assert "pages stored=1" in (stored.error_message or "")
+    assert any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
+    audit_count = len(audit.logs)
+
+    # A stale/re-delivered cancellation for an already-terminal job is a no-op.
+    await _finalize_crawl_cancelled(
+        job=job,
+        website=website,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        crawl_job_id=job.id,
+        session=session,
+    )
+    assert len(audit.logs) == audit_count
+    assert jobs.jobs[job.id].active is False
+    assert jobs.jobs[job.id].status == CRAWL_STATUS_FAILED
+
+
+def test_crawl_task_has_dedicated_timeout() -> None:
+    """FIND-08: `crawl_website` is registered as an ARQ `Function` with its
+    own finite timeout instead of ARQ's global 600 s; other tasks inherit the
+    global (no per-task override) and the crawler name is preserved."""
+    from arq.worker import Function
+    from backend.core.config import get_settings
+    from backend.workers.tasks import CRAWL_FUNCTION, TASKS
+
+    assert isinstance(CRAWL_FUNCTION, Function)
+    assert CRAWL_FUNCTION.name == "crawl_website"
+    assert CRAWL_FUNCTION.timeout_s == float(get_settings().crawl_job_timeout_seconds)
+    assert CRAWL_FUNCTION.timeout_s > 600  # larger than the global job_timeout
+    # The dedicated timeout must never be unbounded.
+    assert CRAWL_FUNCTION.timeout_s < float("inf")
+
+    # Non-crawl tasks stay plain coroutines -> ARQ's global 600 s applies.
+    plain_names = {
+        getattr(task, "__name__", None) for task in TASKS if not isinstance(task, Function)
+    }
+    assert "send_email" in plain_names
+    assert "process_document" in plain_names
+    assert "process_website_documents" in plain_names

@@ -337,6 +337,22 @@ class Settings(BaseSettings):
     crawl_max_pages: int = 50
     crawl_max_depth: int = 3
     crawl_navigation_timeout_ms: int = 30000
+    # FIND-08: per-task wall-clock budget for a `crawl_website` ARQ job.
+    # `crawl_website` is registered as an ARQ `Function` with this explicit
+    # timeout (backend/workers/tasks.py); every other worker task still
+    # inherits ARQ's global `job_timeout` (600 s, app.py) which is too short
+    # for a 50-page crawl. Sizing from the code's per-page bounds, worst honest
+    # case: 50 pages x (30 s nav timeout + bounded retry delay up to 30 s
+    # Retry-After/wait + second 30 s HTTP attempt + 30 s browser fallback)
+    # ~= 100 min, plus robots.txt fetch, extraction and Mongo upserts. A
+    # realistic slow site (JS-heavy pages, sparse browser fallbacks) lands well
+    # under ~25-30 min, so 3600 s (~1 h) sits ~2x above it while keeping a
+    # finite stop for a rogue/hung crawl. Since FIND-08 terminalizes a timed
+    # out crawl (job -> failed, partial pages preserved, website re-crawlable),
+    # crossing this ceiling degrades gracefully instead of stranding the job.
+    # Raise it only for deployments whose real crawls hit this ceiling; keep
+    # `crawl_navigation_timeout_ms` as the unchanged 30 s per-page bound.
+    crawl_job_timeout_seconds: int = 3600
     # Cap on a single page's rendered HTML (response size limit); the browser
     # truncates at this ceiling and the crawler skips anything still over it.
     crawl_max_html_bytes: int = 5_000_000

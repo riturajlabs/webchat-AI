@@ -8,6 +8,7 @@ publishes progress to the `crawl_jobs` document, and lands the website on
 only the final attempt records a permanent `failed` state.
 """
 
+import asyncio
 import hashlib
 import logging
 from typing import Any, cast
@@ -628,6 +629,28 @@ async def _run_crawl_job_impl(
             url_path,
         )
         return {"status": "failed"}
+    except asyncio.CancelledError:
+        # FIND-08: ARQ's per-task `crawl_job_timeout_seconds` delivers
+        # `asyncio.CancelledError` (a `BaseException`) into `crawl_website`;
+        # the `except Exception` handlers below never see it.  Without this
+        # write the job would strand as `processing` + `active=True` and the
+        # website as `crawling`, permanently blocking re-crawl.
+        # Terminalize via the FIND-02 single-terminator so only the active
+        # owner wins side effects, partial pages are preserved, and the
+        # state left is re-crawlable (docs/WORKER_FIND_08_INVESTIGATION_2026-09-12.md).
+        # Best-effort: any failure here is logged and swallowed
+        # so the pending cancellation keeps propagating.
+        await _finalize_crawl_cancelled(
+            job=job,
+            website=website,
+            crawl_jobs=crawl_jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            crawl_job_id=crawl_job_id,
+            session=session,
+        )
+        raise
     except Exception as exc:
         job_try = int(ctx.get("job_try", 1))
         max_tries = int(ctx.get("max_tries", 3))
@@ -712,6 +735,116 @@ async def _run_crawl_job_impl(
                 url_path,
             )
         raise
+
+
+async def _finalize_crawl_cancelled(
+    *,
+    job: Any,
+    website: Any,
+    crawl_jobs: Any,
+    documents: Any,
+    websites: Any,
+    audit: Any,
+    crawl_job_id: str,
+    session: Any,
+) -> None:
+    """Best-effort terminal write for a crawl cancelled by the ARQ job timeout.
+
+    ARQ delivers `asyncio.CancelledError` (a `BaseException`) into
+    `crawl_website` when the per-task `crawl_job_timeout_seconds` expires; it
+    bypasses the `except Exception` handlers, so without this write the job
+    would strand as `processing` + `active=True` and the website as
+    `crawling`, permanently blocking re-crawl (FIND-08).  Mirrors the other
+    terminal failure paths: only the attempt that wins `finish_if_active`
+    emits side effects (event, website write, audit, metrics); partial pages
+    stored before the cancellation are preserved (never deleted) and the
+    outcome is re-crawlable.  The error message carries no secrets, URLs or
+    page content, only the timeout and the partial page count.  Best-effort
+    by construction: this runs under an active `CancelledError`, so any
+    failure is logged and the pending cancellation keeps propagating.
+    """
+    try:
+        pages_stored = len(session.stored_urls)
+        timeout_seconds = get_settings().crawl_job_timeout_seconds
+        error_message = (
+            f"Crawl timed out after {timeout_seconds} seconds; pages stored={pages_stored}"
+        )
+        completed_at = utcnow()
+        won = await crawl_jobs.finish_if_active(
+            job.id,
+            job.tenant_id,
+            terminal_status=CRAWL_STATUS_FAILED,
+            completed_at=completed_at,
+            pages_completed=pages_stored,
+            pages_total=job.pages_total,
+            errors=[err.model_dump(mode="json") for err in session.errors],
+            error_message=error_message,
+        )
+        if not won:
+            logger.warning(
+                "crawl_terminal_skipped job_id=%s tenant_id=%s website_id=%s "
+                "status=failed reason=already_terminal cancellation=1 pages_stored=%d",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                pages_stored,
+            )
+            return
+        job.status = CRAWL_STATUS_FAILED
+        job.completed_at = completed_at
+        job.error_message = error_message
+        job.updated_at = completed_at
+        await crawl_events.publish_failed(job.id, error=error_message)
+
+        existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
+        if existing_pages == 0:
+            website.status = WEBSITE_STATUS_FAILED
+            website.pages_indexed = 0
+        else:
+            website.status = WEBSITE_STATUS_READY
+            website.pages_indexed = existing_pages
+            # Surface that the previous knowledge base survives a timed-out
+            # refresh (existing documents are never deleted).
+            job.error_message = f"{error_message} Your existing knowledge base is still available."
+        website.updated_at = utcnow()
+        owned = await websites.update_if_crawl_owner(job.tenant_id, job.website_id, job.id, website)
+        if not owned:
+            logger.warning(
+                "crawl_website_write_fenced job_id=%s tenant_id=%s website_id=%s "
+                "status=failed reason=no_longer_owner cancellation=1",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+            )
+
+        await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
+        record_crawl_failed(reason="timeout")
+        elapsed = (
+            (completed_at - job.started_at).total_seconds() if job.started_at is not None else 0.0
+        )
+        url_host, url_path = safe_url_parts(website.url)
+        logger.warning(
+            "crawl_failed job_id=%s tenant_id=%s website_id=%s hostname=%s path=%s "
+            "reason=timeout pages_stored=%d pages_total=%d elapsed_seconds=%.2f",
+            crawl_job_id,
+            job.tenant_id,
+            job.website_id,
+            url_host,
+            url_path,
+            pages_stored,
+            job.pages_total,
+            elapsed,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "crawl_timeout_terminalization_failed job_id=%s tenant_id=%s website_id=%s",
+            crawl_job_id,
+            job.tenant_id,
+            job.website_id,
+            exc_info=True,
+        )
 
 
 async def _purge_removed_documents(

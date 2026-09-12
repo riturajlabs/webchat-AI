@@ -12,6 +12,9 @@ own file under `backend/workers/jobs/`) will be added as their phases land:
 import time
 from typing import Any
 
+from arq.worker import func
+
+from backend.core.config import get_settings
 from backend.workers.jobs.crawl import crawl_website
 from backend.workers.jobs.email import send_email
 from backend.workers.jobs.knowledge import process_document, process_website_documents
@@ -29,10 +32,23 @@ async def ping(ctx: dict[str, Any]) -> dict[str, str]:
 # Tasks registered in the ARQ worker (ADR-002 task registry). The timed_* wrap
 # measures queue wait + execution duration (Phase 12.1 instrumentation; only
 # logs when PERF_TIMING_LOG_ENABLED=true).
+#
+# FIND-08: `crawl_website` is the one task whose honest duration can exceed
+# ARQ's global `job_timeout` (600 s; a 50-page crawl at the per-page bounds can
+# take an hour or more), so it is registered as an ARQ `Function` with its own
+# finite timeout (`crawl_job_timeout_seconds`). Every other task keeps the
+# global 600 s as stuck-job protection. `timed_job`'s `functools.wraps`
+# (timing.py) preserves the coroutine name (`crawl_website`) that ARQ keys job
+# dispatch on, so enqueued `"crawl_website"` jobs still resolve to this entry.
+CRAWL_FUNCTION = func(
+    timed_job(crawl_website),
+    timeout=get_settings().crawl_job_timeout_seconds,
+)
+
 TASKS = [
     ping,
     timed_job(send_email),
-    timed_job(crawl_website),
+    CRAWL_FUNCTION,
     timed_job(process_document),
     timed_job(process_website_documents),
 ]
