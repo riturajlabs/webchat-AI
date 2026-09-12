@@ -63,6 +63,10 @@ class WebsiteRepository(Protocol):
         self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
     ) -> Website | None: ...
 
+    async def finalize_embedding_run(
+        self, tenant_id: str, website_id: str, run_id: str, state: Literal["completed", "failed"]
+    ) -> bool: ...
+
     async def delete(self, tenant_id: str, website_id: str) -> None: ...
 
 
@@ -167,6 +171,38 @@ class MongoWebsiteRepository:
             return_document=ReturnDocument.AFTER,
         )
         return Website.from_doc(doc) if doc else None
+
+    async def finalize_embedding_run(
+        self, tenant_id: str, website_id: str, run_id: str, state: Literal["completed", "failed"]
+    ) -> bool:
+        """Atomically transition a fenced embedding run to a terminal state.
+
+        The update is fenced on `tenant_id`, `website_id`, the run's `id`, and
+        that the run is still ``running``: a stale `run_id` or an
+        already-finalized run matches nothing and is a safe no-op. A
+        concurrently-started newer run can never be finalized by this one.
+
+        Returns whether the update actually matched a running run (i.e. the
+        run transitioned); `False` means stale, already-finalized, or foreign
+        lease and requires no caller action.
+        """
+        now = utcnow()
+        result = await self._collection.update_one(
+            {
+                "_id": website_id,
+                "tenant_id": tenant_id,
+                "embedding_run.id": run_id,
+                "embedding_run.state": "running",
+            },
+            {
+                "$set": {
+                    "embedding_run.state": state,
+                    "embedding_run.updated_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+        return result.matched_count > 0
 
     async def delete(self, tenant_id: str, website_id: str) -> None:
         website = await self._collection.find_one({"_id": website_id, "tenant_id": tenant_id})

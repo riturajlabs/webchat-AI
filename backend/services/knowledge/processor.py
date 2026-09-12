@@ -24,7 +24,7 @@ message so the exact failure point is traceable.
 
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from backend.core.config import get_settings
 from backend.core.embedding_identity import EmbeddingIdentity
@@ -165,6 +165,10 @@ class KnowledgeProcessor:
         tenant_id_var.set(website.tenant_id)
         documents = await self._documents.list_by_website(website.tenant_id, website_id)
         if not documents:
+            # No work to fan out. A previously fenced run (e.g. from a pass
+            # that fully drained or whose documents were purged) is finalized
+            # so the website stays re-acquirable for the next pass.
+            await self._finalize_embedding_run_if_drained(website)
             return {"status": "no_documents"}
         # Provider-lock the website BEFORE fanning out (provider consistency):
         # resolve the locked (or newly health-selected) embedding provider and
@@ -176,6 +180,11 @@ class KnowledgeProcessor:
             embedder = await self._resolve_embedder(website)
             acquired = await self._acquire_embedding_run(website, embedder)
             if acquired is None:
+                # Another (or a stuck, already-drained) fenced run holds the
+                # website. Best-effort healing: if that run has fully drained
+                # (every document terminal) it is finalized so the next pass
+                # can acquire; a genuine in-flight run is left untouched.
+                await self._finalize_embedding_run_if_drained(website)
                 return {"status": "already_processing"}
             website = acquired
             # Keep the existing public identity fields in sync for retrieval
@@ -664,6 +673,47 @@ class KnowledgeProcessor:
             },
         )
 
+    async def _finalize_embedding_run_if_drained(self, website: Website) -> None:
+        """Transition a fenced `embedding_run` to a terminal state once drained.
+
+        A run is drained when every document has reached a terminal knowledge
+        state (ready or failed); rate-limited documents awaiting a deferred
+        retry keep the run ``running``. Only fenced (provider-resolved) passes
+        own a run and may finalize it. The terminal state mirrors the
+        website's read-side readiness (the same `knowledge_chunks > 0` signal
+        `_refresh_website` uses to set `READY`): ``completed`` when the corpus
+        is present, ``failed`` otherwise - both of which re-acquire.
+
+        The transition is atomic and run-id fenced in the repository, so a
+        concurrently-started newer run can never be finalized by this one; a
+        stale or already-terminal run is a safe no-op. The in-memory
+        `website.embedding_run` is kept in sync with the persisted terminal
+        state so a later full-document `update()` cannot write it back as
+        ``running``.
+        """
+        if self._provider_resolver is None:
+            return
+        if website.status == WEBSITE_STATUS_DELETED:
+            return
+        run = website.embedding_run
+        if run is None or run.state != "running":
+            return
+        non_terminal = await self._documents.count_non_terminal_by_website(
+            website.tenant_id, website.id
+        )
+        if non_terminal > 0:
+            return
+        terminal_state: Literal["completed", "failed"] = (
+            "completed" if website.knowledge_chunks > 0 else "failed"
+        )
+        finalized = await self._websites.finalize_embedding_run(
+            website.tenant_id, website.id, run.id, terminal_state
+        )
+        if finalized:
+            website.embedding_run = run.model_copy(
+                update={"state": terminal_state, "updated_at": utcnow()}
+            )
+
     async def _refresh_website(self, website: Website) -> None:
         """Recompute and persist dashboard knowledge statistics for a website."""
         website.knowledge_chunks = await self._chunks.count_by_website(
@@ -691,6 +741,10 @@ class KnowledgeProcessor:
             # The fan-out has drained and every page failed: the website is
             # done (nothing left processing) and should read `failed`.
             website.knowledge_status = KNOWLEDGE_STATUS_FAILED
+        # Fenced ingestion runs are finalized once the fan-out drains (every
+        # document terminal); the in-memory run is kept terminal so the update
+        # below persists the finalized state.
+        await self._finalize_embedding_run_if_drained(website)
         website.last_knowledge_at = utcnow()
         website.updated_at = utcnow()
         await self._websites.update(website)

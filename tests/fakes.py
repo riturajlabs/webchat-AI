@@ -2,9 +2,10 @@
 
 import asyncio
 from datetime import datetime
+from typing import Literal
 
 from backend.ai.gemini import GenerationUsage
-from backend.core.security import utcnow
+from backend.core.security import new_id, utcnow
 from backend.models.admin_audit_log import AdminAuditLog
 from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
 from backend.models.audit_log import AuditLog
@@ -28,7 +29,7 @@ from backend.models.tenant import Tenant
 from backend.models.usage_event import UsageEvent
 from backend.models.usage_record import UsageRecord
 from backend.models.user import User
-from backend.models.website import WEBSITE_STATUS_DELETED, Website
+from backend.models.website import WEBSITE_STATUS_DELETED, EmbeddingRun, Website
 from backend.models.widget import Widget
 from backend.prompts.rag import UNKNOWN_ANSWER_FALLBACK
 from backend.repositories.admin_repository import (
@@ -545,6 +546,43 @@ class FakeWebsiteRepository:
     async def update(self, website: Website) -> None:
         self._websites[website.id] = website
 
+    async def acquire_embedding_run(
+        self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
+    ) -> Website | None:
+        """Mirror `MongoWebsiteRepository`: only an absent or terminal run
+        transitions to `running`; a duplicate fan-out receives `None`."""
+        website = self._websites.get(website_id)
+        if (
+            website is None
+            or website.tenant_id != tenant_id
+            or website.status == WEBSITE_STATUS_DELETED
+        ):
+            return None
+        run = website.embedding_run
+        if run is not None and run.state == "running":
+            return None
+        now = utcnow()
+        website.embedding_run = EmbeddingRun(
+            id=new_id(), identity=identity, started_at=now, updated_at=now
+        )
+        website.updated_at = now
+        return website
+
+    async def finalize_embedding_run(
+        self, tenant_id: str, website_id: str, run_id: str, state: Literal["completed", "failed"]
+    ) -> bool:
+        """Mirror `MongoWebsiteRepository`: run-id/state-fenced, idempotent."""
+        website = self._websites.get(website_id)
+        if website is None or website.tenant_id != tenant_id:
+            return False
+        run = website.embedding_run
+        if run is None or run.id != run_id or run.state != "running":
+            return False
+        now = utcnow()
+        website.embedding_run = run.model_copy(update={"state": state, "updated_at": now})
+        website.updated_at = now
+        return True
+
     async def delete(self, tenant_id: str, website_id: str) -> None:
         website = self._websites.get(website_id)
         if website is not None and website.tenant_id == tenant_id:
@@ -775,6 +813,7 @@ class FakeDocumentRepository:
             KNOWLEDGE_STATUS_NONE,
             KNOWLEDGE_STATUS_PENDING,
             KNOWLEDGE_STATUS_PROCESSING,
+            KNOWLEDGE_STATUS_RATE_LIMITED,
         )
 
         return len(
@@ -784,7 +823,12 @@ class FakeDocumentRepository:
                 if document.tenant_id == tenant_id
                 and document.website_id == website_id
                 and document.knowledge_status
-                in (KNOWLEDGE_STATUS_NONE, KNOWLEDGE_STATUS_PENDING, KNOWLEDGE_STATUS_PROCESSING)
+                in (
+                    KNOWLEDGE_STATUS_NONE,
+                    KNOWLEDGE_STATUS_PENDING,
+                    KNOWLEDGE_STATUS_PROCESSING,
+                    KNOWLEDGE_STATUS_RATE_LIMITED,
+                )
             ]
         )
 
