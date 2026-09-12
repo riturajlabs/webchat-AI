@@ -402,6 +402,16 @@ class Settings(BaseSettings):
     # wasting budget on that host and finishes deterministically. 0 disables
     # the early stop (preserves pre-existing behaviour).
     crawl_max_blocked_pages_per_host: int = 10
+    # FIND-07: robots.txt failure posture. An *actually absent* robots.txt (HTTP
+    # 404/410, or `target_not_found`) always means "no restrictions". "Genuine
+    # unavailability" (5xx, timeout, network/TLS/DNS failure, redirect failure,
+    # or an unclassified fetch error) means the site's policy is UNKNOWN: the
+    # default (false) fails CLOSED so the crawl denies every path instead of
+    # crawling a site whose policy could not be read. Setting true restores the
+    # legacy fail-open behaviour (treat a robots outage as "no restrictions")
+    # and should only be used when the operator intentionally accepts that
+    # trade-off.
+    crawl_robots_fail_open: bool = False
 
     # RAG pipeline (Phase 6, docs/02-TRD.md §8 + ADR-008).
     # Versioned answer prompt selected from backend/prompts/rag.py.

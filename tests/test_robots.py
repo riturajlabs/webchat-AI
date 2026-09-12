@@ -18,6 +18,18 @@ def test_allow_all_default() -> None:
     assert RobotsTxt.allow_all().is_allowed("/anything")
 
 
+def test_deny_all_denies_every_path() -> None:
+    denied = RobotsTxt.deny_all()
+    assert not denied.is_allowed("/")
+    assert not denied.is_allowed("/about")
+    assert not denied.is_allowed("/private/deep/page")
+
+
+def test_deny_all_is_inverse_of_allow_all() -> None:
+    assert RobotsTxt.allow_all().is_allowed("/") is True
+    assert RobotsTxt.deny_all().is_allowed("/") is False
+
+
 def test_disallow_and_allow_precedence() -> None:
     robots = RobotsTxt.parse(ROBOTS)
     assert not robots.is_allowed("/private/secret")

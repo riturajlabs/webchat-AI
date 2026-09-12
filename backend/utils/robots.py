@@ -29,6 +29,16 @@ class RobotsTxt:
         return cls()
 
     @classmethod
+    def deny_all(cls) -> "RobotsTxt":
+        """Return a `RobotsTxt` that denies every path (fail-closed default).
+
+        Inverse of `allow_all()`: a single disallow rule on the site root
+        matches every crawlable path, so `is_allowed` is always ``False`` even
+        for a site whose policy could not be fetched (FIND-07).
+        """
+        return cls(_rules=[_Rule(path="/", allowed=False)])
+
+    @classmethod
     def parse(cls, raw: str) -> "RobotsTxt":
         """Parse raw robots.txt content into a `RobotsTxt`."""
         rules: list[_Rule] = []

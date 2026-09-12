@@ -560,7 +560,20 @@ async def test_http_failure_and_browser_failure_are_recorded(guard, monkeypatch)
         "backend.services.ingestion.http_first.BrowserPageFetcher",
         lambda *, guard: browser,
     )
-    client = _mock_client(lambda request: httpx.Response(503))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # An allowed robots.txt keeps the seed in scope (FIND-07: a 5xx robots
+        # fetch would fail CLOSED and the page-level failure below would never
+        # run); the pages themselves stay 503 so the browser fallback fire.
+        if request.url.path == "/robots.txt":
+            return httpx.Response(
+                200,
+                content=b"User-agent: *\nAllow: /\n",
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(503)
+
+    client = _mock_client(handler)
     fetcher = HybridPageFetcher(
         guard=guard, http_client_factory=lambda: client, sleep_fn=_InstantSleeper()
     )

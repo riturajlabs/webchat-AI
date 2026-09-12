@@ -439,14 +439,54 @@ class CrawlSession:
         return current_mb > ceiling_mb
 
     async def _fetch_robots(self, seed: str) -> RobotsTxt:
-        """Fetch and parse robots.txt through the same SSRF-guarded fetcher."""
+        """Fetch and parse robots.txt through the same SSRF-guarded fetcher.
+
+        FIND-07: an *actually absent* robots.txt (HTTP 404/410, or a fetch
+        classified ``target_not_found``) means "no robots policy" and the crawl
+        proceeds unrestricted. Genuine *unavailability* (5xx, timeout, network/
+        TLS/DNS failure, redirect failure, or an unclassified ``FetchError``
+        without a confirmed 404/410) means the site's policy is UNKNOWN: the
+        default fails CLOSED to ``deny_all()`` so a flaky robots fetch can
+        never turn a disallow-protected site into an unconstrained crawl.
+        ``crawl_robots_fail_open`` is the operator escape hatch restoring the
+        legacy allow-all behaviour. Only the safe hostname/path is logged
+        (FIND-03): query strings, credentials and tokens never reach the log.
+        """
         parsed = urlparse(seed)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         try:
             page = await self._fetcher.fetch(robots_url)
-        except (FetchError, InvalidUrlError):
-            return RobotsTxt.allow_all()
+        except InvalidUrlError:
+            self._warn_robots_unavailable(robots_url, "invalid_url")
+            return self._robots_failure_outcome()
+        except FetchError as exc:
+            if exc.status_code in (404, 410) or exc.classification == (
+                CrawlFailureClassification.TARGET_NOT_FOUND.value
+            ):
+                return RobotsTxt.allow_all()
+            self._warn_robots_unavailable(robots_url, exc.classification or "fetch_error")
+            return self._robots_failure_outcome()
         return RobotsTxt.parse(page.html)
+
+    def _robots_failure_outcome(self) -> RobotsTxt:
+        """Small default: fail CLOSED unless the operator opted back in."""
+        if self._settings.crawl_robots_fail_open:
+            return RobotsTxt.allow_all()
+        return RobotsTxt.deny_all()
+
+    def _warn_robots_unavailable(self, robots_url: str, reason: str) -> None:
+        """Structured warning carrying only safe hostname/path (FIND-03)."""
+        host, path = safe_url_parts(robots_url)
+        logger.warning(
+            "crawl_robots_unavailable hostname=%s path=%s reason=%s fail_open=%s "
+            "tenant=%s website=%s",
+            host,
+            path,
+            reason,
+            self._settings.crawl_robots_fail_open,
+            self._tenant_id,
+            self._website_id,
+        )
 
     def _record_error(
         self,

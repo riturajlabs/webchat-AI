@@ -170,6 +170,104 @@ async def test_respects_robots_disallow(guard) -> None:
     assert "https://acme.example/private/secret" not in urls
 
 
+ROBOTS_URL = "https://acme.example/robots.txt"
+
+
+async def _fail_robots(fetcher: FakePageFetcher, error: FetchError) -> None:
+    fetcher.fail(ROBOTS_URL, error)
+
+
+async def test_robots_404_allows_unrestricted_crawl(guard) -> None:
+    """A. An absent robots.txt (404) is "no policy": the crawl proceeds."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(
+        fetcher,
+        FetchError("Not found: robots.txt", status_code=404, classification="target_not_found"),
+    )
+    session = _session(fetcher, guard)
+    stored = await session.run()
+    assert stored == 2
+    assert {d.url for d in session._documents.documents.values()} == {
+        SEED,
+        "https://acme.example/about",
+    }
+
+
+async def test_robots_410_allows_unrestricted_crawl(guard) -> None:
+    """B. A gone robots.txt (410) is also "no policy"."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(
+        fetcher,
+        FetchError("Gone: robots.txt", status_code=410, classification="target_not_found"),
+    )
+    session = _session(fetcher, guard)
+    stored = await session.run()
+    assert stored == 2
+
+
+async def test_robots_5xx_fails_closed_by_default(guard, caplog) -> None:
+    """C. A 5xx robots outage fails CLOSED: zero pages fetched or stored."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(fetcher, FetchError("HTTP 503", status_code=503))
+    session = _session(fetcher, guard)
+    stored = await session.run()
+    assert stored == 0
+    assert session.errors == []
+    # The structured warning names only the safe hostname/path.
+    assert "hostname=acme.example path=/robots.txt" in caplog.text
+    assert "https://acme.example/robots.txt" not in caplog.text
+    assert "reason=fetch_error" in caplog.text
+
+
+async def test_robots_timeout_fails_closed_by_default(guard, caplog) -> None:
+    """D. A robots network/timeout outage also fails CLOSED."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(
+        fetcher,
+        FetchError("Network is unreachable", classification="retryable_network_error"),
+    )
+    session = _session(fetcher, guard)
+    stored = await session.run()
+    assert stored == 0
+    assert session.errors == []
+    assert "reason=retryable_network_error" in caplog.text
+    assert "hostname=acme.example path=/robots.txt" in caplog.text
+
+
+async def test_robots_fail_open_flag_restores_allow_all(guard, caplog) -> None:
+    """E. crawl_robots_fail_open=true restores the legacy allow-all on outage."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(fetcher, FetchError("HTTP 503", status_code=503))
+    session = _session(fetcher, guard, settings=_settings_with(robots_fail_open=True))
+    stored = await session.run()
+    assert stored == 2
+    assert "fail_open=True" in caplog.text
+
+
+async def test_robots_generic_fetch_error_is_not_allow_all(guard, caplog) -> None:
+    """F. A bare FetchError (no status) must NOT become "no policy"."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    await _fail_robots(fetcher, FetchError("boom"))
+    session = _session(fetcher, guard)
+    stored = await session.run()
+    assert stored == 0
+    assert session.errors == []
+    assert "reason=fetch_error" in caplog.text
+
+
+async def test_robots_warning_logs_only_safe_url_parts(guard, caplog) -> None:
+    """G. A robots failure warning never leaks query strings or full URLs."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    fetcher.fail(ROBOTS_URL, FetchError("HTTP 503", status_code=503))
+    session = _session(fetcher, guard)
+    await session.run()
+    assert "hostname=acme.example" in caplog.text
+    assert "path=/robots.txt" in caplog.text
+    # The scheme/authority and any tokens never reach the structured log.
+    assert "https://acme.example/robots.txt" not in caplog.text
+    assert "token=" not in caplog.text
+
+
 async def test_records_fetch_failures_and_continues(guard) -> None:
     fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
     fetcher.fail("https://acme.example/about", FetchError("timeout"))
@@ -372,6 +470,7 @@ def _settings_with(
     max_html_bytes: int | None = None,
     max_rss_mb: int | None = None,
     priority_paths: list[str] | None = None,
+    robots_fail_open: bool | None = None,
 ):
     """A settings stub carrying only the crawl knobs the session reads."""
     from backend.core.config import Settings
@@ -387,4 +486,6 @@ def _settings_with(
         values["crawl_max_rss_mb"] = max_rss_mb
     if priority_paths is not None:
         values["crawl_priority_url_paths"] = priority_paths
+    if robots_fail_open is not None:
+        values["crawl_robots_fail_open"] = robots_fail_open
     return Settings(_env_file=None, **values)

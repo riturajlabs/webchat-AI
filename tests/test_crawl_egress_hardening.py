@@ -43,6 +43,7 @@ from backend.services.ingestion.crawl_failure import (
     safe_url_parts,
     user_facing_reason,
 )
+from backend.utils.robots import RobotsTxt
 from backend.workers.jobs.crawl import _run_crawl_job
 
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher
@@ -423,6 +424,9 @@ async def test_ssrf_blocked_fetch_records_invalid_url_classification(guard) -> N
         documents=FakeDocumentRepository(),
         guard=guard,
         settings=_settings(),
+        # FIND-07: the robots gate must stay open for this test, whose intent is
+        # the invalid-URL classification on the *page* fetch, not robots policy.
+        robots=RobotsTxt.allow_all(),
     )
     assert await session.run() == 0
     assert session.errors[0].classification == CrawlFailureClassification.INVALID_URL.value

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from backend.services.crawl import CrawlService
-from backend.services.ingestion import FetchedPage, FetchError
+from backend.services.ingestion import CrawlFailureClassification, FetchedPage, FetchError
 from backend.services.website import WebsiteService
 
 from tests.fakes import (
@@ -27,7 +27,14 @@ class FakePageFetcher:
         if url in self.failures:
             raise self.failures[url]
         if url not in self.pages:
-            raise FetchError(f"Not found: {url}")
+            # A missing URL is a real HTTP 404 (classify_http_status(404) ->
+            # target_not_found), matching the production HTTP-first fetcher so
+            # the crawler's robots policy logic sees the same classification.
+            raise FetchError(
+                f"Not found: {url}",
+                status_code=404,
+                classification=CrawlFailureClassification.TARGET_NOT_FOUND.value,
+            )
         return FetchedPage(url=url, html=self.pages[url])
 
     async def close(self) -> None:
