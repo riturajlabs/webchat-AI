@@ -20,6 +20,7 @@ from backend.models.knowledge_chunk import (
 )
 from backend.models.usage_record import usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
+from backend.services.ingestion.crawl_failure import safe_url_parts
 from backend.services.knowledge.chunker import chunk_text
 from backend.services.knowledge.processor import KnowledgeProcessor, _dedupe_text_chunks
 
@@ -684,8 +685,9 @@ async def test_retry_returns_failed_without_callback_when_on_retry_missing() -> 
 
 
 async def test_failure_is_logged_with_structured_fields(caplog) -> None:
-    """Every failed document must emit a structured record carrying url,
-    document_id, website_id, stage, error_type and error_message."""
+    """Every failed document must emit a structured record carrying hostname,
+    path, document_id, website_id, stage, error_type and error_message (the
+    full URL is never logged - FIND-03)."""
     import logging
 
     env = await _env()
@@ -702,7 +704,10 @@ async def test_failure_is_logged_with_structured_fields(caplog) -> None:
     ]
     assert records, "no structured failure log emitted"
     record = records[0]
-    assert record.url == env.document.url
+    url_host, url_path = safe_url_parts(env.document.url)
+    assert record.url_host == url_host
+    assert record.url_path == url_path
+    assert not hasattr(record, "url")
     assert record.website_id == env.website.id
     assert record.stage == "embedding"
     assert record.error_type == "EmbeddingError"

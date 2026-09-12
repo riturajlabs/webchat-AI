@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from email.utils import parseaddr
 
 from backend.core.config import get_settings
+from backend.core.privacy import content_hash, mask_email
 from backend.services.mail.base import EmailMessage
 
 logger = logging.getLogger("webchat_ai")
@@ -39,9 +40,8 @@ class MailpitProvider:
         to_addr = payload.get("To")
         to_str = to_addr[0].get("Email", "?") if isinstance(to_addr, list) and to_addr else "?"
         logger.info(
-            "Mailpit dispatching: provider=mailpit, to=%s, api_url=%s",
-            to_str,
-            self._api_url,
+            "Mailpit dispatching: provider=mailpit, to=%s",
+            mask_email(to_str),
         )
         request = urllib.request.Request(
             f"{self._api_url}/api/v1/send",
@@ -54,15 +54,14 @@ class MailpitProvider:
                 if response.status >= 400:
                     raise RuntimeError(f"Mailpit rejected email with status {response.status}")
                 logger.info(
-                    "Mailpit email sent successfully: to=%s, status=%d",
-                    to_str,
+                    "Mailpit email sent successfully: provider=mailpit, to=%s, status=%d",
+                    mask_email(to_str),
                     response.status,
                 )
         except Exception:
             logger.exception(
-                "Mailpit email delivery FAILED: to=%s, api_url=%s",
-                to_str,
-                self._api_url,
+                "Mailpit email delivery FAILED: provider=mailpit, to=%s",
+                mask_email(to_str),
             )
             raise
 
@@ -83,10 +82,10 @@ class ResendProvider:
         settings = get_settings()
         sender = settings.email_from
         logger.info(
-            "Resend dispatching: provider=resend, to=%s, from=%s, subject=%s",
-            message.to,
+            "Resend dispatching: provider=resend, to=%s, from=%s, subject_hash=%s",
+            mask_email(message.to),
             sender,
-            message.subject[:80],
+            content_hash(message.subject),
         )
         try:
             result = resend.Emails.send(
@@ -102,13 +101,13 @@ class ResendProvider:
             logger.info(
                 "Resend email sent successfully: message_id=%s, to=%s, status=delivered",
                 email_id,
-                message.to,
+                mask_email(message.to),
             )
         except Exception:
             logger.exception(
-                "Resend email delivery FAILED: to=%s, from=%s, subject=%s, provider=resend",
-                message.to,
+                "Resend email delivery FAILED: to=%s, from=%s, subject_hash=%s, provider=resend",
+                mask_email(message.to),
                 sender,
-                message.subject[:80],
+                content_hash(message.subject),
             )
             raise

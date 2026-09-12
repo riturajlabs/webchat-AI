@@ -34,6 +34,7 @@ from backend.core.errors import (
     EmbeddingUnavailableError,
     ProviderConfigurationError,
 )
+from backend.core.logging import tenant_id_var
 from backend.core.security import utcnow
 from backend.models.audit_log import (
     AUDIT_KNOWLEDGE_FAILED,
@@ -51,6 +52,7 @@ from backend.models.knowledge_chunk import (
 from backend.models.usage_record import USAGE_COUNTER_EMBEDDINGS_CREATED, usage_date_key
 from backend.models.website import WEBSITE_STATUS_DELETED, Website
 from backend.repositories.usage_record_repository import UsageRecordRepository
+from backend.services.ingestion.crawl_failure import safe_url_parts
 from backend.services.knowledge.chunker import TextChunk, chunk_text
 from backend.services.knowledge.embedding import EmbeddingClient
 
@@ -156,6 +158,11 @@ class KnowledgeProcessor:
         website = await self._websites.find_by_id_any(website_id)
         if website is None or website.status == WEBSITE_STATUS_DELETED:
             return {"status": "not_found"}
+        # FIND-03 (OBS-01): correlate this job's log records with the tenant.
+        # The worker wrapper resets the context on the way out, so the value
+        # never outlives the job even though the processor does not own a
+        # token.
+        tenant_id_var.set(website.tenant_id)
         documents = await self._documents.list_by_website(website.tenant_id, website_id)
         if not documents:
             return {"status": "no_documents"}
@@ -205,6 +212,9 @@ class KnowledgeProcessor:
         document = await self._documents.find_by_id_any(document_id)
         if document is None:
             return {"status": "not_found"}
+        # FIND-03 (OBS-01): correlate this job's log records with the tenant
+        # once the loaded document makes it known.
+        tenant_id_var.set(document.tenant_id)
         website = await self._websites.find_by_id(document.tenant_id, document.website_id)
         if website is None:
             return {"status": "skipped", "reason": "website_missing"}
@@ -632,14 +642,18 @@ class KnowledgeProcessor:
 
         The JSON formatter merges the `extra` payload into each log line so
         ops can group failures by url/error_type/stage without parsing message
-        text. The development formatter ignores `extra`, which is fine.
+        text. The development formatter ignores `extra`, which is fine. Only
+        the hostname/path of the failing URL is emitted (FIND-03); the full URL
+        never reaches the log stream.
         """
+        url_host, url_path = safe_url_parts(document.url)
         logger.warning(
             "knowledge processing failed: %s",
             error_message,
             extra={
                 "timestamp": utcnow().isoformat(),
-                "url": document.url,
+                "url_host": url_host,
+                "url_path": url_path,
                 "document_id": document.id,
                 "website_id": document.website_id,
                 "tenant_id": document.tenant_id,

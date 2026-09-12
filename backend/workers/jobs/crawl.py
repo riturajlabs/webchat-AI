@@ -366,14 +366,15 @@ async def _run_crawl_job_impl(
                 )
             if session.errors:
                 first_error_log = session.errors[0]
+                error_host, error_path = safe_url_parts(first_error_log.url)
                 logger.warning(
                     "crawl_failed job_id=%s tenant_id=%s reason=%s "
-                    "first_error_url=%s first_error=%s classification=%s errors=%d",
+                    "hostname=%s path=%s classification=%s errors=%d",
                     crawl_job_id,
                     job.tenant_id,
                     failure_reason,
-                    first_error_log.url,
-                    first_error_log.message,
+                    error_host,
+                    error_path,
                     first_error_log.classification or "",
                     len(session.errors),
                 )
@@ -494,11 +495,15 @@ async def _run_crawl_job_impl(
         await websites.update(website)
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
         record_crawl_failed(reason="invalid_url")
+        url_host, url_path = safe_url_parts(getattr(website, "url", "") or "")
         logger.warning(
-            "crawl_failed job_id=%s tenant_id=%s reason=permanent: %s",
+            "crawl_failed job_id=%s tenant_id=%s reason=permanent error_type=%s "
+            "hostname=%s path=%s",
             crawl_job_id,
             job.tenant_id,
-            exc,
+            type(exc).__name__,
+            url_host,
+            url_path,
         )
         return {"status": "failed"}
     except Exception as exc:
@@ -538,13 +543,16 @@ async def _run_crawl_job_impl(
             )
         else:
             record_crawl_failed(reason="exception")
+            url_host, url_path = safe_url_parts(getattr(website, "url", "") or "")
             logger.warning(
-                "crawl_failed job_id=%s tenant_id=%s try=%s/%s: %s",
+                "crawl_failed job_id=%s tenant_id=%s try=%s/%s error_type=%s hostname=%s path=%s",
                 crawl_job_id,
                 job.tenant_id,
                 job_try,
                 max_tries,
-                exc,
+                type(exc).__name__,
+                url_host,
+                url_path,
             )
         raise
 

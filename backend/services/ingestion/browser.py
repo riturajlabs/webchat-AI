@@ -121,7 +121,8 @@ class BrowserPageFetcher:
 
     async def fetch(self, url: str) -> FetchedPage:
         await self._guard.validate_async(url)
-        logger.info("crawl_browser_fetch_start url=%s", url)
+        host, path = safe_url_parts(url)
+        logger.info("crawl_browser_fetch_start hostname=%s path=%s", host, path)
         # Egress hardening (Phase 3): browser-setup failures (launch, context,
         # new_page) are classified separately from target HTTP failures so a
         # worker/Chromium problem never masquerades as a hostile website.
@@ -133,10 +134,10 @@ class BrowserPageFetcher:
         except Exception as exc:  # Playwright launch/context failures
             message = f"Could not load {url}: {type(exc).__name__}: {exc}"
             logger.warning(
-                "crawl_browser_launch_failed url=%s error_type=%s error=%s",
-                url,
+                "crawl_browser_launch_failed hostname=%s path=%s error_type=%s",
+                host,
+                path,
                 type(exc).__name__,
-                exc,
             )
             record_crawl_fetch_failure(
                 classification=CrawlFailureClassification.BROWSER_LAUNCH_FAILURE.value,
@@ -149,7 +150,7 @@ class BrowserPageFetcher:
             ) from exc
         try:
             await self._install_route_guard(page)
-            logger.info("crawl_browser_navigation url=%s", url)
+            logger.info("crawl_browser_navigation hostname=%s path=%s", host, path)
             response = await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
             if response is None:
                 raise FetchError(
@@ -181,10 +182,14 @@ class BrowserPageFetcher:
             html = await page.content()
             if len(html) > self._max_html_bytes:
                 html = html[: self._max_html_bytes]
+            final_host, final_path = safe_url_parts(page.url)
             logger.info(
-                "crawl_browser_success url=%s final_url=%s html_bytes=%d",
-                url,
-                page.url,
+                "crawl_browser_success hostname=%s path=%s final_hostname=%s final_path=%s "
+                "html_bytes=%d",
+                host,
+                path,
+                final_host,
+                final_path,
                 len(html),
             )
             return FetchedPage(url=page.url, html=html)
@@ -195,10 +200,10 @@ class BrowserPageFetcher:
         except Exception as exc:  # navigation/content failures (timeout, net::ERR_*)
             message = f"Could not load {url}: {type(exc).__name__}: {exc}"
             logger.warning(
-                "crawl_browser_failure url=%s error_type=%s error=%s",
-                url,
+                "crawl_browser_failure hostname=%s path=%s error_type=%s",
+                host,
+                path,
                 type(exc).__name__,
-                exc,
             )
             classification = classify_network_error(exc)
             record_crawl_fetch_failure(

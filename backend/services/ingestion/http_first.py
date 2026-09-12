@@ -555,7 +555,12 @@ class HybridPageFetcher:
                 # Do not retry HTTP further: fall back to the browser exactly once.
                 break
             if result.verdict is HttpContentVerdict.JS_REQUIRED:
-                logger.info("js_content_required url=%s using chromium fallback", url)
+                js_host, js_path = safe_url_parts(url)
+                logger.info(
+                    "js_content_required hostname=%s path=%s using chromium fallback",
+                    js_host,
+                    js_path,
+                )
                 return await self._get_browser_fetcher().fetch(url)
             return FetchedPage(url=result.final_url, html=result.html)
         fallback_host, fallback_path = safe_url_parts(url)

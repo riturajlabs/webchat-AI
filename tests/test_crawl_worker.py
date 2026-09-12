@@ -306,7 +306,8 @@ async def test_zero_page_crawl_fails_and_preserves_errors(patch_dns, caplog) -> 
     assert stored_job.errors[0].message == f"Not found: {SEED}"
     assert enqueued == []
     assert websites.websites[job.website_id].status == "failed"
-    assert "first_error_url=https://acme.example/" in caplog.text
+    assert "hostname=acme.example path=/" in caplog.text
+    assert "first_error_url=" not in caplog.text
 
 
 async def test_zero_page_recrawl_preserves_existing_documents(patch_dns) -> None:

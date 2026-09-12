@@ -33,6 +33,7 @@ from backend.repositories.vector import get_vector_repository
 from backend.services.ai.provider_health import ProviderHealthStore
 from backend.services.knowledge.embedding import EmbeddingClient, GoogleEmbeddingClient
 from backend.services.knowledge.processor import KnowledgeProcessor
+from backend.workers.jobs.log_context import request_context, reset_context
 
 logger = logging.getLogger("webchat_ai")
 
@@ -138,14 +139,22 @@ async def process_document(
     letting the job fail, so a transient provider outage cannot permanently
     fail an entire crawl fan-out.
     """
-    processor = _processor(ctx, _embedder(ctx))
+    request_token, tenant_token = request_context(ctx)
+    try:
+        processor = _processor(ctx, _embedder(ctx))
 
-    async def retry(document: str, delay: float, retry_run_id: str | None = run_id) -> None:
-        # Full jitter avoids a quota-recovery thundering herd while retaining
-        # the same fenced run/provider identity for every retry.
-        await enqueue_process_document_deferred(document, random.uniform(0, delay), retry_run_id)
+        async def retry(document: str, delay: float, retry_run_id: str | None = run_id) -> None:
+            # Full jitter avoids a quota-recovery thundering herd while retaining
+            # the same fenced run/provider identity for every retry.
+            await enqueue_process_document_deferred(
+                document, random.uniform(0, delay), retry_run_id
+            )
 
-    return await _run_process_document(ctx, document_id, processor, on_retry=retry, run_id=run_id)
+        return await _run_process_document(
+            ctx, document_id, processor, on_retry=retry, run_id=run_id
+        )
+    finally:
+        reset_context(request_token, tenant_token)
 
 
 async def _run_process_document(
@@ -163,7 +172,11 @@ async def _run_process_document(
 
 async def process_website_documents(ctx: dict[str, Any], website_id: str) -> dict[str, Any]:
     """Worker task: fan a website's documents out as per-document jobs."""
-    return await _run_process_website(ctx, website_id, _processor(ctx, _embedder(ctx)))
+    request_token, tenant_token = request_context(ctx)
+    try:
+        return await _run_process_website(ctx, website_id, _processor(ctx, _embedder(ctx)))
+    finally:
+        reset_context(request_token, tenant_token)
 
 
 async def _run_process_website(

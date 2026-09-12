@@ -17,6 +17,7 @@ from arq.connections import RedisSettings
 from backend.ai.registry import build_ingestion_embedding_client
 from backend.core.config import get_settings
 from backend.core.database import MongoDB
+from backend.core.logging import attach_sensitive_data_filter, configure_logging
 from backend.core.redis import close_redis, get_redis
 from backend.services.ai.provider_health import ProviderHealthStore
 from backend.services.ingestion.browser import close_browser
@@ -29,6 +30,19 @@ _settings = get_settings()
 
 async def startup(ctx: dict[str, Any]) -> None:
     """Runs once when the worker starts."""
+    # FIND-03 (OBS-06): adopt the project's shared structured logging and
+    # sensitive-data filter. ARQ's CLI already ran its own log config before
+    # this hook, so configuring here makes the shared formatter (JSON in
+    # production, readable in development), the effective level
+    # (ENVIRONMENT/LOG_LEVEL/DEBUG) and the scrubbing authoritative for worker
+    # records without touching ARQ's own logger or the API's logging setup.
+    configure_logging()
+    attach_sensitive_data_filter()
+    # The ARQ CLI gives the `arq` logger its own handler; keep its output
+    # exactly as-is and stop it propagating to the root JSON handler (which
+    # would double-emit every ARQ lifecycle record). ARQ logging is not
+    # silenced - only the duplicate copy is removed.
+    logging.getLogger("arq").propagate = False
     ctx["app_name"] = _settings.app_name
     # Shared embedding client for all knowledge jobs in this process (Phase 9,
     # ADR-009): the single primary provider only. Ingestion must never switch

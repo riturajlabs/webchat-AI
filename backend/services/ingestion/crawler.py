@@ -458,12 +458,16 @@ class CrawlSession:
         if len(self.errors) >= _MAX_RECORDED_ERRORS:
             # Phase 7 (INGEST P3): the error buffer is bounded, but drops must
             # be visible rather than silent so diagnosis past the cap is not
-            # impossible.
+            # impossible. The full URL is never logged (FIND-03); the safe
+            # hostname/path identify the page without leaking query tokens or
+            # credentials.
             self.dropped_errors += 1
+            drop_host, drop_path = safe_url_parts(url)
             logger.warning(
-                "Crawl error buffer full (%d); dropping error for %s",
+                "Crawl error buffer full (%d); dropping error for hostname=%s path=%s",
                 _MAX_RECORDED_ERRORS,
-                url,
+                drop_host,
+                drop_path,
             )
             return
         classification = getattr(failed_fetch, "classification", None)
