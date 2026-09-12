@@ -21,11 +21,42 @@ from backend.core.logging import attach_sensitive_data_filter, configure_logging
 from backend.core.redis import close_redis, get_redis
 from backend.services.ai.provider_health import ProviderHealthStore
 from backend.services.ingestion.browser import close_browser
+from backend.services.ingestion.crawl_memory import measure_memory
 from backend.workers import tasks
 
 logger = logging.getLogger("webchat_ai")
 
 _settings = get_settings()
+
+# FIND-06: the audited production worker target (docs/CRAWL_EGRESS_HARDENING.md
+# §6 "1 GiB Railway Worker constraints"). Logged at boot alongside the live
+# cap so a deployment that drifts from this shape is visible immediately.
+_WORKER_TARGET_MEMORY_MIB = 1024  # 1 GiB
+_WORKER_TARGET_CPUS = 2
+
+
+def _log_resource_caps() -> None:
+    """Log the effective worker/container memory caps at startup.
+
+    FIND-06: surfaces the live memory source, current usage, detected limit and
+    process footprint next to the expected 1 GiB / 2 vCPU production target so
+    memory-shape drift is observable in boot logs. Never raises and logs no
+    secrets: ``measure_memory`` fails open (an environment without cgroup data
+    reports ``source="unavailable"``) and the values below carry no credentials
+    or URLs.
+    """
+    measurement = measure_memory()
+    logger.info(
+        "worker_resource_caps source=%s current_bytes=%s limit_bytes=%s "
+        "python_rss_bytes=%s processes=%s expected_memory_mib=%s expected_cpus=%s",
+        measurement.source,
+        measurement.current_bytes,
+        measurement.limit_bytes,
+        measurement.python_rss_bytes,
+        measurement.processes,
+        _WORKER_TARGET_MEMORY_MIB,
+        _WORKER_TARGET_CPUS,
+    )
 
 
 async def startup(ctx: dict[str, Any]) -> None:
@@ -43,6 +74,9 @@ async def startup(ctx: dict[str, Any]) -> None:
     # would double-emit every ARQ lifecycle record). ARQ logging is not
     # silenced - only the duplicate copy is removed.
     logging.getLogger("arq").propagate = False
+    # FIND-06: log the effective worker memory shape at boot (best effort) so
+    # sizing drift from the 1 GiB / 2 vCPU production target is observable.
+    _log_resource_caps()
     ctx["app_name"] = _settings.app_name
     # Shared embedding client for all knowledge jobs in this process (Phase 9,
     # ADR-009): the single primary provider only. Ingestion must never switch

@@ -20,18 +20,20 @@ fail() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "  [FAIL] $1"; }
 note() { echo "  [NOTE] $1"; }
 
 COMPOSE="docker/compose.yml"
+COMPOSE_PROD="docker/compose.prod.yml"
 PROD_SERVICES="mongo redis mailpit api worker dashboard widget"
 
 echo "=== Phase 14.8.1 — Production Docker audit (8 checks) ==="
 
 # Extract a single service block (from "  name:" until the next sibling at the
-# same 2-space indent) from the compose file.
+# same 2-space indent) from a compose file. Defaults to the base compose file;
+# pass a second argument to inspect an overlay (e.g. the prod worker sizing).
 svc_block() {
   awk -v svc="$1" '
     $0 ~ "^  " svc ":" { capture=1; print; next }
     capture && $0 ~ "^  [a-zA-Z]" { capture=0 }
     capture { print }
-  ' "$COMPOSE"
+  ' "${2:-$COMPOSE}"
 }
 
 # ── [1/8] All Dockerfiles run as non-root user ──────────────────────
@@ -94,6 +96,25 @@ for svc in $PROD_SERVICES; do
 done
 if [ "$limits_missing" -eq 0 ]; then
     pass "All services have memory + CPU resource limits"
+fi
+
+# FIND-06: the production worker target is 1 GiB / 2 vCPU (the audited Railway
+# shape in docs/CRAWL_EGRESS_HARDENING.md). Verify the EXPECTED values in the
+# PRODUCTION overlay, not their presence: a drift back to 2 GiB in the deployed
+# shape must fail the audit (the base compose file keeps the larger dev size).
+EXPECTED_WORKER_MEM="1G"
+EXPECTED_WORKER_CPUS="2.0"
+worker_section=$(svc_block worker "$COMPOSE_PROD")
+worker_mem=$(printf '%s' "$worker_section" | grep -E '^\s+memory:' | head -n1 | sed -E 's/^[[:space:]]*memory:[[:space:]]*//')
+worker_cpus=$(printf '%s' "$worker_section" | grep -E '^\s+cpus:' | head -n1 | sed -E 's/^[[:space:]]*cpus:[[:space:]]*//; s/^"(.*)"$/\1/')
+if [ -z "$worker_section" ]; then
+    fail "worker service not found in $COMPOSE_PROD — cannot verify production sizing"
+elif [ "$worker_mem" != "$EXPECTED_WORKER_MEM" ]; then
+    fail "worker memory limit is '$worker_mem' (expected $EXPECTED_WORKER_MEM — the 1 GiB production target)"
+elif [ "$worker_cpus" != "$EXPECTED_WORKER_CPUS" ]; then
+    fail "worker cpu limit is '$worker_cpus' (expected $EXPECTED_WORKER_CPUS — the 2 vCPU production target)"
+else
+    pass "worker resource limits match the production target ($EXPECTED_WORKER_MEM / $EXPECTED_WORKER_CPUS)"
 fi
 
 # ── [4/8] security_opt: no-new-privileges on all services ──────────

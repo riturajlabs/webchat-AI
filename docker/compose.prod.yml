@@ -12,6 +12,14 @@
 #     /tmp or external Mongo/Redis).
 #   - Adds init:true (proper PID 1, zombie reaping), bounded json-file logs,
 #     and explicit deployment limits.
+#
+# Worker sizing (FIND-06): the production worker target is 1 GiB / 2 vCPU,
+# matching the audited Railway deployment shape (docs/CRAWL_EGRESS_HARDENING.md
+# "1 GiB Railway Worker constraints"). On Railway this cap is set per-service
+# via Service settings -> Deploy -> Replica limits (or the serviceInstanceLimitsUpdate
+# GraphQL API); railway.toml/railway.json Config-as-Code is deprecated and does not
+# support memory/CPU sizing, so the repository pins the shape here instead and
+# scripts/check-production-docker.sh verifies these values.
 #   - Does NOT start the local mongo/redis/mailpit development services: run
 #     only the four application services (they target managed Mongo/Redis).
 #
@@ -58,7 +66,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          # FIND-06: production target — 1 GiB / 2 vCPU (must match
+          # scripts/check-production-docker.sh [3/8] expected worker size).
+          memory: 1G
           cpus: "2.0"
 
   dashboard:

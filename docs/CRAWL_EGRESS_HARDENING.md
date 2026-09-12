@@ -112,6 +112,14 @@ concurrency. One shared headless Chromium is launched lazily; context/page/close
 cleanup is `finally`-based on success, HTTP error, timeout, exception, and
 cancellation.
 
+The repository pins the worker at **1 GiB / 2 vCPU** in
+`docker/compose.prod.yml` (verified by `scripts/check-production-docker.sh`).
+On Railway (FIND-06) that cap is set per-service under
+**Settings → Deploy → Replica limits** (or the `serviceInstanceLimitsUpdate`
+GraphQL API); `railway.toml`/`railway.json` Config-as-Code is deprecated and
+does not support memory/CPU sizing, so the repository pins the shape here and
+the worker logs its detected caps at startup (`worker_resource_caps`).
+
 ## 7. Railway Static Outbound IPs (infrastructure, not code)
 
 Static Outbound IP is **primarily an infrastructure configuration** — this
