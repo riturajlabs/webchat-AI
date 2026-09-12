@@ -14,7 +14,7 @@ import { useWidgetConfig } from './hooks';
 
 function WidgetSkeleton() {
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,420px)_1fr]">
       <div className="flex flex-col gap-4">
         <Skeleton className="h-5 w-40" />
         <Skeleton className="h-64 w-full" />
@@ -110,7 +110,7 @@ export function WidgetPage() {
             aria-label="Select website"
             value={selected ?? ''}
             onChange={(event) => handleWebsiteChange(event.target.value)}
-            className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="h-9 min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             {widgets.map((site) => (
               <option key={site.id} value={site.id}>

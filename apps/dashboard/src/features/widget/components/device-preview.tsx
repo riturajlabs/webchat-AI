@@ -46,7 +46,7 @@ export function DevicePreview({
       <div
         className={cn(
           'relative overflow-hidden rounded-xl border bg-white shadow-xl transition-all duration-200',
-          device === 'mobile' ? 'w-[340px] sm:w-[380px]' : 'w-full max-w-2xl',
+          device === 'mobile' ? 'w-full max-w-[380px]' : 'w-full max-w-2xl',
         )}
       >
         <div className="flex items-center gap-2 border-b bg-slate-100 px-3 py-2">

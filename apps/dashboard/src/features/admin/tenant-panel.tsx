@@ -180,7 +180,7 @@ function TenantDetailDialog({
       />
       <div
         ref={contentRef}
-        className="relative z-10 max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border bg-background p-6 shadow-lg"
+        className="relative z-10 max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-lg border bg-background p-6 shadow-lg"
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div>

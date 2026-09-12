@@ -231,4 +231,17 @@ describe('MobileNav', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(document.querySelector('[data-dialog-overlay]')).toHaveAttribute('aria-hidden', 'true');
   });
+
+  it('keeps the drawer nav scrollable so lower items stay reachable on short viewports', () => {
+    render(<MobileNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
+
+    const nav = screen.getByRole('navigation', { name: 'Mobile navigation' });
+    // The scroll affordances belong to the nav (inside a fixed, non-scrolling
+    // panel) rather than the document, so the last side nav items can always
+    // be reached on phones that can't show the full menu vertically.
+    expect(nav).toHaveClass('min-h-0');
+    expect(nav).toHaveClass('overflow-y-auto');
+    expect(nav).toHaveClass('pb-[max(1rem,env(safe-area-inset-bottom))]');
+  });
 });

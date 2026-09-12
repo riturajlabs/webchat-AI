@@ -92,7 +92,7 @@ export function MobileMenu() {
         >
           <nav
             aria-label="Mobile"
-            className="mx-auto flex max-w-6xl flex-col gap-1 overflow-y-auto px-4 py-4 sm:px-6"
+            className="mx-auto flex max-h-[calc(100dvh-4rem)] w-full max-w-6xl flex-col gap-1 overflow-y-auto px-4 py-4 sm:px-6"
           >
             <div className="flex items-center gap-2 px-3 pb-2">
               <LogoMark alt="" className="h-6 w-6" />

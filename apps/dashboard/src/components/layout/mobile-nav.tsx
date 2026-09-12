@@ -99,7 +99,10 @@ export function MobileNav() {
               </Button>
             </div>
 
-            <nav className="flex-1 px-3 pb-4" aria-label="Mobile navigation">
+            <nav
+              className="min-h-0 flex-1 overflow-y-auto px-3 pb-[max(1rem,env(safe-area-inset-bottom))]"
+              aria-label="Mobile navigation"
+            >
               <NavLinks role={user?.role} onNavigate={close} />
             </nav>
           </div>

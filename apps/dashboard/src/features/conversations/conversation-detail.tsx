@@ -42,7 +42,7 @@ function MessageSources({ sources }: { sources: ConversationMessage['sources'] }
               >
                 [{source.citation}]
               </span>
-              <span className="truncate">{source.title || source.url}</span>
+              <span className="min-w-0 truncate">{source.title || source.url}</span>
             </a>
           </li>
         ))}
@@ -87,7 +87,9 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
           </time>
         </div>
 
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</p>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">
+          {message.content}
+        </p>
 
         {!isUser ? (
           <>
@@ -182,14 +184,18 @@ export function ConversationDetailPage({ sessionId }: { sessionId: string }) {
         </Button>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="truncate font-sans text-2xl font-bold tracking-tight">{data.title}</h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <h1 className="min-w-0 truncate font-sans text-2xl font-bold tracking-tight">
+                {data.title}
+              </h1>
               <ConversationStatusBadge status={data.status} />
             </div>
             <dl className="flex flex-wrap gap-x-8 gap-y-2">
               <div className="flex flex-col">
                 <dt className="text-xs uppercase tracking-wide text-muted-foreground">Visitor</dt>
-                <dd className="text-sm font-medium">{visitorLabel(data.visitor_id)}</dd>
+                <dd className="min-w-0 max-w-full text-sm font-medium [overflow-wrap:anywhere]">
+                  {visitorLabel(data.visitor_id)}
+                </dd>
               </div>
               {websiteName ? (
                 <div className="flex flex-col">

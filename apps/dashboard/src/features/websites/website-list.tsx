@@ -152,12 +152,12 @@ export function WebsiteList() {
         <div
           role="status"
           aria-label="Loading websites"
-          className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"
+          className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
         >
           {[0, 1, 2].map((index) => (
             <div
               key={index}
-              className="flex h-full flex-col gap-4 rounded-lg border bg-card p-4 shadow-sm"
+              className="flex h-full min-w-0 flex-col gap-4 rounded-lg border bg-card p-4 shadow-sm"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 space-y-2">
@@ -198,9 +198,9 @@ export function WebsiteList() {
       ) : null}
 
       {!isPending && !isError && websites.length > 0 ? (
-        <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <ul className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {websites.map((website) => (
-            <li key={website.id}>
+            <li key={website.id} className="min-w-0">
               <WebsiteCardWithActivity
                 website={website}
                 crawlPending={pendingWebsiteId === website.id}

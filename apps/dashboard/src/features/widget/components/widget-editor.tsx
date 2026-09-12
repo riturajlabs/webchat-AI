@@ -291,7 +291,7 @@ export function WidgetEditor({
         : 'idle';
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,420px)_1fr] xl:grid-cols-[minmax(0,460px)_1fr]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,420px)_1fr] xl:grid-cols-[minmax(0,460px)_1fr]">
       <div className="flex min-w-0 flex-col gap-5">
         <div className="sticky -top-8 z-30 flex flex-wrap items-center justify-between gap-3 rounded-b-lg border-b bg-background pb-3 pt-1 shadow-sm">
           <div className="min-w-0">

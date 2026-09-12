@@ -222,4 +222,14 @@ describe('AddWebsiteDialog', () => {
     const closeButton = screen.getByRole('button', { name: 'Close dialog' });
     expect(document.activeElement).toBe(closeButton);
   });
+
+  it('keeps the dialog panel within short viewports by capping its height and scrolling internally', () => {
+    render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
+
+    const dialog = screen.getByRole('dialog');
+    const panel = dialog.lastElementChild as HTMLElement;
+
+    expect(panel).toHaveClass('max-h-[calc(100dvh-2rem)]');
+    expect(panel).toHaveClass('overflow-y-auto');
+  });
 });

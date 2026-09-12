@@ -99,7 +99,7 @@ function FailedDocument({ documentId, url, reason, onRetry, retrying }: FailedDo
           rel="noreferrer"
           className="inline-flex max-w-full items-center gap-1 truncate text-sm font-medium hover:underline"
         >
-          <span className="truncate">{url}</span>
+          <span className="min-w-0 truncate">{url}</span>
           <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
         </a>
         <p className="mt-0.5 truncate text-xs text-destructive">{reason}</p>
@@ -200,9 +200,9 @@ function WebsiteRow({
     <li className="py-3">
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <Database className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <Link href="/websites" className="truncate font-medium hover:underline">
+            <Link href="/websites" className="min-w-0 truncate font-medium hover:underline">
               {website.name}
             </Link>
             <KnowledgeBadge status={website.knowledge_status} />
@@ -211,9 +211,9 @@ function WebsiteRow({
             href={website.url}
             target="_blank"
             rel="noreferrer"
-            className="mt-0.5 inline-flex items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
+            className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
           >
-            <span className="truncate">{website.url}</span>
+            <span className="min-w-0 truncate">{website.url}</span>
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         </div>

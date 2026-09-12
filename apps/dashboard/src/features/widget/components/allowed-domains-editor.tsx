@@ -105,7 +105,7 @@ export function AllowedDomainsEditor({
         >
           {preview !== null ? (
             <>
-              Will be saved as: <span className="font-mono">{preview}</span>
+              Will be saved as: <span className="break-all font-mono">{preview}</span>
             </>
           ) : (
             'Not a valid domain. Use example.com, *.example.com, or an http(s) URL.'
@@ -129,9 +129,9 @@ export function AllowedDomainsEditor({
               key={domain}
               className="flex items-center justify-between gap-2 rounded-md border border-input px-3 py-2"
             >
-              <span className="flex items-center gap-2 font-mono text-sm">
-                <Globe aria-hidden="true" className="size-4 text-muted-foreground" />
-                {domain}
+              <span className="flex min-w-0 items-center gap-2 font-mono text-sm">
+                <Globe aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 break-all">{domain}</span>
               </span>
               <Button
                 type="button"
@@ -147,7 +147,7 @@ export function AllowedDomainsEditor({
         </ul>
       )}
       <div className="flex flex-col gap-2 rounded-md border border-dashed p-3">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-col gap-0.5">
             <Label>Development domains</Label>
             <p className="text-sm text-muted-foreground">

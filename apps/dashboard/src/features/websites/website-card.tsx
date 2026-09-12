@@ -60,9 +60,9 @@ export function WebsiteCard({
             href={website.url}
             target="_blank"
             rel="noreferrer"
-            className="mt-0.5 inline-flex items-center gap-1 truncate text-xs text-muted-foreground hover:text-foreground"
+            className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
           >
-            <span className="truncate">{website.url}</span>
+            <span className="min-w-0 truncate">{website.url}</span>
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         </div>
@@ -82,7 +82,7 @@ export function WebsiteCard({
         <CrawlJobProgressBar job={crawlJob} progress={crawlProgress} sseConnected={sseConnected} />
       ) : null}
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
           variant="secondary"

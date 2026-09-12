@@ -34,7 +34,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-muted/30">
+    <div className="flex h-dvh overflow-hidden bg-muted/30">
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-background md:flex">
         <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <LogoMark alt="" className="h-7 w-7" />
@@ -77,7 +77,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         </header>
         <VerificationReminder />
         <CrawlStatusBanner />
-        <div className="flex-1 overflow-y-auto px-4 py-8 md:px-10">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 pt-8 pb-[max(2rem,env(safe-area-inset-bottom))] md:px-10">
+          {children}
+        </div>
       </main>
     </div>
   );
