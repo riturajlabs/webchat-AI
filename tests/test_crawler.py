@@ -308,9 +308,14 @@ async def test_priority_url_paths_are_same_origin_only(guard) -> None:
     }
 
 
-async def test_aborts_under_memory_pressure(guard, monkeypatch) -> None:
-    """INGEST-04: the crawl aborts gracefully once worker RSS exceeds the ceiling."""
+async def test_raises_when_memory_ceiling_exceeded(guard, monkeypatch) -> None:
+    """FIND-01: crossing the worker ceiling raises CrawlMemoryGuardError.
+
+    The crawl aborts recoverably (the guard excises the silent-continue path)
+    and the fetcher is still released so Chromium does not leak past the abort.
+    """
     import backend.services.ingestion.crawler as crawler_mod
+    from backend.services.ingestion.crawler import CrawlMemoryGuardError
 
     fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
     # RSS reads as far above the 10 MiB ceiling, so the crawl aborts up-front.
@@ -324,10 +329,28 @@ async def test_aborts_under_memory_pressure(guard, monkeypatch) -> None:
         guard=guard,
         settings=_settings_with(max_rss_mb=10),
     )
-    stored = await session.run()
-    assert stored == 0
+    with pytest.raises(CrawlMemoryGuardError) as exc_info:
+        await session.run()
     assert session.memory_pressure_aborted is True
+    assert exc_info.value.current_mb == 100
+    assert exc_info.value.ceiling_mb == 10
+    assert exc_info.value.source in {"cgroup_v2", "cgroup_v1", "process_tree", "unavailable"}
+    # Browser/context cleanup still happens on the guard abort path.
+    assert fetcher.closed is True
     assert any("memory" in e.message for e in session.errors)
+
+
+async def test_memory_guard_fails_open_when_unmeasurable(guard, monkeypatch) -> None:
+    """FIND-01: an unreadable footprint never wedges the crawl (fail-open)."""
+    import backend.services.ingestion.crawler as crawler_mod
+
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    # 0 MiB signals "cannot measure"; the crawl must continue, not abort.
+    monkeypatch.setattr(crawler_mod, "_current_rss_mb", lambda: 0)
+    session = _session(fetcher, guard, settings=_settings_with(max_rss_mb=100))
+    stored = await session.run()
+    assert stored == 2
+    assert session.memory_pressure_aborted is False
 
 
 async def test_memory_ceiling_disabled_by_default(guard, monkeypatch) -> None:

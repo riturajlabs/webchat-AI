@@ -922,3 +922,75 @@ async def test_worker_skipped_job_resets_request_context(patch_dns) -> None:
 
     assert get_request_id() == "-"
     assert get_tenant_id() == "-"
+
+
+def _memory_guard_ctx(ctx: dict, crawler_mod, monkeypatch) -> dict:
+    """Arm the FIND-01 guard: low ceiling + footprint far above it."""
+    from backend.core.config import Settings
+
+    monkeypatch.setattr(crawler_mod, "_current_rss_mb", lambda: 100)
+    monkeypatch.setattr(
+        crawler_mod,
+        "get_settings",
+        lambda: Settings(_env_file=None, environment="test", crawl_max_rss_mb=10),
+    )
+    return ctx
+
+
+async def test_worker_memory_guard_abort_is_retried_not_failed(patch_dns, monkeypatch) -> None:
+    """FIND-01: a memory-guard abort re-raises so ARQ retries (job stays active)."""
+    import backend.services.ingestion.crawler as crawler_mod
+    from backend.services.ingestion.crawler import CrawlMemoryGuardError
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    _memory_guard_ctx(ctx, crawler_mod, monkeypatch)
+
+    with pytest.raises(CrawlMemoryGuardError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+
+    stored = jobs.jobs[job.id]
+    assert stored.status != CRAWL_STATUS_FAILED
+    assert stored.status in CRAWL_ACTIVE_STATUSES
+    website = websites.websites[list(websites.websites)[0]]
+    assert website.status == "pending"
+    assert not any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
+    # Browser/context cleanup still ran even though the job is being retried.
+    assert ctx["crawler_fetcher"].closed is True
+
+
+async def test_worker_memory_guard_final_retry_marks_failed(patch_dns, monkeypatch) -> None:
+    """FIND-01: the final memory-guard retry marks the job/website failed."""
+    import backend.services.ingestion.crawler as crawler_mod
+    from backend.services.ingestion.crawler import CrawlMemoryGuardError
+
+    ctx, job, jobs, documents, websites, audit, usage = await _env()
+    ctx["job_try"] = 3
+    _memory_guard_ctx(ctx, crawler_mod, monkeypatch)
+
+    with pytest.raises(CrawlMemoryGuardError):
+        await _run_crawl_job(
+            ctx,
+            job.id,
+            crawl_jobs=jobs,
+            documents=documents,
+            websites=websites,
+            audit=audit,
+            usage=usage,
+        )
+
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    assert "CrawlMemoryGuardError" in (stored.error_message or "")
+    assert "memory" in (stored.error_message or "").lower()
+    website = websites.websites[list(websites.websites)[0]]
+    assert website.status == "failed"
+    assert any(log.action == AUDIT_CRAWL_FAILED for log in audit.logs)
+    assert ctx["crawler_fetcher"].closed is True

@@ -349,9 +349,16 @@ class Settings(BaseSettings):
     # CRAWL_NO_SANDBOX=true only when the runtime genuinely cannot sandbox
     # (e.g. a specific container/base-image constraint); never the default.
     crawl_no_sandbox: bool = False
-    # INGEST-04: optional worker RSS ceiling (MiB). When the process RSS exceeds
-    # this, the crawl aborts gracefully instead of letting the worker OOM on a
-    # wide or memory-hungry site. Default 0 = disabled (current behaviour).
+    # FIND-01 (INGEST-04): optional WORKER memory ceiling (MiB). Measured over
+    # the worker's entire footprint: cgroup v2/v1 current usage when a memory
+    # controller is mounted, else the summed RSS of the Python process and its
+    # Chromium children (/proc process tree). When the footprint exceeds this
+    # ceiling the crawl raises `CrawlMemoryGuardError` (recoverable: ARQ retries
+    # the job, then marks it failed on the final attempt) so a wide or
+    # memory-hungry site cannot OOM the worker. Default 0 = disabled (current
+    # behaviour); keep it disabled until the ceiling is runtime-validated for
+    # the deployment (the Railway 1 GiB target needs a measured baseline before
+    # a hard ceiling is chosen).
     crawl_max_rss_mb: int = 0
     # Authoritative top-level page paths (e.g. "/admissions", "/courses") that
     # must be crawled before the page budget is consumed by high-fanout

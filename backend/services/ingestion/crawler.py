@@ -13,7 +13,6 @@ import asyncio
 import hashlib
 import heapq
 import logging
-import resource
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -32,6 +31,7 @@ from backend.services.ingestion.crawl_failure import (
     CrawlFailureClassification,
     safe_url_parts,
 )
+from backend.services.ingestion.crawl_memory import current_rss_mb, measure_memory
 from backend.services.ingestion.extractor import extract_page, pick_preview_image
 from backend.services.ingestion.priority import score_crawl_candidate
 from backend.services.ingestion.ssrf_guard import SsrFGuard
@@ -46,11 +46,42 @@ INSUFFICIENT_CONTENT_REASON = "Insufficient content"
 
 
 def _current_rss_mb() -> int:
-    """Current process resident set size in MiB (best effort)."""
-    try:
-        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024)
-    except (AttributeError, OSError, ValueError):
-        return 0
+    """Full worker/container footprint in MiB (best effort)."""
+    return current_rss_mb()
+
+
+class CrawlMemoryGuardError(Exception):
+    """The worker's memory footprint exceeded the configured ceiling (FIND-01).
+
+    Raised **instead of silently continuing the crawl** when the measured
+    footprint (cgroup v2/v1 usage, else summed Python + Chromium RSS) exceeds
+    ``crawl_max_rss_mb``. It is recoverable: the worker lets ARQ retry the job
+    and, on the final attempt, marks it failed - the browser/context cleanup
+    already ran via ``CrawlSession.run()``'s ``finally``.
+
+    ``current_mb``/``ceiling_mb`` repeat the values that tripped the guard;
+    ``source``/``limit_mb`` describe the measurement that produced them so
+    operators can spot a cgroupless deployment.
+    """
+
+    def __init__(
+        self,
+        *,
+        current_mb: int,
+        ceiling_mb: int,
+        source: str,
+        limit_mb: int | None,
+    ) -> None:
+        self.current_mb = current_mb
+        self.ceiling_mb = ceiling_mb
+        self.source = source
+        self.limit_mb = limit_mb
+        limit_text = "unknown" if limit_mb is None else f"{limit_mb} MiB"
+        super().__init__(
+            f"Worker memory guard tripped: {current_mb} MiB exceeds the "
+            f"{ceiling_mb} MiB ceiling (measured via {source}, cgroup limit "
+            f"{limit_text})."
+        )
 
 
 class FetchError(Exception):
@@ -142,8 +173,13 @@ class CrawlSession:
         # Open Graph / Twitter preview image captured from the seed (home) page.
         self.preview_image: str | None = None
         # INGEST-04: set when the crawl was stopped early because the process
-        # RSS exceeded the configured ceiling, so callers can surface it.
+        # RSS exceeded the configured ceiling (FIND-01 raises then), so callers
+        # can surface it.
         self.memory_pressure_aborted: bool = False
+        # FIND-01: "unavailable measurement" is logged once per crawl so a
+        # deployment without a readable memory source does not spam logs while
+        # the guard fails open.
+        self._warned_memory_unavailable: bool = False
         # Egress hardening: set when the site rejected enough pages as blocked
         # or rate-limited that the crawl stopped to stop wasting budget.
         self.blocked_host_aborted: bool = False
@@ -212,25 +248,41 @@ class CrawlSession:
             await self._on_progress(0, max_pages)
 
         while queue and stored < max_pages:
-            # INGEST-04: abort gracefully when worker RSS exceeds the ceiling,
-            # so a wide/memory-hungry site cannot OOM the worker. Disabled when
+            # FIND-01: abort the crawl (recoverably, not silently) when the
+            # WORKER's full footprint - cgroup v2/v1 usage else summed
+            # Python + Chromium RSS - exceeds the ceiling, so a wide or
+            # memory-hungry site cannot OOM the worker. Disabled when
             # `crawl_max_rss_mb` is 0 (default).
             if self._over_memory_ceiling():
+                current_mb = _current_rss_mb()
+                measurement = measure_memory()
+                limit_mb = (
+                    None
+                    if measurement.limit_bytes is None
+                    else measurement.limit_bytes // (1024 * 1024)
+                )
                 self.memory_pressure_aborted = True
                 self._record_error(
                     self._seed_url,
                     "Crawl stopped: worker memory exceeded the configured ceiling.",
                 )
                 logger.warning(
-                    "Crawl aborted: worker RSS %d MiB exceeds crawl_max_rss_mb=%d "
-                    "(tenant=%s website=%s pages_stored=%d)",
-                    _current_rss_mb(),
+                    "memory_guard_triggered current_mb=%d ceiling_mb=%d "
+                    "source=%s limit_mb=%s tenant=%s website=%s pages_stored=%d",
+                    current_mb,
                     self._settings.crawl_max_rss_mb,
+                    measurement.source,
+                    limit_mb if limit_mb is not None else "unset",
                     self._tenant_id,
                     self._website_id,
                     stored,
                 )
-                break
+                raise CrawlMemoryGuardError(
+                    current_mb=current_mb,
+                    ceiling_mb=self._settings.crawl_max_rss_mb,
+                    source=measurement.source,
+                    limit_mb=limit_mb,
+                ) from None
             _, _, depth, _, url = heapq.heappop(queue)
             # INGEST-03: evict the popped URL from the frontier set so its size
             # tracks the frontier width, not the total candidate count found
@@ -363,15 +415,28 @@ class CrawlSession:
     # ------------------------------------------------------------ internals
 
     def _over_memory_ceiling(self) -> bool:
-        """True when process RSS (MiB) exceeds the configured ceiling.
+        """True when the worker footprint exceeds the configured ceiling.
 
         A ceiling of 0 (default) disables the check entirely, preserving the
-        historical behaviour.
+        historical behaviour. When the footprint cannot be measured at all the
+        guard **fails open** (returns False) so a container without a readable
+        cgroup or ``/proc`` never wedges the crawler, but the failure is logged
+        once per crawl.
         """
         ceiling_mb = self._settings.crawl_max_rss_mb
         if ceiling_mb <= 0:
             return False
-        return _current_rss_mb() > ceiling_mb
+        current_mb = _current_rss_mb()
+        if current_mb <= 0:
+            if not self._warned_memory_unavailable:
+                self._warned_memory_unavailable = True
+                logger.warning(
+                    "Memory guard failed open: worker footprint unmeasurable "
+                    "(ceiling=%d MiB). Falling back to no ceiling for this crawl.",
+                    ceiling_mb,
+                )
+            return False
+        return current_mb > ceiling_mb
 
     async def _fetch_robots(self, seed: str) -> RobotsTxt:
         """Fetch and parse robots.txt through the same SSRF-guarded fetcher."""

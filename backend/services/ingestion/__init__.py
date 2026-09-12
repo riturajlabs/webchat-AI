@@ -8,6 +8,7 @@ from backend.services.ingestion.browser import BrowserPageFetcher
 from backend.services.ingestion.cleaner import clean_html
 from backend.services.ingestion.crawl_failure import CrawlFailureClassification
 from backend.services.ingestion.crawler import (
+    CrawlMemoryGuardError,
     CrawlSession,
     FetchedPage,
     FetchError,
@@ -27,6 +28,7 @@ from backend.services.ingestion.ssrf_guard import SsrFGuard
 __all__ = [
     "BrowserPageFetcher",
     "CrawlFailureClassification",
+    "CrawlMemoryGuardError",
     "CrawlSession",
     "ExtractedPage",
     "FetchError",

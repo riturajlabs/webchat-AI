@@ -44,6 +44,7 @@ from backend.repositories import (
 )
 from backend.services.ingestion import (
     BrowserPageFetcher,
+    CrawlMemoryGuardError,
     CrawlSession,
     HybridPageFetcher,
     PageFetcher,
@@ -517,15 +518,34 @@ async def _run_crawl_job_impl(
         else:
             job.updated_at = utcnow()
             await crawl_jobs.update(job)
-        record_crawl_failed(reason="exception")
-        logger.warning(
-            "crawl_failed job_id=%s tenant_id=%s try=%s/%s: %s",
-            crawl_job_id,
-            job.tenant_id,
-            job_try,
-            max_tries,
-            exc,
-        )
+        if isinstance(exc, CrawlMemoryGuardError):
+            # FIND-01: surface memory-guard aborts distinctly in metrics and
+            # logs so a deployment without a measurable budget is not mistaken
+            # for run-of-the-mill site errors. Retry semantics are unchanged:
+            # ARQ retries until max_tries, then the job/website land on failed.
+            record_crawl_failed(reason="memory_guard")
+            logger.warning(
+                "crawl_failed job_id=%s tenant_id=%s try=%s/%s reason=memory_guard "
+                "current_mb=%d ceiling_mb=%d source=%s limit_mb=%s",
+                crawl_job_id,
+                job.tenant_id,
+                job_try,
+                max_tries,
+                exc.current_mb,
+                exc.ceiling_mb,
+                exc.source,
+                exc.limit_mb if exc.limit_mb is not None else "unset",
+            )
+        else:
+            record_crawl_failed(reason="exception")
+            logger.warning(
+                "crawl_failed job_id=%s tenant_id=%s try=%s/%s: %s",
+                crawl_job_id,
+                job.tenant_id,
+                job_try,
+                max_tries,
+                exc,
+            )
         raise
 
 
