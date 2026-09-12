@@ -436,3 +436,74 @@ async def test_init_indexes_aborts_migration_on_duplicate_payment_ids(monkeypatc
     assert "payment_id_1" not in db["subscriptions"].dropped
     infos = await db["subscriptions"].index_information()
     assert infos["payment_id_1"].get("partialFilterExpression") is None
+
+
+# ---------------------------------------------------------------------------
+# FIND-02 crawl_jobs single-flight index (tenant_id, website_id, active)
+# ---------------------------------------------------------------------------
+
+
+def _crawl_active_index_keys():
+    return ("tenant_id", 1), ("website_id", 1), ("active", 1)
+
+
+async def test_init_indexes_backfills_active_flag_and_creates_partial_unique_index(
+    monkeypatch,
+) -> None:
+    """Non-terminal jobs stay gate-blocking (`active=True`), terminal jobs
+    release the fence (`active=False`), and the partial unique index is
+    declared exactly once."""
+    db = _FakeDb()
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+
+    # Backfill order: active rows first, then terminal rows.
+    assert db["crawl_jobs"].updates == [
+        ({"status": {"$in": ["pending", "processing", "running"]}}, {"$set": {"active": True}}),
+        ({"status": {"$nin": ["pending", "processing", "running"]}}, {"$set": {"active": False}}),
+    ]
+    index_map = _index_map(db["crawl_jobs"])
+    assert (_crawl_active_index_keys(), True) in index_map
+    kwargs = index_map[(_crawl_active_index_keys(), True)]
+    assert kwargs["partialFilterExpression"] == {"active": True}
+    # TTL index still declared alongside FIND-02.
+    ttl_creates = [entry for entry in db["crawl_jobs"].indexes if "expireAfterSeconds" in entry[1]]
+    assert len(ttl_creates) == 1
+
+
+async def test_init_indexes_crawl_active_index_is_idempotent(monkeypatch) -> None:
+    """A matching existing partial unique index is left untouched (no recreate,
+    no aggregate, no error) - safe for repeated worker/boot migrations."""
+    db = _FakeDb()
+    await db["crawl_jobs"].create_index(
+        [("tenant_id", 1), ("website_id", 1), ("active", 1)],
+        unique=True,
+        partialFilterExpression={"active": True},
+    )
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    await MongoDB.init_indexes()
+    await MongoDB.init_indexes()
+
+    creates = [
+        entry for entry in db["crawl_jobs"].indexes if tuple(entry[0]) == _crawl_active_index_keys()
+    ]
+    assert len(creates) == 1
+    assert creates[0][1]["partialFilterExpression"] == {"active": True}
+
+
+async def test_init_indexes_refuses_duplicate_active_crawl_jobs(monkeypatch) -> None:
+    """Pre-existing duplicate ACTIVE rows must fail loudly instead of silently
+    deleting data when the FIND-02 index is created."""
+    db = _FakeDb()
+    db["crawl_jobs"].aggregate_results = [
+        {"_id": {"tenant_id": "tenant-a", "website_id": "w1"}, "count": 2}
+    ]
+    monkeypatch.setattr("backend.core.database.MongoDB.db", lambda: db)
+
+    with pytest.raises(RuntimeError, match="Duplicate active crawl_jobs"):
+        await MongoDB.init_indexes()
+
+    index_map = _index_map(db["crawl_jobs"])
+    assert (_crawl_active_index_keys(), True) not in index_map

@@ -77,6 +77,7 @@ async def test_start_crawl_allows_new_job_after_completion(env) -> None:
     website = await _add_website(env)
     done = CrawlJob.new(tenant_id="tenant-a", website_id=website.id)
     done.status = CRAWL_STATUS_COMPLETED
+    done.active = False  # terminal jobs release the FIND-02 single-flight gate
     await env.crawl_jobs.create(done)
     principal: Principal = make_principal(tenant_id="tenant-a")
 

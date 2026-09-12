@@ -114,8 +114,18 @@ def _build_cache() -> CacheStore | None:
 
 
 async def enqueue_crawl_website(crawl_job_id: str) -> None:
-    """Enqueue a crawl job for the ARQ worker (ADR-002 task registry)."""
-    await _arq_redis().enqueue_job("crawl_website", crawl_job_id)
+    """Enqueue a crawl job for the ARQ worker (ADR-002 task registry).
+
+    The `_job_id` is JOB-scoped (`crawl:{crawl_job_id}`), never a static
+    per-website key: ARQ's `keep_result` (1 h) deduplication window then only
+    ever suppresses the *same* job id, so a legitimate new manual crawl (a new
+    job id) always enqueues (FIND-02).
+    """
+    await _arq_redis().enqueue_job(
+        "crawl_website",
+        crawl_job_id,
+        _job_id=f"crawl:{crawl_job_id}",
+    )
 
 
 async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any]:
@@ -206,11 +216,30 @@ async def _run_crawl_job_impl(
 
     website = await websites.find_by_id(job.tenant_id, job.website_id)
     if website is None:
-        job.status = CRAWL_STATUS_FAILED
-        job.error_message = "Website no longer exists."
-        job.completed_at = utcnow()
-        job.updated_at = utcnow()
-        await crawl_jobs.update(job)
+        # FIND-02: the website was deleted mid-crawl (or never existed). Fail the
+        # job through the single-terminator; there is no website left to write, so
+        # the terminal write must NOT resurrect it. A re-entered re-delivery finds
+        # the job already terminal and skips.
+        completed_at = utcnow()
+        won = await crawl_jobs.finish_if_active(
+            job.id,
+            job.tenant_id,
+            terminal_status=CRAWL_STATUS_FAILED,
+            completed_at=completed_at,
+            error_message="Website no longer exists.",
+        )
+        if won:
+            job.status = CRAWL_STATUS_FAILED
+            job.error_message = "Website no longer exists."
+            job.completed_at = completed_at
+            job.updated_at = completed_at
+        else:
+            logger.warning(
+                "crawl_terminal_skipped job_id=%s tenant_id=%s status=failed "
+                "reason=no_longer_owner website_missing=1",
+                crawl_job_id,
+                job.tenant_id,
+            )
         return {"status": "failed"}
 
     job.status = CRAWL_STATUS_RUNNING
@@ -276,8 +305,6 @@ async def _run_crawl_job_impl(
         if stored == 0:
             job.errors = session.errors
             job.pages_completed = 0
-            job.status = CRAWL_STATUS_FAILED
-            job.completed_at = utcnow()
             first_error = session.errors[0] if session.errors else None
             # Phase 5 (egress hardening): score the outcome from the FIRST useful
             # failure - the URL and classification that prove the target (not the
@@ -285,13 +312,36 @@ async def _run_crawl_job_impl(
             # internals to the dashboard.
             classification = first_error.classification if first_error is not None else None
             if classification in _SAFE_ZERO_PAGE_REASONS:
-                job.error_message = user_facing_reason(CrawlFailureClassification(classification))
+                error_message = user_facing_reason(CrawlFailureClassification(classification))
                 failure_reason = classification
             else:
-                job.error_message = "No pages were fetched."
+                error_message = "No pages were fetched."
                 failure_reason = "no_pages"
-            job.updated_at = utcnow()
-            await crawl_jobs.update(job)
+            # FIND-02 single-terminator: only the attempt that wins the terminal
+            # transition may emit side effects (audit, metrics, website write).
+            completed_at = utcnow()
+            won = await crawl_jobs.finish_if_active(
+                job.id,
+                job.tenant_id,
+                terminal_status=CRAWL_STATUS_FAILED,
+                completed_at=completed_at,
+                pages_completed=0,
+                errors=[err.model_dump(mode="json") for err in session.errors],
+                error_message=error_message,
+            )
+            if not won:
+                logger.warning(
+                    "crawl_terminal_skipped job_id=%s tenant_id=%s website_id=%s "
+                    "status=failed reason=already_terminal pages_stored=0",
+                    crawl_job_id,
+                    job.tenant_id,
+                    job.website_id,
+                )
+                return {"status": "failed", "pages": 0}
+            job.status = CRAWL_STATUS_FAILED
+            job.completed_at = completed_at
+            job.error_message = error_message
+            job.updated_at = completed_at
             await crawl_events.publish_failed(job.id, error=job.error_message)
 
             existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
@@ -307,8 +357,19 @@ async def _run_crawl_job_impl(
                 job.error_message = (
                     f"{job.error_message} Your existing knowledge base is still available."
                 )
+                error_message = job.error_message
             website.updated_at = utcnow()
-            await websites.update(website)
+            owned = await websites.update_if_crawl_owner(
+                job.tenant_id, job.website_id, job.id, website
+            )
+            if not owned:
+                logger.warning(
+                    "crawl_website_write_fenced job_id=%s tenant_id=%s website_id=%s "
+                    "status=failed reason=no_longer_owner",
+                    crawl_job_id,
+                    job.tenant_id,
+                    job.website_id,
+                )
 
             await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
             record_crawl_failed(reason=failure_reason)
@@ -401,11 +462,35 @@ async def _run_crawl_job_impl(
         job.errors = session.errors
         job.pages_completed = stored
         job.pages_total = max(job.pages_total, stored)
+        # FIND-02 single-terminator: only the attempt that wins the terminal
+        # transition may run the side effects below (website write, audit,
+        # usage rollup, knowledge handoff, cache invalidation). A stale or
+        # already-terminal duplicate returns early with no side effects.
+        completed_at = utcnow()
+        won = await crawl_jobs.finish_if_active(
+            job.id,
+            job.tenant_id,
+            terminal_status=CRAWL_STATUS_COMPLETED,
+            completed_at=completed_at,
+            pages_completed=stored,
+            pages_total=job.pages_total,
+            errors=[err.model_dump(mode="json") for err in session.errors],
+            error_message=None,
+        )
+        if not won:
+            logger.warning(
+                "crawl_terminal_skipped job_id=%s tenant_id=%s website_id=%s "
+                "status=completed reason=already_terminal pages_stored=%d",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                stored,
+            )
+            return {"status": "completed", "pages": stored}
         job.status = CRAWL_STATUS_COMPLETED
-        job.completed_at = utcnow()
+        job.completed_at = completed_at
         job.error_message = None
-        job.updated_at = utcnow()
-        await crawl_jobs.update(job)
+        job.updated_at = completed_at
         await crawl_events.publish_completed(
             job.id, pages_completed=stored, pages_total=job.pages_total, chunks=0
         )
@@ -417,7 +502,15 @@ async def _run_crawl_job_impl(
         if session.preview_image is not None:
             website.preview_image = session.preview_image
         website.updated_at = utcnow()
-        await websites.update(website)
+        owned = await websites.update_if_crawl_owner(job.tenant_id, job.website_id, job.id, website)
+        if not owned:
+            logger.warning(
+                "crawl_website_write_fenced job_id=%s tenant_id=%s website_id=%s "
+                "status=completed reason=no_longer_owner",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+            )
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_COMPLETED, tenant_id=job.tenant_id))
         # ADR-005 §5.5: roll up the pages this crawl successfully indexed.
         # Best-effort: usage-tracking outages must not fail the crawl job.
@@ -484,15 +577,44 @@ async def _run_crawl_job_impl(
         # Deterministic failure: the seed is not crawlable (SSRF-blocked,
         # malformed, non-http scheme). Retrying cannot fix it, so fail the job
         # immediately and do NOT re-raise (ARQ would back off and retry).
+        # FIND-02 single-terminator: only the terminal winner emits the
+        # side effects (website write, audit, metrics).
+        completed_at = utcnow()
+        error_message = f"{type(exc).__name__}: {exc}"
+        won = await crawl_jobs.finish_if_active(
+            job.id,
+            job.tenant_id,
+            terminal_status=CRAWL_STATUS_FAILED,
+            completed_at=completed_at,
+            error_message=error_message,
+        )
+        if not won:
+            logger.warning(
+                "crawl_terminal_skipped job_id=%s tenant_id=%s website_id=%s "
+                "status=failed reason=already_terminal error_type=%s",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                type(exc).__name__,
+            )
+            return {"status": "failed"}
         job.status = CRAWL_STATUS_FAILED
-        job.completed_at = utcnow()
-        job.error_message = f"{type(exc).__name__}: {exc}"
-        job.updated_at = utcnow()
-        await crawl_jobs.update(job)
+        job.completed_at = completed_at
+        job.error_message = error_message
+        job.updated_at = completed_at
         await crawl_events.publish_failed(job.id, error=str(exc))
         website.status = WEBSITE_STATUS_FAILED
         website.updated_at = utcnow()
-        await websites.update(website)
+        owned = await websites.update_if_crawl_owner(job.tenant_id, job.website_id, job.id, website)
+        if not owned:
+            logger.warning(
+                "crawl_website_write_fenced job_id=%s tenant_id=%s website_id=%s "
+                "status=failed reason=no_longer_owner error_type=%s",
+                crawl_job_id,
+                job.tenant_id,
+                job.website_id,
+                type(exc).__name__,
+            )
         await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
         record_crawl_failed(reason="invalid_url")
         url_host, url_path = safe_url_parts(getattr(website, "url", "") or "")
@@ -510,16 +632,51 @@ async def _run_crawl_job_impl(
         job_try = int(ctx.get("job_try", 1))
         max_tries = int(ctx.get("max_tries", 3))
         if job_try >= max_tries:
-            job.status = CRAWL_STATUS_FAILED
-            job.completed_at = utcnow()
-            job.error_message = f"{type(exc).__name__}: {exc}"
-            job.updated_at = utcnow()
-            await crawl_jobs.update(job)
-            await crawl_events.publish_failed(job.id, error=str(exc))
-            website.status = WEBSITE_STATUS_FAILED
-            website.updated_at = utcnow()
-            await websites.update(website)
-            await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
+            # FIND-02: the final retry transitions the job through the
+            # single-terminator. Only the attempt that wins may record the
+            # failure side effects (website write, audit, event); a stale
+            # duplicate must not double-fail or resurrect a deleted website.
+            completed_at = utcnow()
+            error_message = f"{type(exc).__name__}: {exc}"
+            won = await crawl_jobs.finish_if_active(
+                job.id,
+                job.tenant_id,
+                terminal_status=CRAWL_STATUS_FAILED,
+                completed_at=completed_at,
+                error_message=error_message,
+            )
+            if won:
+                job.status = CRAWL_STATUS_FAILED
+                job.completed_at = completed_at
+                job.error_message = error_message
+                job.updated_at = completed_at
+                await crawl_events.publish_failed(job.id, error=str(exc))
+                website.status = WEBSITE_STATUS_FAILED
+                website.updated_at = utcnow()
+                owned = await websites.update_if_crawl_owner(
+                    job.tenant_id, job.website_id, job.id, website
+                )
+                if not owned:
+                    logger.warning(
+                        "crawl_website_write_fenced job_id=%s tenant_id=%s website_id=%s "
+                        "status=failed reason=no_longer_owner try=%s/%s",
+                        crawl_job_id,
+                        job.tenant_id,
+                        job.website_id,
+                        job_try,
+                        max_tries,
+                    )
+                await audit.create(AuditLog.new(action=AUDIT_CRAWL_FAILED, tenant_id=job.tenant_id))
+            else:
+                logger.warning(
+                    "crawl_terminal_skipped job_id=%s tenant_id=%s website_id=%s "
+                    "status=failed reason=already_terminal try=%s/%s",
+                    crawl_job_id,
+                    job.tenant_id,
+                    job.website_id,
+                    job_try,
+                    max_tries,
+                )
         else:
             job.updated_at = utcnow()
             await crawl_jobs.update(job)

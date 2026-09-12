@@ -6,11 +6,15 @@ can never observe another tenant's crawl history. The Phase 12.5 admin surface
 queue monitor in ADR-006 and is reachable only via `role=admin`.
 """
 
+from datetime import datetime
 from typing import Any, Protocol
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pymongo import DESCENDING
+from pymongo import DESCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
+from backend.core.errors import CrawlConflictError
+from backend.core.security import utcnow
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
     CrawlJob,
@@ -27,6 +31,16 @@ class CrawlJobRepository(Protocol):
     async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None: ...
 
     async def update(self, job: CrawlJob) -> None: ...
+
+    async def finish_if_active(
+        self,
+        job_id: str,
+        tenant_id: str,
+        *,
+        terminal_status: str,
+        completed_at: datetime | None = None,
+        **fields: Any,
+    ) -> bool: ...
 
     # Phase 12.5 admin surface (ADR-006 §Crawl Monitoring).
     async def list_any(
@@ -51,7 +65,14 @@ class MongoCrawlJobRepository:
         self._collection = db["crawl_jobs"]
 
     async def create(self, job: CrawlJob) -> None:
-        await self._collection.insert_one(job.to_doc())
+        try:
+            await self._collection.insert_one(job.to_doc())
+        except DuplicateKeyError as exc:
+            # FIND-02: the unique partial index (tenant_id, website_id, active)
+            # is the atomic single-flight gate - a second active job row for the
+            # same website is a *conflict*, not a database fault. Only genuine
+            # uniqueness violations are translated; real Mongo errors propagate.
+            raise CrawlConflictError("A crawl is already in progress for this website.") from exc
 
     async def find_by_id(self, tenant_id: str, job_id: str) -> CrawlJob | None:
         doc = await self._collection.find_one({"_id": job_id, "tenant_id": tenant_id})
@@ -82,6 +103,44 @@ class MongoCrawlJobRepository:
         await self._collection.replace_one(
             {"_id": job.id, "tenant_id": job.tenant_id}, job.to_doc()
         )
+
+    async def finish_if_active(
+        self,
+        job_id: str,
+        tenant_id: str,
+        *,
+        terminal_status: str,
+        completed_at: datetime | None = None,
+        **fields: Any,
+    ) -> bool:
+        """Atomically transition an active crawl job to a terminal state.
+
+        Fenced on `_id`, `tenant_id` and `status in ACTIVE`, the update matches
+        at most one active row. Returning whether the transition actually
+        happened makes this the terminal *ownership token*: the single attempt
+        that gets `True` owns all side effects (audit, usage, website write,
+        knowledge enqueue). A stale, already-terminal, foreign or missing job
+        returns `False` and no terminal fields are overwritten.
+        """
+        now = utcnow()
+        result = await self._collection.find_one_and_update(
+            {
+                "_id": job_id,
+                "tenant_id": tenant_id,
+                "status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)},
+            },
+            {
+                "$set": {
+                    **fields,
+                    "status": terminal_status,
+                    "active": False,
+                    "completed_at": completed_at,
+                    "updated_at": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return result is not None
 
     async def list_any(
         self,

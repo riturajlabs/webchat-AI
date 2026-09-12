@@ -16,6 +16,7 @@ from pymongo.monitoring import (
 
 from backend.core.config import get_settings
 from backend.core.metrics import record_mongodb_command_duration
+from backend.models.crawl_job import CRAWL_ACTIVE_STATUSES
 from backend.models.website import WEBSITE_STATUS_DELETED
 
 logger = logging.getLogger("webchat_ai")
@@ -104,6 +105,59 @@ async def _ensure_subscription_payment_id_index(db: AsyncIOMotorDatabase[Any]) -
         "payment_id",
         unique=True,
         partialFilterExpression=_SUBSCRIPTION_PAYMENT_ID_PARTIAL_FILTER,
+    )
+
+
+# FIND-02 single-flight gate on crawl_jobs. The default MongoDB compound name
+# for [("tenant_id", 1), ("website_id", 1), ("active", 1)].
+_CRAWL_JOB_ACTIVE_INDEX = "tenant_id_1_website_id_1_active_1"
+
+
+async def _ensure_crawl_job_active_index(db: AsyncIOMotorDatabase[Any]) -> None:
+    """Create the partial unique index that makes crawl-job inserts atomic.
+
+    `(tenant_id, website_id, active)` is unique *among active jobs only*, so
+    two racing `start_crawl` calls for the same website cannot both insert an
+    active row. Legacy documents were backfilled with `active` before this
+    helper runs. If pre-existing duplicate active rows would violate the
+    unique constraint, we refuse loudly instead of silently deleting data
+    (mirrors `_ensure_subscription_payment_id_index`).
+    """
+    collection = db["crawl_jobs"]
+    info = await collection.index_information()
+    current = info.get(_CRAWL_JOB_ACTIVE_INDEX)
+    already_desired = (
+        current is not None
+        and current.get("unique") is True
+        and current.get("partialFilterExpression") == {"active": True}
+        and current.get("key") == {"tenant_id": 1, "website_id": 1, "active": 1}
+    )
+    if already_desired:
+        return
+
+    dupes = await collection.aggregate(
+        [
+            {"$match": {"active": True}},
+            {
+                "$group": {
+                    "_id": {"tenant_id": "$tenant_id", "website_id": "$website_id"},
+                    "count": {"$sum": 1},
+                }
+            },
+            {"$match": {"count": {"$gt": 1}}},
+            {"$limit": 1},
+        ]
+    ).to_list(1)
+    if dupes:
+        raise RuntimeError(
+            "Duplicate active crawl_jobs rows detected (same tenant_id + website_id); "
+            "resolve the conflicting rows before creating the FIND-02 single-flight index."
+        )
+
+    await collection.create_index(
+        [("tenant_id", 1), ("website_id", 1), ("active", 1)],
+        unique=True,
+        partialFilterExpression={"active": True},
     )
 
 
@@ -350,6 +404,26 @@ class MongoDB:
         await db["crawl_jobs"].create_index("tenant_id")
         await db["crawl_jobs"].create_index("website_id")
         await db["crawl_jobs"].create_index([("tenant_id", 1), ("status", 1)])
+        # FIND-02: the *atomic single-flight gate* for active crawl jobs.
+        # `(tenant_id, website_id, active)` is unique among active jobs only, so
+        # two racing `start_crawl` calls for the same website cannot both insert
+        # an active `crawl_jobs` row - the loser hits `DuplicateKeyError` and
+        # the repository translates it to `CrawlConflictError` (409).
+        #
+        # Migration (idempotent):
+        #  1. Backfill the `active` flag from the legacy `status` marker so
+        #     pre-flag documents participate in the partial index.
+        #  2. Refuse (do NOT delete) pre-existing duplicate active rows so the
+        #     failure is loud and an operator fixes the data (mirrors
+        #     `_ensure_subscription_payment_id_index`).
+        #  3. Create the partial unique index.
+        await db["crawl_jobs"].update_many(
+            {"status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)}}, {"$set": {"active": True}}
+        )
+        await db["crawl_jobs"].update_many(
+            {"status": {"$nin": sorted(CRAWL_ACTIVE_STATUSES)}}, {"$set": {"active": False}}
+        )
+        await _ensure_crawl_job_active_index(db)
         await db["crawl_jobs"].create_index("created_at", expireAfterSeconds=_CRAWL_JOB_TTL_SECONDS)
         await db["documents"].create_index(
             [("tenant_id", 1), ("website_id", 1), ("url", 1)], unique=True

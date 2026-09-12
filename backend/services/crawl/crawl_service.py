@@ -76,6 +76,12 @@ class CrawlService:
         website = await self._websites.find_by_id(principal.tenant_id, website_id)
         if website is None:
             raise WebsiteNotFoundError("Website not found.")
+        # Fast-path only: `find_active_for_website` is a cheap first-409, NOT the
+        # correctness mechanism (FIND-02). The authoritative single-flight gate is
+        # the atomic unique insert in `create`; two racing requests can both pass
+        # this read, but only one `crawl_jobs` row (and thus one crawl) is ever
+        # created. A manual re-crawl after a completed job passes through without
+        # blocking (job is terminal -> `active=False`).
         active = await self._crawl_jobs.find_active_for_website(principal.tenant_id, website_id)
         if active is not None:
             raise CrawlConflictError("A crawl is already in progress for this website.")
@@ -84,6 +90,9 @@ class CrawlService:
             await self._usage.check_limit(principal.tenant_id, event_type="documents")
             await self._usage.check_limit(principal.tenant_id, event_type="crawl_pages")
 
+        # Authoritative single-flight gate: `MongoCrawlJobRepository.create`
+        # translates the unique partial-index violation into CrawlConflictError;
+        # a genuine database fault still propagates as such.
         job = CrawlJob.new(tenant_id=principal.tenant_id, website_id=website_id)
         await self._crawl_jobs.create(job)
         await self._audit.create(
@@ -97,6 +106,9 @@ class CrawlService:
         )
         await self._enqueue(job.id)
 
+        # Record crawl ownership on the website: the worker fences its terminal
+        # READY/FAILED write on this exact `crawl_job_id` (FIND-02).
+        website.crawl_job_id = job.id
         website.status = WEBSITE_STATUS_CRAWLING
         website.updated_at = utcnow()
         await self._websites.update(website)

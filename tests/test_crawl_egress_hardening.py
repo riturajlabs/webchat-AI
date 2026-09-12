@@ -564,6 +564,10 @@ async def _worker_env(seed: str = SEED):
     await websites.create(website)
     job = CrawlJob.new(tenant_id="tenant-a", website_id=website.id)
     await jobs.create(job)
+    # Production parity (FIND-02): `start_crawl` records the ownership token so
+    # the worker's terminal READY/FAILED write is fenced to this job id.
+    website.crawl_job_id = job.id
+    await websites.update(website)
     return job, jobs, documents, websites, audit, usage
 
 

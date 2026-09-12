@@ -105,6 +105,12 @@ class Website(BaseModel):
     # A crawl may enqueue duplicate/out-of-order jobs.  Jobs carry this id and
     # must match it before they are allowed to write vectors.
     embedding_run: EmbeddingRun | None = None
+    # The crawl job that currently owns this website's terminal write (FIND-02).
+    # `start_crawl` records it when the website enters `crawling`; the worker's
+    # terminal READY/FAILED write is fenced on this ownership token so a stale
+    # or foreign crawl cannot overwrite a newer owner or resurrect a deleted
+    # website. Null on legacy documents (no crawl yet).
+    crawl_job_id: str | None = None
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity | None:

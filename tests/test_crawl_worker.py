@@ -54,6 +54,11 @@ async def _env(*, seed: str = SEED, pages: dict[str, str] | None = None):
     await websites.create(website)
     job = CrawlJob.new(tenant_id="tenant-a", website_id=website.id)
     await jobs.create(job)
+    # Production parity (FIND-02): `start_crawl` records the ownership token on
+    # the website so the worker's terminal READY/FAILED write is fenced to this
+    # job id; without it the write is correctly rejected.
+    website.crawl_job_id = job.id
+    await websites.update(website)
     fetcher = FakePageFetcher(
         pages or {seed: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT}
     )

@@ -59,6 +59,10 @@ class WebsiteRepository(Protocol):
 
     async def update(self, website: Website) -> None: ...
 
+    async def update_if_crawl_owner(
+        self, tenant_id: str, website_id: str, crawl_job_id: str, website: Website
+    ) -> bool: ...
+
     async def acquire_embedding_run(
         self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
     ) -> Website | None: ...
@@ -141,6 +145,29 @@ class MongoWebsiteRepository:
         await self._collection.replace_one(
             {"_id": website.id, "tenant_id": website.tenant_id}, website.to_doc()
         )
+
+    async def update_if_crawl_owner(
+        self, tenant_id: str, website_id: str, crawl_job_id: str, website: Website
+    ) -> bool:
+        """Replace the website only while `crawl_job_id` still owns it.
+
+        Fenced on `_id`, `tenant_id`, `status != deleted` and the ownership
+        token recorded by `start_crawl`. Returns whether the replace matched:
+        `False` means a newer crawl owns the website, or it was soft-deleted
+        mid-crawl, so the supplied terminal state must NOT be written (it would
+        regress the newer owner or resurrect a deleted website). The general
+        `update()` path is intentionally unchanged for non-crawl writes.
+        """
+        result = await self._collection.replace_one(
+            {
+                "_id": website_id,
+                "tenant_id": tenant_id,
+                "status": {"$ne": WEBSITE_STATUS_DELETED},
+                "crawl_job_id": crawl_job_id,
+            },
+            website.to_doc(),
+        )
+        return result.matched_count > 0
 
     async def acquire_embedding_run(
         self, tenant_id: str, website_id: str, identity: EmbeddingIdentity

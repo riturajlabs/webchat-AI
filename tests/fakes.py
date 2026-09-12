@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 from backend.ai.gemini import GenerationUsage
+from backend.core.errors import CrawlConflictError
 from backend.core.security import new_id, utcnow
 from backend.models.admin_audit_log import AdminAuditLog
 from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
@@ -14,6 +15,7 @@ from backend.models.chat_session import CHAT_SESSION_STATUS_DELETED, ChatSession
 from backend.models.crawl_job import (
     CRAWL_ACTIVE_STATUSES,
     CrawlJob,
+    CrawlJobError,
 )
 from backend.models.document import Document
 from backend.models.feedback import Feedback
@@ -488,7 +490,9 @@ class FakeWebsiteRepository:
             and website.tenant_id == tenant_id
             and website.status != WEBSITE_STATUS_DELETED
         ):
-            return website
+            # Mirror Mongo: fresh object so in-place worker mutations never
+            # leak past the crawl-owner fence.
+            return website.model_copy(deep=True)
         return None
 
     async def find_by_url(self, tenant_id: str, url: str) -> Website | None:
@@ -506,7 +510,8 @@ class FakeWebsiteRepository:
         )
 
     async def find_by_id_any(self, website_id: str) -> Website | None:
-        return self._websites.get(website_id)
+        website = self._websites.get(website_id)
+        return website.model_copy(deep=True) if website is not None else None
 
     async def list_by_tenant(
         self,
@@ -545,6 +550,27 @@ class FakeWebsiteRepository:
 
     async def update(self, website: Website) -> None:
         self._websites[website.id] = website
+
+    async def update_if_crawl_owner(
+        self, tenant_id: str, website_id: str, crawl_job_id: str, website: Website
+    ) -> bool:
+        """FIND-02: mirror the Mongo crawl-owner fence.
+
+        The replace succeeds only when the website is not deleted and its
+        ``crawl_job_id`` matches the supplied token, preventing a stale or
+        foreign crawl from overwriting a newer owner or resurrecting a deleted
+        website.
+        """
+        current = self._websites.get(website_id)
+        if (
+            current is None
+            or current.tenant_id != tenant_id
+            or current.status == WEBSITE_STATUS_DELETED
+            or current.crawl_job_id != crawl_job_id
+        ):
+            return False
+        self._websites[website_id] = website
+        return True
 
     async def acquire_embedding_run(
         self, tenant_id: str, website_id: str, identity: EmbeddingIdentity
@@ -699,14 +725,29 @@ class FakeCrawlJobRepository:
         return self._jobs
 
     async def create(self, job: CrawlJob) -> None:
+        # FIND-02: mirror the partial unique index (tenant_id, website_id, active).
+        # A second ACTIVE job row for the same website triggers a conflict, exactly
+        # like `DuplicateKeyError` translated to `CrawlConflictError` by Mongo.
+        for existing in self._jobs.values():
+            if (
+                existing.tenant_id == job.tenant_id
+                and existing.website_id == job.website_id
+                and existing.active
+            ):
+                raise CrawlConflictError("A crawl is already in progress for this website.")
         self._jobs[job.id] = job
 
     async def find_by_id(self, tenant_id: str, job_id: str) -> CrawlJob | None:
         job = self._jobs.get(job_id)
-        return job if job is not None and job.tenant_id == tenant_id else None
+        if job is None or job.tenant_id != tenant_id:
+            return None
+        # Mirror Mongo: from_doc returns a fresh object, so in-place mutations
+        # by the worker (status, pages_completed, etc.) don't leak back.
+        return job.model_copy(deep=True)
 
     async def find_by_id_any(self, job_id: str) -> CrawlJob | None:
-        return self._jobs.get(job_id)
+        job = self._jobs.get(job_id)
+        return job.model_copy(deep=True) if job is not None else None
 
     async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None:
         return next(
@@ -722,6 +763,42 @@ class FakeCrawlJobRepository:
 
     async def update(self, job: CrawlJob) -> None:
         self._jobs[job.id] = job
+
+    async def finish_if_active(
+        self,
+        job_id: str,
+        tenant_id: str,
+        *,
+        terminal_status: str,
+        completed_at: datetime | None = None,
+        **fields: object,
+    ) -> bool:
+        """FIND-02: mirror the Mongo single-terminator.
+
+        The in-memory transition is identical in semantics to
+        ``MongoCrawlJobRepository.finish_if_active``: only an active job is
+        transitioned; the ``active`` flag is flipped ``False``; the caller
+        receives ``True`` exactly once and ``False`` for every subsequent call.
+        """
+        job = self._jobs.get(job_id)
+        if job is None or job.tenant_id != tenant_id or job.status not in CRAWL_ACTIVE_STATUSES:
+            return False
+        now = utcnow()
+        for key, value in fields.items():
+            # ``errors`` is stored as serialized dicts by the worker but the
+            # fake must keep them as CrawlJobError objects so assertions on
+            # ``stored_job.errors[0].url`` keep working.
+            if key == "errors" and value is not None:
+                value = [
+                    err if isinstance(err, CrawlJobError) else CrawlJobError(**err) for err in value
+                ]
+            setattr(job, key, value)
+        job.status = terminal_status
+        job.active = False
+        if completed_at is not None:
+            job.completed_at = completed_at
+        job.updated_at = now
+        return True
 
     async def list_any(
         self,

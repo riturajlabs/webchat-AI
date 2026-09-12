@@ -54,6 +54,12 @@ class CrawlJob(BaseModel):
     tenant_id: str
     website_id: str
     status: str = CRAWL_STATUS_PENDING
+    # Single-flight marker (FIND-02): mirrors `status in CRAWL_ACTIVE_STATUSES`
+    # and drives the unique partial index `(tenant_id, website_id, active)` that
+    # makes the crawl-job insert atomic. Terminal transitions set it `False`
+    # via `finish_if_active`. Absent on legacy documents -> defaults `True`
+    # (actively crawled rows count toward the fence).
+    active: bool = True
     pages_total: int = 0
     pages_completed: int = 0
     errors: list[CrawlJobError] = Field(default_factory=list)
