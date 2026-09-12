@@ -225,7 +225,11 @@ x-backend-env: &backend-env
   CRAWL_MAX_CONTENT_BYTES: ${CRAWL_MAX_CONTENT_BYTES-200000}
   CRAWL_MAX_CONCURRENT: ${CRAWL_MAX_CONCURRENT-1}
   CRAWL_BROWSER_USER_AGENT: ${CRAWL_BROWSER_USER_AGENT-WebChatAI-Crawler/1.0}
-  CRAWL_NO_SANDBOX: ${CRAWL_NO_SANDBOX-true}
+  # Chromium sandbox is ENABLED by default (production posture: sandbox on,
+  # non-root appuser runtime). CRAWL_NO_SANDBOX=true is an explicit compatibility
+  # escape hatch ONLY for runtimes that genuinely cannot sandbox (e.g. user
+  # namespaces unavailable); the worker emits a WARNING when it is used.
+  CRAWL_NO_SANDBOX: ${CRAWL_NO_SANDBOX-false}
   CRAWL_PRIORITY_URL_PATHS: ${CRAWL_PRIORITY_URL_PATHS-}
   CRAWL_HTTP_FIRST: ${CRAWL_HTTP_FIRST-true}
   CRAWL_HTTP_MIN_CONTENT_CHARS: ${CRAWL_HTTP_MIN_CONTENT_CHARS-100}
@@ -450,8 +454,11 @@ services:
           cpus: "2.0"
     security_opt:
       - no-new-privileges:true
-    # Chromium with --no-sandbox (CRAWL_NO_SANDBOX=true) runs without
-    # special capabilities. cap_drop ALL is safe here.
+    # Chromium runs with its sandbox enabled (CRAWL_NO_SANDBOX=false by
+    # default); the user-namespace sandbox needs no special capabilities.
+    # CRAWL_NO_SANDBOX=true is the explicit compatibility escape hatch only -
+    # with sandbox disabled no special capabilities are required either, so
+    # cap_drop ALL stays safe in both cases.
     cap_drop:
       - ALL
 

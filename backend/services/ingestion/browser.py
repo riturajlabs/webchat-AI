@@ -67,6 +67,13 @@ async def get_browser() -> Browser:
         args = ["--disable-dev-shm-usage"]
         if settings.crawl_no_sandbox:
             args.append("--no-sandbox")
+            # FIND-05: no-sandbox is an explicit compatibility escape hatch
+            # only, never the production default. Emit WARNING-level telemetry
+            # (never fail) so a runtime that genuinely cannot sandbox is visible
+            # in operational logs. Contains no secrets, URLs or page content.
+            logger.warning(
+                "crawl_browser_no_sandbox_enabled sandbox=disabled escape_hatch=true default=false"
+            )
         logger.info(
             "crawl_browser_launch no_sandbox=%s browser_args=%s",
             settings.crawl_no_sandbox,

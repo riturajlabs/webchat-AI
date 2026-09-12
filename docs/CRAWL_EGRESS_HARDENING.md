@@ -102,10 +102,26 @@ These values are preserved by the production configuration:
 
 ```
 CRAWL_HTTP_FIRST=true
-CRAWL_NO_SANDBOX=true
+CRAWL_NO_SANDBOX=false
 CRAWL_MAX_CONCURRENT=1
 EMBEDDING_MAX_CONCURRENT_BATCHES=1
 ```
+
+- **Chromium sandbox is ENABLED** (`CRAWL_NO_SANDBOX=false`) — the production
+  posture on a non-root `appuser` runtime (`Dockerfile.worker`). The worker
+  runs Chromium with its user-namespace sandbox active and emits a WARNING if
+  `CRAWL_NO_SANDBOX=true` is ever set.
+- `CRAWL_NO_SANDBOX=true` is an **explicit compatibility escape hatch only**
+  for a runtime that genuinely cannot sandbox (e.g. user namespaces
+  unavailable); never the default. It is kept as a deployable fallback, not
+  removed.
+- **Railway host capability is NOT yet directly proven by this repo's
+  validation**: the local production-envelope smoke test passed with the
+  sandbox enabled (`CRAWL_NO_SANDBOX=false`, `appuser`, 2 CPU / 1 GiB,
+  `cap_drop ALL`, `no-new-privileges`, read-only root FS — Chromium children
+  reported `Seccomp=2`/`NoNewPrivs=1`), but Railway itself has not been
+  reached from this environment (no CLI/credentials). Re-validate at deploy
+  time before relying on the sandbox on Railway.
 
 Do **not** increase browser concurrency, embedding concurrency, or crawl
 concurrency. One shared headless Chromium is launched lazily; context/page/close
