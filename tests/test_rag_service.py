@@ -520,6 +520,10 @@ async def test_done_event_includes_timing_breakdown_when_enabled(monkeypatch, ca
         "provider",
         "model_name",
         "estimated_cost",
+        "output_cap",
+        "finish_reason",
+        "truncated",
+        "reasoning_tokens",
         "embedding_cache",
         "retrieval_cache",
         "context_chars",
@@ -1966,6 +1970,10 @@ async def test_log_rag_timing_emits_flat_extra_payload(caplog) -> None:
         provider_name="gemini",
         model_name="gemini-2.0-flash",
         estimated_cost=0.002,
+        output_cap=4096,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=0,
         embedding_cache_hit=True,
         retrieval_cache_hit=False,
         context_chars=3210,
@@ -2001,6 +2009,10 @@ async def test_log_rag_timing_emits_flat_extra_payload(caplog) -> None:
     assert record.removed_chunks_count == 2
     assert record.confidence_score == 0.87
     assert record.faithfulness_score == round(0.92, 3)
+    assert record.output_cap == 4096
+    assert record.finish_reason == "STOP"
+    assert record.truncated is False
+    assert record.reasoning_tokens == 0
 
     env.rag._log_rag_timing(
         tenant_id=TENANT_A,
@@ -2028,6 +2040,10 @@ async def test_log_rag_timing_emits_flat_extra_payload(caplog) -> None:
         provider_name=None,
         model_name="gemini-2.0-flash",
         estimated_cost=0.0,
+        output_cap=4096,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=0,
         embedding_cache_hit=False,
         retrieval_cache_hit=False,
         context_chars=0,
@@ -2269,3 +2285,72 @@ class TestInjectionTrackingPipeline:
         )
         assert any(event["event"] == "done" for event in events)
         assert not tracker.is_escalated(f"{TENANT_A}:visitor-1")
+
+
+async def test_truncated_generation_is_exposed_and_persisted() -> None:
+    """A capped turn keeps `completed`, streams the partial text, emits exactly
+    one `done` carrying `truncated` + `finish_reason`, and persists the flags."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+    env.generation.deltas = ["Partial answer."]
+    env.generation.finish_reason = "MAX_TOKENS"
+    env.generation.truncated = True
+    env.generation.output_tokens = 512
+
+    events = await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="Pricing?",
+    )
+
+    done_events = [event for event in events if event["event"] == "done"]
+    assert len(done_events) == 1
+    done = done_events[0]["data"]
+    # Partial output preserved; status stays completed but truncation is visible.
+    assert "".join(_message_event(events)) == "Partial answer."
+    assert done["fallback"] is False
+    assert done["finish_reason"] == "MAX_TOKENS"
+    assert done["truncated"] is True
+    assert done["output_tokens"] == 512
+
+    _, assistant = env.messages.messages
+    assert assistant.finish_reason == "MAX_TOKENS"
+    assert assistant.truncated is True
+    assert assistant.output_tokens == 512
+
+
+async def test_output_budget_is_passed_to_generation(monkeypatch) -> None:
+    """The per-complexity budget is forwarded as the provider output cap."""
+    monkeypatch.setattr(backend_settings(), "chat_simple_max_output_tokens", 128)
+    monkeypatch.setattr(backend_settings(), "chat_complex_max_output_tokens", 1024)
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Knowledge.")
+
+    # SIMPLE factual lookup -> the simple cap.
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="What is the price?")
+    assert env.generation.last_max_tokens == 128
+
+    # COMPLEX multi-part/technical question -> the complex cap.
+    await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question=(
+            "Compare the advantages and disadvantages of the enterprise plan and explain in "
+            "detail how to configure and deploy the security features, plus the migration "
+            "workflow and compliance requirements."
+        ),
+    )
+    assert env.generation.last_max_tokens == 1024
+
+    # MEDIUM falls back to the global ceiling.
+    await _stream(
+        env,
+        tenant_id=TENANT_A,
+        website_id=WEB_1,
+        question="What plans do you offer and what are their features?",
+    )
+    assert env.generation.last_max_tokens == backend_settings().chat_max_output_tokens

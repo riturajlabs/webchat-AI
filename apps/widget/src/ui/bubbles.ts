@@ -288,6 +288,9 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage, list?: HTMLElemen
   // Long-message collapse (only when not streaming — content is still growing).
   syncCollapse(bubble, message);
 
+  // Truncation notice (production fix): only after the turn completes.
+  syncTruncatedNotice(bubble, message);
+
   // Sources + per-message retry (rebuilt only when their inputs change).
   syncSources(bubble, message);
   syncRetry(bubble, message);
@@ -369,6 +372,33 @@ function syncCollapse(bubble: HTMLElement, message: ChatMessage): void {
     toggle.setAttribute('aria-expanded', String(open));
   } else if (toggle) {
     toggle.remove();
+  }
+}
+
+/** Minimal truthful notice for an answer cut off by the output-token cap. */
+function syncTruncatedNotice(bubble: HTMLElement, message: ChatMessage): void {
+  let notice = bubble.querySelector<HTMLElement>('.wc-truncated');
+  const showNotice =
+    message.role === 'assistant' &&
+    message.truncated &&
+    !message.streaming &&
+    !message.thinking &&
+    !message.error;
+  if (showNotice) {
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'wc-truncated';
+      notice.textContent =
+        'This answer was shortened because it reached the generation length limit.';
+      const content = bubble.querySelector<HTMLElement>('.wc-bubble-content');
+      if (content) {
+        content.after(notice);
+      } else {
+        bubble.appendChild(notice);
+      }
+    }
+  } else if (notice) {
+    notice.remove();
   }
 }
 

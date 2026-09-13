@@ -76,12 +76,14 @@ def build_chat_payload(
 
 async def iter_openai_sse(
     response: httpx.Response,
-) -> AsyncIterator[tuple[str | None, dict[str, Any] | None]]:
-    """Yield `(content_delta, usage)` tuples from an SSE completion stream.
+) -> AsyncIterator[tuple[str | None, dict[str, Any] | None, str | None]]:
+    """Yield `(content_delta, usage, finish_reason)` from an SSE completion stream.
 
     Malformed lines are logged and skipped so one bad chunk cannot kill the
     answer; a missing `[DONE]` (stream ended by the server) simply ends the
-    iteration. The usage chunk carries no content delta.
+    iteration. The usage chunk carries no content delta and no choices, so
+    finish_reason is surfaced on the final content chunk (the last non-None
+    value wins downstream).
     """
     async for line in response.aiter_lines():
         if not line.startswith("data:"):
@@ -100,6 +102,7 @@ async def iter_openai_sse(
             continue
         usage = chunk.get("usage")
         delta: str | None = None
+        finish_reason: str | None = None
         choices = chunk.get("choices")
         if isinstance(choices, list) and choices:
             first = choices[0]
@@ -107,15 +110,17 @@ async def iter_openai_sse(
                 choice_delta = first.get("delta") or {}
                 if isinstance(choice_delta, dict):
                     delta = choice_delta.get("content")
-        yield delta, usage if isinstance(usage, dict) else None
+                fr = first.get("finish_reason")
+                finish_reason = fr if isinstance(fr, str) else None
+        yield delta, usage if isinstance(usage, dict) else None, finish_reason
 
 
 async def iter_openai_first_token_guarded(
     response: httpx.Response,
     *,
     first_token_timeout_seconds: float,
-) -> AsyncIterator[tuple[str | None, dict[str, Any] | None]]:
-    """Yield SSE tuples; the FIRST item must arrive within the first-token
+) -> AsyncIterator[tuple[str | None, dict[str, Any] | None, str | None]]:
+    """Yield SSE triples; the FIRST item must arrive within the first-token
     timeout (Phase 3 latency audit).
 
     Mirrors ``GoogleGeminiClient``: an upstream that accepts the connection but

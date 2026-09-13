@@ -3,8 +3,10 @@
 One `messages` document per turn of a conversation. Assistant messages carry
 the retrieved `sources`, the generation latency (`response_time`), and the raw
 Gemini token usage (`input_tokens`/`output_tokens`) for audit; daily rollups
-live in `usage_records` (ADR-005 §5.5). Every document carries `tenant_id`;
-every repository query is tenant-scoped (00-AI-Development-Rules.md §7).
+live in `usage_records` (ADR-005 §5.5). `finish_reason`/`truncated` record
+whether the provider completed the answer or stopped on a token limit.
+Every document carries `tenant_id`; every repository query is tenant-scoped
+(00-AI-Development-Rules.md §7).
 """
 
 from datetime import datetime
@@ -46,6 +48,13 @@ class ChatMessage(BaseModel):
     total_tokens: int = 0
     estimated_cost: float = 0.0
     model_name: str = ""
+    # Normalized provider termination reason (`backend/ai/finish_reason.py`),
+    # "" on legacy rows written before this field existed. `truncated` is True
+    # when the provider stopped on a token-limit reason (MAX_TOKENS/LENGTH):
+    # the stored answer is the complete set of emitted tokens — nothing is
+    # missing in storage — but the generation itself was cut short.
+    finish_reason: str = ""
+    truncated: bool = False
     # Per-stage latency breakdown (milliseconds, Phase 12.6). Assistant
     # messages record where the response time went so the performance dashboard
     # can report average embedding/retrieval/generation latency per window.

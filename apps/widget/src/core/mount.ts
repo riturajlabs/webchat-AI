@@ -425,6 +425,8 @@ export function mount(options: WidgetHostOptions): WidgetController {
         session_id?: string;
         message_id?: string;
         fallback?: unknown;
+        finish_reason?: string;
+        truncated?: boolean;
         timing?: {
           embedding_ms?: number;
           retrieval_ms?: number;
@@ -438,6 +440,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
         }
         if (done.message_id) {
           conversation.setMessageId(turnId, done.message_id);
+        }
+        if (done.finish_reason !== undefined) {
+          conversation.setFinishReason(turnId, done.finish_reason);
+        }
+        if (done.truncated) {
+          conversation.setTruncated(turnId);
         }
         if (done.fallback) {
           const message = conversation.getState().messages.find((m) => m.id === turnId);

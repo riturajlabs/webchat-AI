@@ -92,6 +92,7 @@ class AdaptiveProviderRouter:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
         """Stream answer deltas, preferring healthy low-latency providers.
 
@@ -100,7 +101,9 @@ class AdaptiveProviderRouter:
         """
         ordered = await self._build_ordered_providers()
         self._fallback._providers = ordered
-        async for delta in self._fallback.stream_generate(system=system, messages=messages):
+        async for delta in self._fallback.stream_generate(
+            system=system, messages=messages, max_tokens=max_tokens
+        ):
             yield delta
         # After the stream completes, report success/failure for health
         # tracking.  ``FallbackGenerationClient`` already set

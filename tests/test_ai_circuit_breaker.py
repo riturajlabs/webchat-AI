@@ -102,7 +102,9 @@ class StubGenerationClient:
     def usage(self) -> GenerationUsage:
         return self._usage
 
-    async def stream_generate(self, *, system: str, messages: list[tuple[str, str]]):
+    async def stream_generate(
+        self, *, system: str, messages: list[tuple[str, str]], max_tokens: int = 0
+    ):
         self.calls += 1
         if self.fail_before:
             raise GenerationUnavailableError(f"{self.name} down")

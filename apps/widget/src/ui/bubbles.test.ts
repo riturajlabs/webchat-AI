@@ -252,6 +252,38 @@ describe('createBubble', () => {
     expect(streaming.classList.contains('wc-long')).toBe(false);
     expect(streaming.querySelector('.wc-more-toggle')).toBeNull();
   });
+
+  it('shows a truncation notice on a completed capped answer', () => {
+    const bubble = createBubble(
+      message('assistant', 'cut off mid', { truncated: true, finishReason: 'MAX_TOKENS' }),
+    );
+    const notice = bubble.querySelector<HTMLElement>('.wc-truncated');
+    expect(notice).toBeTruthy();
+    expect(notice?.textContent).toMatch(/shortened/i);
+    // The notice sits right after the rendered content.
+    expect(notice?.previousElementSibling?.classList.contains('wc-bubble-content')).toBe(true);
+  });
+
+  it('hides the truncation notice while streaming or on errors', () => {
+    const streaming = createBubble(
+      message('assistant', 'part', { truncated: true, streaming: true }),
+    );
+    expect(streaming.querySelector('.wc-truncated')).toBeNull();
+
+    const failed = createBubble(message('assistant', 'part', { truncated: true, error: true }));
+    expect(failed.querySelector('.wc-truncated')).toBeNull();
+
+    const complete = createBubble(message('assistant', 'full answer', { truncate: true } as never));
+    expect(complete.querySelector('.wc-truncated')).toBeNull();
+  });
+
+  it('shows the truncation notice even when the cap left no visible text', () => {
+    // Reasoning models can spend the whole budget on thinking tokens.
+    const empty = createBubble(
+      message('assistant', '', { truncated: true, finishReason: 'LENGTH' }),
+    );
+    expect(empty.querySelector('.wc-truncated')).toBeTruthy();
+  });
 });
 
 describe('createWelcomeBubble', () => {

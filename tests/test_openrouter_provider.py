@@ -66,6 +66,43 @@ async def test_streams_deltas_and_captures_usage() -> None:
     assert provider.usage == GenerationUsage(input_tokens=9, output_tokens=3)
 
 
+async def test_max_tokens_and_stop_finish_reason_propagate() -> None:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text=_sse(
+                _delta("ok"),
+                {
+                    "id": "1",
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {
+                        "prompt_tokens": 9,
+                        "completion_tokens": 3,
+                        "total_tokens": 12,
+                    },
+                },
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+        deltas = [
+            d
+            async for d in provider.stream_generate(
+                system="sys", messages=[("user", "hi")], max_tokens=1024
+            )
+        ]
+
+    assert captured[0]["max_tokens"] == 1024
+    assert deltas == ["ok"]
+    assert provider.usage.finish_reason == "STOP"
+    assert provider.usage.truncated is False
+
+
 async def test_builds_openai_compatible_payload() -> None:
     captured: list[dict] = []
 

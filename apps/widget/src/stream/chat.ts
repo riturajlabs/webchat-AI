@@ -49,6 +49,13 @@ export interface ChatMessage {
   sources?: ChatSource[];
   /** Backend `message_id` from the SSE `done` event (Phase 12.4). */
   messageId?: string;
+  /**
+   * True when the provider stopped the answer because it hit the configured
+   * output-token cap (SSE `done.truncated`); the visible answer may be cut off.
+   */
+  truncated?: boolean;
+  /** Normalized provider termination reason (SSE `done.finish_reason`). */
+  finishReason?: string;
   /** Visitor feedback state (Phase 12.4). */
   feedback?: FeedbackState;
   /** Local wall-clock timestamp used for the optional bubble timestamp. */
@@ -207,6 +214,24 @@ export class Conversation {
     const message = this.messages.find((m) => m.id === id);
     if (message) {
       message.messageId = messageId;
+      this.emit();
+    }
+  }
+
+  /** Record the normalized provider finish reason (SSE `done`). */
+  setFinishReason(id: string, finishReason: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.finishReason = finishReason;
+      this.emit();
+    }
+  }
+
+  /** Mark an assistant turn as truncated by the output-token cap. */
+  setTruncated(id: string): void {
+    const message = this.messages.find((m) => m.id === id);
+    if (message) {
+      message.truncated = true;
       this.emit();
     }
   }

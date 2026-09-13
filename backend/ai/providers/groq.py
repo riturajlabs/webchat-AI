@@ -13,6 +13,11 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+from backend.ai.finish_reason import (
+    FINISH_REASON_UNKNOWN,
+    TRUNCATING_FINISH_REASONS,
+    normalize_openai_finish_reason,
+)
 from backend.ai.gemini import GenerationUsage
 from backend.ai.providers.openai_compat import (
     build_chat_payload,
@@ -70,13 +75,21 @@ class GroqGenerationClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
-        """Stream answer deltas from Groq. Never raises raw SDK errors."""
+        """Stream answer deltas from Groq. Never raises raw SDK errors.
+
+        ``max_tokens`` (0 = unset) is sent explicitly as ``max_tokens`` so the
+        application owns the output cap instead of relying on Groq's 2048
+        default (which silently truncates long answers at ``length``).
+        """
         api_key = self._api_key
         if not api_key:
             raise GenerationUnavailableError("GROQ_API_KEY is not configured.")
         client = self._http_client or shared_http_client(self._timeout_seconds)
         payload = build_chat_payload(model=self._model, system=system, messages=messages)
+        if max_tokens and max_tokens > 0:
+            payload["max_tokens"] = max_tokens
         headers = {"Authorization": f"Bearer {api_key}"}
         try:
             async with client.stream(
@@ -89,16 +102,34 @@ class GroqGenerationClient:
                 if response.status_code >= 400:
                     await response.aread()
                     raise map_openai_http_error(response.status_code, "Groq")
-                async for delta, usage in iter_openai_first_token_guarded(
+                finish_reason = FINISH_REASON_UNKNOWN
+                input_tokens = 0
+                output_tokens = 0
+                reasoning_tokens = 0
+                async for delta, usage, raw_finish in iter_openai_first_token_guarded(
                     response, first_token_timeout_seconds=self._first_token_timeout_seconds
                 ):
+                    if raw_finish is not None:
+                        finish_reason = normalize_openai_finish_reason(raw_finish)
                     if usage is not None:
-                        self._usage = GenerationUsage(
-                            input_tokens=int(usage.get("prompt_tokens") or 0),
-                            output_tokens=int(usage.get("completion_tokens") or 0),
-                        )
+                        input_tokens = int(usage.get("prompt_tokens") or 0)
+                        output_tokens = int(usage.get("completion_tokens") or 0)
+                        # Groq reports reasoning tokens inside completion_tokens
+                        # (completion_tokens_details.reasoning_tokens); they stay
+                        # billed as output (the provider charges them) and are
+                        # surfaced separately for observability only.
+                        details = usage.get("completion_tokens_details")
+                        if isinstance(details, dict):
+                            reasoning_tokens = int(details.get("reasoning_tokens") or 0)
                     if delta:
                         yield delta
+                self._usage = GenerationUsage(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    finish_reason=finish_reason,
+                    truncated=finish_reason in TRUNCATING_FINISH_REASONS,
+                    reasoning_tokens=reasoning_tokens,
+                )
         except httpx.TimeoutException as exc:
             raise GenerationUnavailableError("Groq request timed out.") from exc
         except httpx.TransportError as exc:

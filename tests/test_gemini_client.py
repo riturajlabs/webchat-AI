@@ -18,12 +18,19 @@ from backend.core.errors import GenerationError, GenerationUnavailableError
 class FakeUsageMetadata:
     prompt_token_count: int
     candidates_token_count: int
+    thoughts_token_count: int = 0
+
+
+@dataclass
+class FakeCandidate:
+    finish_reason: str | None = None
 
 
 @dataclass
 class FakeGenerationChunk:
     text: str | None
     usage_metadata: FakeUsageMetadata | None = None
+    candidates: list[FakeCandidate] | None = None
 
 
 class _FakeModels:
@@ -88,7 +95,80 @@ async def test_streams_text_deltas_and_captures_usage(fake_sdk) -> None:
         deltas.append(delta)
 
     assert deltas == ["Hello ", "world"]
-    assert client.usage == GenerationUsage(input_tokens=11, output_tokens=2)
+    assert client.usage == GenerationUsage(
+        input_tokens=11,
+        output_tokens=2,
+        finish_reason="UNKNOWN",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_max_tokens_finish_reason_marks_truncated(fake_sdk) -> None:
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Partial "),
+        FakeGenerationChunk(text="answer"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="MAX_TOKENS")],
+            usage_metadata=FakeUsageMetadata(11, 78),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = []
+    async for delta in client.stream_generate(
+        system="sys", messages=[("user", "hi")], max_tokens=512
+    ):
+        deltas.append(delta)
+
+    assert deltas == ["Partial ", "answer"]
+    assert client.usage == GenerationUsage(
+        input_tokens=11,
+        output_tokens=78,
+        finish_reason="MAX_TOKENS",
+        truncated=True,
+        reasoning_tokens=0,
+    )
+    # The per-request cap overrides the client default.
+    assert fake_sdk.last_request["config"]["max_output_tokens"] == 512
+
+
+async def test_safety_finish_reason_is_not_truncated(fake_sdk) -> None:
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="ok"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="SAFETY")],
+            usage_metadata=FakeUsageMetadata(3, 5),
+        ),
+    ]
+    client = _client(fake_sdk)
+    async for _ in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        pass
+
+    assert client.usage.finish_reason == "SAFETY"
+    assert client.usage.truncated is False
+
+
+async def test_clean_max_tokens_end_is_not_an_error(fake_sdk) -> None:
+    """A capped generation must not retry, fall back or raise."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="cut off mid-word"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="MAX_TOKENS")],
+            usage_metadata=FakeUsageMetadata(11, 78, thoughts_token_count=9),
+        ),
+    ]
+    client = _client(fake_sdk)
+    deltas = []
+    async for delta in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        deltas.append(delta)
+
+    assert deltas == ["cut off mid-word"]
+    assert client.usage.truncated is True
+    assert client.usage.reasoning_tokens == 9
 
 
 async def test_maps_roles_onto_gemini_roles(fake_sdk) -> None:

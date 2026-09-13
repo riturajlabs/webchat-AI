@@ -2314,7 +2314,8 @@ class FakeGenerationClient:
     """Fake `GenerationClient`: records the prompt and streams canned deltas.
 
     `usage` defaults to 10/20 tokens but can be configured; `failures` lets
-    tests exercise the error path.
+    tests exercise the error path. `finish_reason`/`truncated` model provider
+    termination so RAG tests can assert truncation propagation.
     """
 
     name = "fake"
@@ -2327,6 +2328,10 @@ class FakeGenerationClient:
         self.failures: list[Exception] = []
         self.input_tokens = 10
         self.output_tokens = 20
+        self.finish_reason = "STOP"
+        self.truncated = False
+        self.reasoning_tokens = 0
+        self.last_max_tokens: int | None = None
         self._active_provider: str | None = None
 
     @property
@@ -2334,6 +2339,9 @@ class FakeGenerationClient:
         return GenerationUsage(
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
+            finish_reason=self.finish_reason,
+            truncated=self.truncated,
+            reasoning_tokens=self.reasoning_tokens,
         )
 
     @property
@@ -2346,8 +2354,10 @@ class FakeGenerationClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ):
-        self.calls.append({"system": system, "messages": messages})
+        self.calls.append({"system": system, "messages": messages, "max_tokens": max_tokens})
+        self.last_max_tokens = max_tokens
         if self.failures:
             raise self.failures.pop(0)
 

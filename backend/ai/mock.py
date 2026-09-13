@@ -17,6 +17,7 @@ import zlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+from backend.ai.finish_reason import FINISH_REASON_STOP
 from backend.ai.gemini import GenerationUsage
 from backend.core.config import get_settings
 from backend.services.knowledge.embedding import EmbeddingIdentity, EmbeddingUsage
@@ -64,11 +65,13 @@ class MockGenerationClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
         reply = self._reply_for(messages)
         self._usage = GenerationUsage(
             input_tokens=self._estimate_tokens(system, messages),
             output_tokens=max(1, len(reply) // _CHARS_PER_TOKEN),
+            finish_reason=FINISH_REASON_STOP,
         )
         words = reply.split()
         for start in range(0, len(words), self._words_per_chunk):

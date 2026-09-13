@@ -147,6 +147,7 @@ class RetrievalResult:
     rerank_input_count: int
     hybrid_candidate_count: int
     adaptive_max_context_chars: int
+    complexity: QueryComplexity = QueryComplexity.MEDIUM
 
 
 def _error_event(code: str, message: str) -> dict[str, Any]:
@@ -771,6 +772,7 @@ class RagService:
                                     entry.get("hybrid_candidate_count", 0) or 0
                                 ),
                                 adaptive_max_context_chars=adaptive_max_context_chars,
+                                complexity=complexity,
                             )
                         # schema-1 legacy entries (raw vector results only) are
                         # treated as a cache miss: they lack the final rerank
@@ -913,7 +915,26 @@ class RagService:
             rerank_input_count=rerank_input_count,
             hybrid_candidate_count=hybrid_candidate_count,
             adaptive_max_context_chars=adaptive_max_context_chars,
+            complexity=complexity,
         )
+
+    def _output_budget(self, complexity: QueryComplexity) -> int:
+        """Per-query output token cap (production-fix, cost-aware policy).
+
+        A classified ``SIMPLE`` query uses ``chat_simple_max_output_tokens``
+        when set (> 0), ``COMPLEX`` uses ``chat_complex_max_output_tokens``,
+        and everything else falls back to ``chat_max_output_tokens``. The cap
+        is a *ceiling*, not guaranteed spend: billing always counts the tokens
+        the provider actually generated, so larger caps for hard questions do
+        not inflate the cost of ordinary answers. 0 (global unset) means "no
+        explicit cap" — legacy behaviour preserved.
+        """
+        settings = get_settings()
+        if complexity == QueryComplexity.SIMPLE and settings.chat_simple_max_output_tokens > 0:
+            return settings.chat_simple_max_output_tokens
+        if complexity == QueryComplexity.COMPLEX and settings.chat_complex_max_output_tokens > 0:
+            return settings.chat_complex_max_output_tokens
+        return settings.chat_max_output_tokens
 
     @staticmethod
     def _strip_lexical_scores(
@@ -1149,6 +1170,10 @@ class RagService:
             rerank_input_count = retrieval.rerank_input_count
             hybrid_candidate_count = retrieval.hybrid_candidate_count
             adaptive_max_context_chars = retrieval.adaptive_max_context_chars
+            # Query complexity (always classified; drives the cost-aware output
+            # budget regardless of whether adaptive *retrieval* is enabled).
+            query_complexity = retrieval.complexity
+            max_output_tokens = self._output_budget(query_complexity)
         except EmbeddingCompatibilityError:
             # Audit fix (embedding identity): a mixed/incompatible corpus must
             # never surface as an error to the visitor. The repositories
@@ -1402,6 +1427,7 @@ class RagService:
                 async for delta in self._generation.stream_generate(
                     system=system_prompt,
                     messages=[(CHAT_ROLE_USER, user_prompt)],
+                    max_tokens=max_output_tokens,
                 ):
                     if ttft_ms is None:
                         ttft_ms = (time.perf_counter() - t2) * 1000.0
@@ -1515,6 +1541,31 @@ class RagService:
             else 0.0
         )
 
+        # Provider termination metadata (production fix): normalized
+        # finish_reason + whether the generation was cut off by a token cap.
+        # Read defensively so any compliant `GenerationClient` (incl. fakes)
+        # that predates the extended `GenerationUsage` still works.
+        finish_reason = (
+            usage.finish_reason if isinstance(getattr(usage, "finish_reason", None), str) else ""
+        )
+        truncated = bool(getattr(usage, "truncated", False))
+        reasoning_tokens = int(getattr(usage, "reasoning_tokens", 0) or 0)
+        if truncated:
+            logger.warning(
+                "generation_truncated tenant=%s website=%s session=%s provider=%s "
+                "model=%s finish_reason=%s output_tokens=%d output_cap=%d "
+                "estimated_cost=%.6f",
+                tenant_id,
+                website_id,
+                session.session_id,
+                provider_name,
+                model_name,
+                finish_reason,
+                usage.output_tokens,
+                max_output_tokens,
+                estimated_cost,
+            )
+
         assistant = ChatMessage.new(
             tenant_id=tenant_id,
             website_id=website_id,
@@ -1529,6 +1580,8 @@ class RagService:
         assistant.total_tokens = usage.input_tokens + usage.output_tokens
         assistant.estimated_cost = round(estimated_cost, 6)
         assistant.model_name = model_name
+        assistant.finish_reason = finish_reason
+        assistant.truncated = truncated
         # Persist the per-stage latency breakdown for the performance
         # dashboard (Phase 12.6). Durations only - never content or secrets.
         assistant.latency_embedding_ms = _round_ms(embedding_ms)
@@ -1584,6 +1637,8 @@ class RagService:
             model_name=model_name,
             response_time=response_time,
             substituted_fallback=substituted_fallback,
+            finish_reason=finish_reason,
+            truncated=truncated,
             confidence_score=confidence_score,
             confidence_metrics=confidence_metrics,
             answerability_metrics=answerability_metrics,
@@ -1613,6 +1668,10 @@ class RagService:
                 "provider": provider_name,
                 "model_name": model_name,
                 "estimated_cost": assistant.estimated_cost,
+                "output_cap": max_output_tokens,
+                "finish_reason": finish_reason,
+                "truncated": truncated,
+                "reasoning_tokens": reasoning_tokens,
                 "embedding_cache": "hit" if embedding_cache_hit else "miss",
                 "retrieval_cache": "hit" if retrieval_cache_hit else "miss",
                 "context_chars": context_chars,
@@ -1680,6 +1739,10 @@ class RagService:
                 provider_name=provider_name,
                 model_name=model_name,
                 estimated_cost=assistant.estimated_cost,
+                output_cap=max_output_tokens,
+                finish_reason=finish_reason,
+                truncated=truncated,
+                reasoning_tokens=reasoning_tokens,
                 embedding_cache_hit=embedding_cache_hit,
                 retrieval_cache_hit=retrieval_cache_hit,
                 context_chars=context_chars,
@@ -1717,9 +1780,30 @@ class RagService:
             # the `llm_tokens_used` metric so spend is trackable per kind.
             record_llm_tokens(kind="input", count=usage.input_tokens)
             record_llm_tokens(kind="output", count=usage.output_tokens)
+            # Safe structured telemetry (never logs prompts, answers or keys):
+            # provider + termination + token/cost metadata for one generation.
+            logger.info(
+                "generation_outcome tenant=%s website=%s session=%s provider=%s model=%s "
+                "finish_reason=%s truncated=%s input_tokens=%d output_tokens=%d "
+                "reasoning_tokens=%d output_cap=%d latency_ms=%.1f estimated_cost=%.6f",
+                tenant_id,
+                website_id,
+                session.session_id,
+                provider_name,
+                model_name,
+                finish_reason,
+                truncated,
+                usage.input_tokens,
+                usage.output_tokens,
+                reasoning_tokens,
+                max_output_tokens,
+                generation_ms,
+                estimated_cost,
+            )
             # Per-tenant AI quota accounting (Phase 14.9.4): best-effort
             # increment of the running daily/monthly token totals so the
-            # pre-call `check()` enforces budgets across turns.
+            # pre-call `check()` enforces budgets across turns. A truncated
+            # generation still counts its *actual* tokens (no cap pretending).
             try:
                 await LLMQuotaService().record(tenant_id, usage.input_tokens, usage.output_tokens)
             except Exception:  # pragma: no cover - best effort
@@ -2093,6 +2177,8 @@ class RagService:
         model_name: str,
         response_time: float,
         substituted_fallback: bool,
+        finish_reason: str = "",
+        truncated: bool = False,
         confidence_score: float | None,
         confidence_metrics: ConfidenceMetrics | None,
         answerability_metrics: AnswerabilityMetrics | None,
@@ -2110,6 +2196,12 @@ class RagService:
             "response_time_ms": int(response_time * 1000),
             "created_at": assistant.created_at.isoformat(),
             "prompt_version": self._prompt_version,
+            # Normalized provider termination reason and truncation flag
+            # (production fix). A truncated turn keeps `status: "completed"`
+            # (the stream finished) but is visibly marked truncated so clients
+            # never treat a capped answer as fully complete.
+            "finish_reason": finish_reason,
+            "truncated": truncated,
             # True when the safe fallback replaced the answer (empty
             # knowledge base, retrieval miss, low confidence, or a blank
             # generation).
@@ -2179,6 +2271,10 @@ class RagService:
         provider_name: str | None,
         model_name: str,
         estimated_cost: float,
+        output_cap: int,
+        finish_reason: str,
+        truncated: bool,
+        reasoning_tokens: int,
         embedding_cache_hit: bool,
         retrieval_cache_hit: bool,
         context_chars: int,
@@ -2222,6 +2318,10 @@ class RagService:
                 "rerank_embedding_ms": round(rerank_embedding_ms, 2),
                 "rerank_input_count": rerank_input_count,
                 "total_ms": round(total_ms, 2),
+                "output_cap": output_cap,
+                "finish_reason": finish_reason,
+                "truncated": truncated,
+                "reasoning_tokens": reasoning_tokens,
                 "context_chars": context_chars,
                 "estimated_prompt_tokens": estimated_prompt_tokens,
                 "fallback_attempts": fallback_attempts,

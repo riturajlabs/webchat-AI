@@ -495,6 +495,37 @@ describe('mount integration', () => {
     controller.destroy();
   });
 
+  it('renders a truncation notice when done marks the cap hit', async () => {
+    const fetchImpl = apiFetch(() => [
+      'event: message\ndata: {"delta":"Partial answer drawn from context."}\n\n',
+      'event: done\ndata: {"session_id":"s-1","message_id":"m-1","finish_reason":"MAX_TOKENS","truncated":true}\n\n',
+    ]);
+    const host = document.createElement('webchat-widget');
+    host.attachShadow({ mode: 'open' });
+    const controller = mount({
+      widgetId: 'widget_1',
+      apiBaseUrl: API_BASE,
+      fetchImpl,
+      host,
+    });
+    await controller.ready();
+    controller.open();
+    controller.sendMessage('What is pricing?');
+
+    const shadow = host.shadowRoot as ShadowRoot;
+    await vi.waitFor(() => {
+      const notice = shadow.querySelector<HTMLElement>('.wc-truncated');
+      expect(notice).toBeTruthy();
+      expect(notice?.textContent).toMatch(/shortened/i);
+    });
+    // The answer itself is kept; only an indicator is added.
+    expect(shadow.querySelector('.wc-bubble-content')?.textContent).toContain(
+      'Partial answer drawn from context.',
+    );
+
+    controller.destroy();
+  });
+
   it('recovers when the SSE body errors mid-stream (turn must not stay stuck)', async () => {
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);

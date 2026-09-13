@@ -447,7 +447,18 @@ class Settings(BaseSettings):
     # Question sanitization cap (prompt-injection defense, TRD §8).
     chat_question_max_chars: int = 2000
     # Generation settings for the Gemini answer stream.
+    # Global default output cap (tokens) for every answer. 0 disables an
+    # explicit cap (providers then apply their own default — not recommended:
+    # Groq silently truncates at 2048).
     chat_max_output_tokens: int = 4096
+    # Per-query-complexity output budgets (production fix, cost-aware policy).
+    # When > 0, a query classified SIMPLE uses `chat_simple_max_output_tokens`
+    # and a COMPLEX query uses `chat_complex_max_output_tokens` (MEDIUM falls
+    # back to the global cap). 0 = use `chat_max_output_tokens` for that class.
+    # The cap is a ceiling, not guaranteed spend: normal answers stop at STOP
+    # and pay only for tokens actually generated (billing tracks real usage).
+    chat_simple_max_output_tokens: int = 0
+    chat_complex_max_output_tokens: int = 0
     chat_temperature: float = 0.2
     # Per-chunk stream timeout (guards a stalled answer mid-stream).
     # Recommendation: 30s is appropriate for most use cases. Reduce only if

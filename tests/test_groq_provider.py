@@ -64,6 +64,103 @@ async def test_streams_deltas_and_captures_usage() -> None:
     assert provider.usage == GenerationUsage(input_tokens=12, output_tokens=7)
 
 
+async def test_max_tokens_included_in_payload() -> None:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, text=_sse(_delta("ok")))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+        async for _ in provider.stream_generate(
+            system="sys", messages=[("user", "q")], max_tokens=2048
+        ):
+            pass
+
+    assert captured[0]["max_tokens"] == 2048
+
+
+async def test_length_finish_reason_marks_truncated() -> None:
+    chunks = [
+        _delta("cut off mid"),
+        {
+            "id": "1",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 2048,
+                "total_tokens": 2060,
+            },
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=_sse(*chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+        deltas = [
+            d
+            async for d in provider.stream_generate(
+                system="sys", messages=[("user", "hi")], max_tokens=2048
+            )
+        ]
+
+    assert deltas == ["cut off mid"]
+    assert provider.usage == GenerationUsage(
+        input_tokens=12,
+        output_tokens=2048,
+        finish_reason="LENGTH",
+        truncated=True,
+        reasoning_tokens=0,
+    )
+
+
+async def test_reasoning_tokens_captured_when_present() -> None:
+    chunks = [
+        _delta("ok"),
+        {
+            "id": "1",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop",
+                    "completion_tokens_details": {"reasoning_tokens": 41},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 87,
+                "total_tokens": 92,
+                "completion_tokens_details": {"reasoning_tokens": 41},
+            },
+        },
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text=_sse(*chunks),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = _provider(client)
+        async for _ in provider.stream_generate(system="sys", messages=[("user", "hi")]):
+            pass
+
+    assert provider.usage.finish_reason == "STOP"
+    assert provider.usage.truncated is False
+    assert provider.usage.reasoning_tokens == 41
+    assert provider.usage.output_tokens == 87
+
+
 async def test_builds_openai_compatible_payload() -> None:
     captured: list[dict] = []
 

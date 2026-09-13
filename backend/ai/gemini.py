@@ -16,6 +16,11 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from backend.ai.finish_reason import (
+    FINISH_REASON_UNKNOWN,
+    TRUNCATING_FINISH_REASONS,
+    normalize_gemini_finish_reason,
+)
 from backend.core.config import get_settings
 from backend.core.errors import GenerationError, GenerationUnavailableError
 
@@ -32,10 +37,23 @@ _ROLE_MAP: dict[str, str] = {
 
 @dataclass(frozen=True)
 class GenerationUsage:
-    """Gemini token usage for the latest request (ADR-005 §5.8)."""
+    """Generation usage and termination metadata for the latest request.
+
+    ``input_tokens``/``output_tokens`` follow ADR-005 §5.8. ``finish_reason`
+    is the normalized provider termination reason (see
+    ``backend/ai/finish_reason.py``); ``truncated`` is True when the provider
+    stopped on a token-limit reason (MAX_TOKENS/LENGTH) — the answer may be
+    visibly cut off. ``reasoning_tokens`` is the provider-reported reasoning
+    budget when available (gemini-2.5 ``thoughts_token_count``, Groq
+    ``completion_tokens_details.reasoning_tokens``). It is *metadata only*:
+    billing cost uses ``output_tokens`` exactly as the provider charges it.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    finish_reason: str = FINISH_REASON_UNKNOWN
+    truncated: bool = False
+    reasoning_tokens: int = 0
 
 
 class GenerationClient(Protocol):
@@ -51,6 +69,7 @@ class GenerationClient(Protocol):
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]: ...
 
 
@@ -111,14 +130,23 @@ class GoogleGeminiClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
         """Stream answer deltas. Raises `GenerationError` on SDK failure.
+
+        ``max_tokens`` (0 = unset) overrides the client/output-cap configured
+        at construction time — the RAG service passes its budgeted cap so the
+        provider can never fall back to an unbounded default.
 
         Retries transient failures (timeout, rate limit, provider errors)
         up to ``llm_max_retries`` times with exponential backoff before
         giving up.  First-token timeouts are treated as unavailable and
         immediately propagated (no retry) so the Phase 9 router can fall
         through to another provider.
+
+        A clean ``MAX_TOKENS`` termination is *not* an exception: the stream
+        ends normally and ``usage.truncated`` reports the cap hit, so a
+        token-limit stop is never retried or re-requested.
         """
         settings = get_settings()
         max_retries = settings.llm_max_retries
@@ -128,7 +156,9 @@ class GoogleGeminiClient:
         for attempt in range(max_retries + 1):
             emitted_any = False
             try:
-                async for delta in self._stream_generate_once(system=system, messages=messages):
+                async for delta in self._stream_generate_once(
+                    system=system, messages=messages, max_tokens=max_tokens
+                ):
                     emitted_any = True
                     yield delta
                 return  # success — exit retry loop
@@ -161,22 +191,28 @@ class GoogleGeminiClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
         """Single attempt at streaming generation (no retry)."""
         contents = [
             {"role": _ROLE_MAP.get(role, role), "parts": [{"text": text}]}
             for role, text in messages
         ]
+        output_cap = max_tokens if max_tokens and max_tokens > 0 else self._max_output_tokens
         request = {
             "model": self._model,
             "contents": contents,
             "config": {
                 "system_instruction": system,
-                "max_output_tokens": self._max_output_tokens,
+                "max_output_tokens": output_cap,
                 "temperature": self._temperature,
                 "top_p": 0.95,
             },
         }
+        finish_reason = FINISH_REASON_UNKNOWN
+        input_tokens = 0
+        output_tokens = 0
+        reasoning_tokens = 0
         try:
             stream = await self._client().aio.models.generate_content_stream(**request)
             first_chunk = True
@@ -205,12 +241,26 @@ class GoogleGeminiClient:
                 text = getattr(chunk, "text", None)
                 if text:
                     yield text
+                # Termination metadata: the per-chunk `finish_reason` is None
+                # until the final chunk; keep the last non-None value (defensive
+                # against SDKs that surface it on any chunk).
+                candidates = getattr(chunk, "candidates", None)
+                if isinstance(candidates, (list, tuple)) and candidates:
+                    fr = getattr(candidates[0], "finish_reason", None)
+                    if fr is not None:
+                        finish_reason = normalize_gemini_finish_reason(fr)
                 metadata = getattr(chunk, "usage_metadata", None)
                 if metadata is not None:
-                    self._usage = GenerationUsage(
-                        input_tokens=int(getattr(metadata, "prompt_token_count", 0)),
-                        output_tokens=int(getattr(metadata, "candidates_token_count", 0)),
-                    )
+                    input_tokens = int(getattr(metadata, "prompt_token_count", 0))
+                    output_tokens = int(getattr(metadata, "candidates_token_count", 0))
+                    reasoning_tokens = int(getattr(metadata, "thoughts_token_count", 0))
+            self._usage = GenerationUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                finish_reason=finish_reason,
+                truncated=finish_reason in TRUNCATING_FINISH_REASONS,
+                reasoning_tokens=reasoning_tokens,
+            )
         except GenerationUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalized below

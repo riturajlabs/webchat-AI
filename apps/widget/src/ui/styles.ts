@@ -578,6 +578,19 @@ export const WIDGET_STYLES = `
     min-height: 24px;
   }
 
+  /* Truncation notice (production fix): only on completed, capped answers. */
+  .wc-truncated {
+    margin-top: 8px;
+    padding: 6px 8px;
+    font-size: 0.78em;
+    line-height: 1.4;
+    color: var(--wc-muted);
+    background: var(--wc-suggestion-border, var(--wc-border));
+    border-left: 3px solid var(--wc-primary);
+    border-radius: 4px;
+    opacity: 0.9;
+  }
+
   /* "Learn more" citation cards: compact, clean layout with external link. */
   .wc-sources {
     margin-top: 10px;

@@ -122,6 +122,7 @@ class FallbackGenerationClient:
         *,
         system: str,
         messages: list[tuple[str, str]],
+        max_tokens: int = 0,
     ) -> AsyncIterator[str]:
         if not self._providers:
             self._last_latency_metrics = ProviderLatencyMetrics(
@@ -152,7 +153,9 @@ class FallbackGenerationClient:
                 continue
             started_streaming = False
             try:
-                async for delta in provider.stream_generate(system=system, messages=messages):
+                async for delta in provider.stream_generate(
+                    system=system, messages=messages, max_tokens=max_tokens
+                ):
                     if not started_streaming:
                         started_streaming = True
                         ttft_ms = (time.perf_counter() - started) * 1000.0

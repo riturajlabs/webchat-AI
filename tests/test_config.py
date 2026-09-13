@@ -808,3 +808,20 @@ def test_production_accepts_real_stripe_key_formats() -> None:
     )
     assert settings.stripe_secret_key.startswith("sk_live_")
     assert settings.stripe_webhook_secret.startswith("whsec_")
+
+
+def test_chat_output_budget_settings_default_and_parse() -> None:
+    """Per-complexity output budgets default to 0 (fall back to the global cap)
+    and are overridable from env-style settings (production fix)."""
+    settings = Settings(
+        _env_file=None,
+        chat_simple_max_output_tokens=128,
+        chat_complex_max_output_tokens=1024,
+    )
+    assert settings.chat_simple_max_output_tokens == 128
+    assert settings.chat_complex_max_output_tokens == 1024
+    # The global ceiling stays the fallback for MEDIUM / unset classes.
+    empty = Settings(_env_file=None)
+    assert empty.chat_simple_max_output_tokens == 0
+    assert empty.chat_complex_max_output_tokens == 0
+    assert empty.chat_max_output_tokens > 0
