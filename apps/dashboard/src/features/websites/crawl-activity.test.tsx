@@ -153,6 +153,7 @@ const JOB_FAILED: CrawlJob = {
 interface MonitorKnobs {
   refreshIntervalMs?: number;
   knowledgeStartGraceMs?: number;
+  knowledgeIdleRefreshMs?: number;
   settleCheckIntervalMs?: number;
   failureVisibilityMs?: number;
   watchdogMs?: number;
@@ -194,6 +195,7 @@ function renderMonitor(store: ActiveCrawlStore, knobs: MonitorKnobs = {}) {
         store={store}
         refreshIntervalMs={knobs.refreshIntervalMs ?? 40}
         knowledgeStartGraceMs={knobs.knowledgeStartGraceMs ?? 1000}
+        knowledgeIdleRefreshMs={knobs.knowledgeIdleRefreshMs ?? 1000}
         settleCheckIntervalMs={knobs.settleCheckIntervalMs ?? 30}
         failureVisibilityMs={knobs.failureVisibilityMs ?? 300}
         watchdogMs={knobs.watchdogMs ?? 4000}
@@ -389,10 +391,13 @@ describe('CrawlActivityProvider + monitor', () => {
     await waitFor(() => expect(screen.getByTestId('list')).toHaveTextContent('list:8:ready'));
   });
 
-  it('drops a completed job after the grace window when embedding never starts', async () => {
+  it('keeps tracking a completed job after the grace window at low frequency, then settles when embedding later starts', async () => {
     const store = createActiveCrawlStore();
     store.set('site-1', 'job-1');
-    const { queryClient } = renderMonitor(store, { knowledgeStartGraceMs: 800 });
+    const { queryClient } = renderMonitor(store, {
+      knowledgeStartGraceMs: 800,
+      knowledgeIdleRefreshMs: 150,
+    });
 
     const es = latest();
     await act(async () => {
@@ -403,7 +408,7 @@ describe('CrawlActivityProvider + monitor', () => {
     });
 
     // Terminal observed, but knowledge_status stays 'none' ("no embedding
-    // configured" case): the job is kept for the grace window...
+    // configured / embedding queued behind other jobs").
     jobs['job-1'] = { ...JOB_COMPLETED };
     await observeJobStatus(queryClient, 'job-1');
     await waitFor(() =>
@@ -411,11 +416,76 @@ describe('CrawlActivityProvider + monitor', () => {
     );
     expect(store.getJobs().size).toBe(1);
 
-    // ...then dropped to avoid infinite polling.
-    await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 2000 });
+    // Grace expires without embedding starting: the watcher must NOT abandon
+    // the website — it downshifts to a low-frequency watch instead.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    expect(store.getJobs().size).toBe(1);
+
+    // Embedding starts late: the low-frequency poll observes 'processing',
+    // resumes the live list update, and keeps watching until it settles.
+    sites['site-1'] = { ...SITE_EMBEDDING };
+    await waitFor(() => expect(screen.getByTestId('list')).toHaveTextContent('list:5:processing'));
+
+    // Embedding finishes → the job settles and the monitor drops it.
+    sites['site-1'] = { ...SITE_READY };
+    await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 3000 });
     await waitFor(() =>
       expect(screen.getByTestId('probe-site-1')).toHaveTextContent('idle|no-sse|'),
     );
+    await waitFor(() => expect(screen.getByTestId('list')).toHaveTextContent('list:8:ready'));
+  });
+
+  it('settles a completed job once knowledge reaches ready after the grace window', async () => {
+    const store = createActiveCrawlStore();
+    store.set('site-1', 'job-1');
+    const { queryClient } = renderMonitor(store, {
+      knowledgeStartGraceMs: 600,
+      knowledgeIdleRefreshMs: 100,
+    });
+
+    const es = latest();
+    await act(async () => {
+      es.triggerOpen();
+    });
+    await act(async () => {
+      es.triggerEvent('crawl.completed', { status: 'completed' });
+    });
+    jobs['job-1'] = { ...JOB_COMPLETED };
+    await observeJobStatus(queryClient, 'job-1');
+    await waitFor(() => expect(store.getJobs().size).toBe(1));
+
+    // Embedding never enters 'processing'; knowledge later jumps straight to
+    // ready. The idle watch still detects the settled state and drops the job.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    sites['site-1'] = { ...SITE_READY };
+    await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByTestId('list')).toHaveTextContent('list:8:ready'));
+  });
+
+  it('settles a completed job once knowledge reaches failed after the grace window', async () => {
+    const store = createActiveCrawlStore();
+    store.set('site-1', 'job-1');
+    const { queryClient } = renderMonitor(store, {
+      knowledgeStartGraceMs: 600,
+      knowledgeIdleRefreshMs: 100,
+    });
+
+    const es = latest();
+    await act(async () => {
+      es.triggerOpen();
+    });
+    await act(async () => {
+      es.triggerEvent('crawl.completed', { status: 'completed' });
+    });
+    jobs['job-1'] = { ...JOB_COMPLETED };
+    await observeJobStatus(queryClient, 'job-1');
+    await waitFor(() => expect(store.getJobs().size).toBe(1));
+
+    // Embedding never enters 'processing'; knowledge later turns 'failed'.
+    // The idle watch still detects the failure and drops the job.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    sites['site-1'] = { ...SITE, knowledge_status: 'failed' };
+    await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 3000 });
   });
 
   it('keeps a failed crawl visible long enough for retry, then stops tracking it', async () => {

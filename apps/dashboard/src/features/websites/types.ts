@@ -109,3 +109,24 @@ export interface CrawlProgressEvent {
   chunks?: number;
   error?: string;
 }
+
+/**
+ * A website is chat-ready only when BOTH the crawl AND its knowledge-base
+ * embedding have finished. `website.status` flips to 'ready' when the crawl
+ * terminates (before embedding); `website.knowledge_status` reaches 'ready'
+ * only after every document is embedded.
+ */
+export function isChatReady(website: Pick<Website, 'status' | 'knowledge_status'>): boolean {
+  return website.status === 'ready' && website.knowledge_status === 'ready';
+}
+
+/**
+ * True while the crawl is complete but the knowledge base is still being
+ * embedded (status 'ready' + knowledge_status 'processing'). The UI must NOT
+ * advertise the website as fully ready for chat in this state.
+ */
+export function isEmbeddingInProgress(
+  website: Pick<Website, 'status' | 'knowledge_status'>,
+): boolean {
+  return website.status === 'ready' && website.knowledge_status === 'processing';
+}

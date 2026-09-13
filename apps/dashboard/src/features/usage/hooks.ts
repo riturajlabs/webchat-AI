@@ -15,10 +15,16 @@ export const usageKeys = {
   plans: ['usage', 'plans'] as const,
 };
 
+export const USAGE_REFRESH_MS = 60_000;
+
 export function useUsage() {
   return useQuery({
     queryKey: usageKeys.usage,
     queryFn: () => api.get<Usage>('/api/billing/usage'),
+    // Low-frequency refresh so dashboard summary stats (e.g. "Messages sent")
+    // stay reasonably fresh after the Worker processes new chats — page-scoped
+    // polling that stops when the consuming page unmounts.
+    refetchInterval: USAGE_REFRESH_MS,
   });
 }
 

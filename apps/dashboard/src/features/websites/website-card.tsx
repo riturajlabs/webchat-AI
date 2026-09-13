@@ -4,10 +4,11 @@ import { ChevronDown, ExternalLink, Pencil, Play, RefreshCw, Trash2, Loader2 } f
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { StatusBadge } from './status-badge';
-import { CrawlJobProgressBar } from './crawl-job-progress-bar';
+import { WebsiteStatusBadge } from './status-badge';
+import { CrawlJobProgressBar, GeneratingEmbeddingsStatus } from './crawl-job-progress-bar';
 import { KnowledgeBadge } from './knowledge-badge';
 import { DEFAULT_WEBSITE_IMAGE } from './constants';
+import { isEmbeddingInProgress } from './types';
 import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 interface WebsiteCardProps {
@@ -41,6 +42,11 @@ export function WebsiteCard({
     setImageSrc(website.preview_image || DEFAULT_WEBSITE_IMAGE);
   }, [website.preview_image]);
   const isRunning = crawlJob?.status === 'running' || crawlPending;
+  // A crawl that is actually in flight takes precedence over the knowledge
+  // phase: the embedding block only shows once the crawl job is done (or was
+  // never tracked) but the knowledge base is still being embedded.
+  const jobActive =
+    crawlJob !== null && crawlJob.status !== 'completed' && crawlJob.status !== 'failed';
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border bg-card p-4 shadow-sm">
@@ -66,7 +72,7 @@ export function WebsiteCard({
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         </div>
-        <StatusBadge status={website.status} />
+        <WebsiteStatusBadge website={website} />
       </div>
 
       <div className="flex items-center gap-4 text-sm text-muted-foreground">
@@ -78,7 +84,11 @@ export function WebsiteCard({
         <KnowledgeBadge status={website.knowledge_status} />
       </div>
 
-      {crawlJob ? (
+      {crawlJob && (crawlJob.status === 'failed' || jobActive) ? (
+        <CrawlJobProgressBar job={crawlJob} progress={crawlProgress} sseConnected={sseConnected} />
+      ) : isEmbeddingInProgress(website) ? (
+        <GeneratingEmbeddingsStatus website={website} />
+      ) : crawlJob ? (
         <CrawlJobProgressBar job={crawlJob} progress={crawlProgress} sseConnected={sseConnected} />
       ) : null}
 

@@ -14,8 +14,9 @@ import {
 
 import { useAuth } from '@/features/auth/auth-context';
 import { OnboardingChecklist } from '@/features/dashboard/onboarding-checklist';
-import { StatusBadge } from '@/features/websites/status-badge';
+import { WebsiteStatusBadge } from '@/features/websites/status-badge';
 import { useWebsites } from '@/features/websites/hooks';
+import { isChatReady, isEmbeddingInProgress } from '@/features/websites/types';
 import type { Website } from '@/features/websites/types';
 import { useUsage } from '@/features/usage/hooks';
 import { useConversations } from '@/features/conversations/hooks';
@@ -90,7 +91,9 @@ export function DashboardHome() {
     (site) =>
       site.status === 'pending' || site.status === 'crawling' || site.status === 'processing',
   ).length;
-  const ready = websites.filter((site) => site.status === 'ready').length;
+  // "Ready" means chat-ready: the crawl AND the knowledge base are both done.
+  const ready = websites.filter(isChatReady).length;
+  const embedding = websites.filter(isEmbeddingInProgress).length;
   const failed = websites.filter((site) => site.status === 'failed').length;
 
   const conversationCount = conversationsData?.total;
@@ -136,7 +139,11 @@ export function DashboardHome() {
   const checklistSteps = [
     { label: 'Add website', href: '/websites', done: websites.length > 0 },
     { label: 'Crawl knowledge', href: '/knowledge', done: totalDocuments > 0 || totalPages > 0 },
-    { label: 'Install widget', href: '/widget', done: websites.some((s) => s.status === 'ready') },
+    {
+      label: 'Install widget',
+      href: '/widget',
+      done: websites.some(isChatReady),
+    },
   ];
 
   return (
@@ -225,7 +232,12 @@ export function DashboardHome() {
             <div className="flex flex-col gap-4">
               <QuickActions />
               {websites.length > 0 ? (
-                <CrawlStatusCard crawling={crawling} ready={ready} failed={failed} />
+                <CrawlStatusCard
+                  crawling={crawling}
+                  embedding={embedding}
+                  ready={ready}
+                  failed={failed}
+                />
               ) : null}
             </div>
           </div>
@@ -256,7 +268,7 @@ function RecentWebsites({ websites }: { websites: Website[] }) {
                   {website.url} · last crawled {formatDate(website.last_crawled_at)}
                 </p>
               </div>
-              <StatusBadge status={website.status} />
+              <WebsiteStatusBadge website={website} />
             </li>
           ))}
         </ul>
@@ -267,10 +279,12 @@ function RecentWebsites({ websites }: { websites: Website[] }) {
 
 function CrawlStatusCard({
   crawling,
+  embedding,
   ready,
   failed,
 }: {
   crawling: number;
+  embedding: number;
   ready: number;
   failed: number;
 }) {
@@ -280,10 +294,17 @@ function CrawlStatusCard({
         <CardTitle>Crawl status</CardTitle>
         <CardDescription>Current state of connected websites.</CardDescription>
       </CardHeader>
-      <CardContent className="grid grid-cols-3 gap-4 text-center">
+      <CardContent className="grid grid-cols-4 gap-4 text-center">
         <div>
           <p className="text-2xl font-bold tracking-tight">{crawling}</p>
           <p className="text-xs text-muted-foreground">In progress</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold tracking-tight">{embedding}</p>
+          <p className="text-xs text-muted-foreground">
+            Embedding
+            <span className="sr-only">Generating embeddings</span>
+          </p>
         </div>
         <div>
           <p className="text-2xl font-bold tracking-tight">{ready}</p>

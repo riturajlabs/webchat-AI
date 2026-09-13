@@ -13,6 +13,22 @@ export const conversationsKeys = {
   detail: (sessionId: string) => ['conversations', sessionId] as const,
 };
 
+/**
+ * How often the open conversations list refreshes in the background. Modest
+ * polling (page-scoped — it stops as soon as the mount that rendered the query
+ * unmounts) so visitor chats added by the backend appear without a manual
+ * refresh.
+ */
+export const CONVERSATIONS_LIST_REFRESH_MS = 8_000;
+
+/**
+ * How often an individual conversation is refreshed while it can still be
+ * changing. `status` is 'awaiting' while the assistant is (or is about to be)
+ * replying and 'answered' once the turn is complete, so polling stops once the
+ * conversation is terminal ('answered').
+ */
+export const CONVERSATION_ACTIVE_REFRESH_MS = 5_000;
+
 export interface ConversationsParams {
   page: number;
   perPage: number;
@@ -33,6 +49,7 @@ export function useConversations({ page, perPage, search, websiteId }: Conversat
   return useQuery({
     queryKey: ['conversations', 'list', { page, perPage, search, websiteId }],
     queryFn: () => api.get<ConversationListResponse>(`/api/conversations?${searchParams}`),
+    refetchInterval: CONVERSATIONS_LIST_REFRESH_MS,
   });
 }
 
@@ -42,6 +59,8 @@ export function useConversation(sessionId: string) {
     queryFn: () =>
       api.get<ConversationDetail>(`/api/conversations/${encodeURIComponent(sessionId)}`),
     enabled: sessionId.length > 0,
+    refetchInterval: (query) =>
+      query.state.data?.status === 'answered' ? false : CONVERSATION_ACTIVE_REFRESH_MS,
   });
 }
 

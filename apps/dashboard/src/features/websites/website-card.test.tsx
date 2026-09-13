@@ -68,3 +68,16 @@ describe('WebsiteCard responsive behavior', () => {
     expect(link.closest('.min-w-0')).not.toBeNull();
   });
 });
+
+describe('WebsiteCard knowledge phase', () => {
+  it('shows the embedding-in-progress block instead of "ready" while knowledge is processing', () => {
+    renderCard({ ...SITE, knowledge_status: 'processing' });
+    // The status badge switches to the embedding state — no green "ready".
+    expect(screen.queryByText('ready')).not.toBeInTheDocument();
+    // Both the status badge and the card body report the same embedding phase.
+    expect(screen.getAllByText('Generating embeddings…').length).toBeGreaterThanOrEqual(1);
+    // Truthful counts only: documents/chunks already reported by the website
+    // API, not an invented percentage.
+    expect(screen.getByText('3 documents embedded · 42 chunks')).toBeInTheDocument();
+  });
+});

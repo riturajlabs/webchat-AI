@@ -2,7 +2,7 @@
 
 import { AlertTriangle, Brain, FileText, Globe, Loader2 } from 'lucide-react';
 
-import type { CrawlJob, CrawlProgressEvent } from './types';
+import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 interface CrawlJobProgressBarProps {
   job: CrawlJob;
@@ -12,6 +12,36 @@ interface CrawlJobProgressBarProps {
 
 function isActive(status: CrawlJob['status']): boolean {
   return status === 'pending' || status === 'running' || status === 'processing';
+}
+
+/**
+ * Post-crawl knowledge/embedding phase. Rendered from the website snapshots the
+ * crawl monitor already polls (`website.knowledge_status`) — no backend events.
+ * Only truthful counts are shown (documents/chunks already reported by the API);
+ * no synthetic 0–100% percentage is invented.
+ */
+export function GeneratingEmbeddingsStatus({ website }: { website: Website }) {
+  return (
+    <div role="status" className="flex flex-col gap-1 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2">
+        <Brain className="size-3 shrink-0" aria-hidden="true" />
+        <span className="font-medium">
+          Generating embeddings…
+          <span aria-hidden="true" />
+        </span>
+      </div>
+      {website.knowledge_documents > 0 ? (
+        <div className="flex items-center gap-2">
+          <Loader2 className="size-3 animate-spin shrink-0" aria-hidden="true" />
+          <span>
+            {website.knowledge_documents}{' '}
+            {website.knowledge_documents === 1 ? 'document' : 'documents'} embedded ·{' '}
+            {website.knowledge_chunks} chunks
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export function CrawlJobProgressBar({ job, progress, sseConnected }: CrawlJobProgressBarProps) {

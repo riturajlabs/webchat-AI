@@ -159,10 +159,12 @@ describe('WebsiteList', () => {
   });
 
   it('renders the websites when loaded', () => {
+    mockWebsites({ data: [{ ...SITE, knowledge_status: 'ready' }] });
     renderList();
     expect(screen.getByText('Acme Inc')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /acme.example.com/ })).toBeInTheDocument();
-    expect(screen.getByText('ready')).toBeInTheDocument();
+    // Both status badge and knowledge badge render 'ready' when the site is fully settled.
+    expect(screen.getAllByText('ready')).toHaveLength(2);
   });
 
   it('renders a website preview image and falls back to the default when it is broken', () => {
@@ -393,7 +395,10 @@ describe('WebsiteList', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Crawl rate-limited');
   });
 
-  it('does not render progress for websites without an active job', () => {
+  it('does not render crawl progress for websites without an active job or pending knowledge', () => {
+    // Fully settled site: no active crawl job and no embedding in progress —
+    // there is nothing progress-like to show.
+    mockWebsites({ data: [{ ...SITE, knowledge_status: 'ready' }] });
     renderList();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });

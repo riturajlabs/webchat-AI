@@ -45,9 +45,17 @@ export const CRAWL_ACTIVITY_REFRESH_MS = 3_000;
  * After a crawl reaches a terminal state, the knowledge embedding phase is
  * enqueued asynchronously (its fan-out job sets `knowledge_status` to
  * 'processing' only once it starts). Keep watching for this grace window
- * before deciding no embedding will happen and dropping the job.
+ * before downgrading to a low-frequency watch.
  */
 export const KNOWLEDGE_START_GRACE_MS = 60_000;
+
+/**
+ * Refresh frequency used once the knowledge-start grace window has expired
+ * without embedding starting. The website is NOT abandoned (embedding can
+ * still be queued behind other jobs) but is polled far less aggressively so a
+ * slow backend never causes high-frequency polling forever.
+ */
+export const KNOWLEDGE_IDLE_REFRESH_MS = 30_000;
 
 /** How often the terminal watcher re-evaluates the knowledge phase. */
 export const SETTLE_CHECK_INTERVAL_MS = 1_000;
@@ -113,6 +121,7 @@ function CrawlJobSync({
   store,
   refreshIntervalMs,
   knowledgeStartGraceMs,
+  knowledgeIdleRefreshMs,
   settleCheckIntervalMs,
   failureVisibilityMs,
   watchdogMs,
@@ -122,6 +131,7 @@ function CrawlJobSync({
   store: ActiveCrawlStore;
   refreshIntervalMs: number;
   knowledgeStartGraceMs: number;
+  knowledgeIdleRefreshMs: number;
   settleCheckIntervalMs: number;
   failureVisibilityMs: number;
   watchdogMs: number;
@@ -134,10 +144,21 @@ function CrawlJobSync({
   const crawlJob = crawlJobQuery.data ?? null;
   const terminal = crawlJob !== null && TERMINAL_CRAWL_STATUSES.has(crawlJob.status);
 
+  // 'active' polls the website at the fast refresh interval while knowledge is
+  // embedding; 'idle' is entered when the knowledge-start grace expires without
+  // embedding starting — the website is downshifted to a low-frequency watch
+  // instead of being abandoned, so a late processing/ready/failed phase is
+  // still observed without aggressive polling.
+  const [knowledgeWatch, setKnowledgeWatch] = useState<'active' | 'idle'>('active');
+  const knowledgeWatchRef = useRef<'active' | 'idle'>('active');
+  knowledgeWatchRef.current = knowledgeWatch;
+
   const websiteQuery = useWebsite(websiteId, {
     refetchInterval: terminal
-      ? (query) =>
-          isWebsiteSettled(query.state.data?.knowledge_status) ? false : refreshIntervalMs
+      ? (query) => {
+          if (isWebsiteSettled(query.state.data?.knowledge_status)) return false;
+          return knowledgeWatch === 'idle' ? knowledgeIdleRefreshMs : refreshIntervalMs;
+        }
       : refreshIntervalMs,
   });
   const website = websiteQuery.data;
@@ -206,12 +227,15 @@ function CrawlJobSync({
   // detail) once, then keep watching while the knowledge base is still
   // embedding. A failed crawl has no knowledge phase — it is kept long enough
   // for the failure + retry UI to be visible, then dropped. A completed crawl
-  // is dropped once its knowledge phase settles, or after a grace period if
-  // it never starts.
+  // is dropped once its knowledge phase settles; if embedding has not started
+  // within the grace window the watcher downshifts to a slow watch instead of
+  // giving up (embedding may still be queued behind other jobs), and resumes
+  // fast polling if embedding later begins.
   useEffect(() => {
     if (!terminal) {
       terminalHandledRef.current = false;
       terminalAtRef.current = null;
+      setKnowledgeWatch('active');
       return;
     }
     if (!terminalHandledRef.current) {
@@ -222,20 +246,20 @@ function CrawlJobSync({
     }
     const id = setInterval(() => {
       const { jobFailed, settle, knowledgeStatus } = stateRef.current;
+      const elapsed = terminalAtRef.current === null ? 0 : Date.now() - terminalAtRef.current;
       if (settle) {
         finishRef.current();
-      } else if (
-        jobFailed &&
-        terminalAtRef.current !== null &&
-        Date.now() - terminalAtRef.current > failureVisibilityMs
-      ) {
+      } else if (jobFailed && elapsed > failureVisibilityMs) {
         finishRef.current();
-      } else if (
-        terminalAtRef.current !== null &&
-        knowledgeStatus !== 'processing' &&
-        Date.now() - terminalAtRef.current > knowledgeStartGraceMs
-      ) {
-        finishRef.current();
+      } else if (knowledgeStatus === 'processing') {
+        // Embedding started (possibly late): resume fresh polling.
+        if (knowledgeWatchRef.current !== 'active') {
+          setKnowledgeWatch('active');
+        }
+      } else if (elapsed > knowledgeStartGraceMs && knowledgeWatchRef.current !== 'idle') {
+        // No embedding within the grace window: don't abandon the website —
+        // just downshift to a low-frequency watch.
+        setKnowledgeWatch('idle');
       }
     }, settleCheckIntervalMs);
     return () => clearInterval(id);
@@ -266,6 +290,7 @@ export function CrawlActivityProvider({
   store = activeCrawlStore,
   refreshIntervalMs = CRAWL_ACTIVITY_REFRESH_MS,
   knowledgeStartGraceMs = KNOWLEDGE_START_GRACE_MS,
+  knowledgeIdleRefreshMs = KNOWLEDGE_IDLE_REFRESH_MS,
   settleCheckIntervalMs = SETTLE_CHECK_INTERVAL_MS,
   failureVisibilityMs = FAILURE_VISIBILITY_MS,
   watchdogMs = WATCHDOG_MS,
@@ -274,6 +299,7 @@ export function CrawlActivityProvider({
   store?: ActiveCrawlStore;
   refreshIntervalMs?: number;
   knowledgeStartGraceMs?: number;
+  knowledgeIdleRefreshMs?: number;
   settleCheckIntervalMs?: number;
   failureVisibilityMs?: number;
   watchdogMs?: number;
@@ -322,6 +348,7 @@ export function CrawlActivityProvider({
           store={store}
           refreshIntervalMs={refreshIntervalMs}
           knowledgeStartGraceMs={knowledgeStartGraceMs}
+          knowledgeIdleRefreshMs={knowledgeIdleRefreshMs}
           settleCheckIntervalMs={settleCheckIntervalMs}
           failureVisibilityMs={failureVisibilityMs}
           watchdogMs={watchdogMs}
