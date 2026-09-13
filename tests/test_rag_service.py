@@ -26,6 +26,7 @@ from backend.services.chat.confidence import (
     QueryType,
 )
 from backend.services.chat.context_optimizer import OptimizationMetrics
+from backend.services.chat.query_classifier import QueryComplexity
 from backend.services.chat.rag_service import RagService
 from backend.services.chat.retrieval_strategy import RetrievalMetricsInfo
 from backend.utils.prompt_security import InjectionTracker
@@ -2354,3 +2355,24 @@ async def test_output_budget_is_passed_to_generation(monkeypatch) -> None:
         question="What plans do you offer and what are their features?",
     )
     assert env.generation.last_max_tokens == backend_settings().chat_max_output_tokens
+
+
+def test_output_budget_selects_intended_production_limits(monkeypatch) -> None:
+    """Intended deployment budgets: SIMPLE -> 1024, COMPLEX -> 3072,
+    MEDIUM/other -> 4096. Unset class overrides (0) fall back to the global."""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "chat_max_output_tokens", 4096)
+    monkeypatch.setattr(settings, "chat_simple_max_output_tokens", 1024)
+    monkeypatch.setattr(settings, "chat_complex_max_output_tokens", 3072)
+    service = RagService.__new__(RagService)
+
+    assert service._output_budget(QueryComplexity.SIMPLE) == 1024
+    assert service._output_budget(QueryComplexity.COMPLEX) == 3072
+    assert service._output_budget(QueryComplexity.MEDIUM) == 4096
+
+    # Legacy: overrides left at 0 exercise the global ceiling for every class.
+    monkeypatch.setattr(settings, "chat_simple_max_output_tokens", 0)
+    monkeypatch.setattr(settings, "chat_complex_max_output_tokens", 0)
+    assert service._output_budget(QueryComplexity.SIMPLE) == 4096
+    assert service._output_budget(QueryComplexity.COMPLEX) == 4096
+    assert service._output_budget(QueryComplexity.MEDIUM) == 4096

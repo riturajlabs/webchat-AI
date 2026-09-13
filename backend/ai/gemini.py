@@ -86,11 +86,15 @@ class GoogleGeminiClient:
         temperature: float | None = None,
         timeout_seconds: float | None = None,
         first_token_timeout_seconds: float | None = None,
+        thinking_budget: int | None = None,
         genai_client: Any | None = None,
     ) -> None:
         settings = get_settings()
         self._model = model or settings.gemini_model
         self._max_output_tokens = max_output_tokens or settings.chat_max_output_tokens
+        self._thinking_budget = (
+            settings.gemini_thinking_budget if thinking_budget is None else thinking_budget
+        )
         self._temperature = temperature if temperature is not None else settings.chat_temperature
         self._timeout_seconds = (
             timeout_seconds if timeout_seconds is not None else settings.generation_timeout_seconds
@@ -199,15 +203,22 @@ class GoogleGeminiClient:
             for role, text in messages
         ]
         output_cap = max_tokens if max_tokens and max_tokens > 0 else self._max_output_tokens
+        config: dict[str, Any] = {
+            "system_instruction": system,
+            "max_output_tokens": output_cap,
+            "temperature": self._temperature,
+            "top_p": 0.95,
+        }
+        # Thinking budget control (root-cause fix): Google counts Gemini 2.5
+        # thinking tokens against `max_output_tokens`, so dynamic thinking can
+        # eat the visible-output budget and truncate the answer. A budget >= 0
+        # pins thinking explicitly (0 disables it); < 0 keeps the SDK default.
+        if self._thinking_budget >= 0:
+            config["thinking_config"] = {"thinking_budget": self._thinking_budget}
         request = {
             "model": self._model,
             "contents": contents,
-            "config": {
-                "system_instruction": system,
-                "max_output_tokens": output_cap,
-                "temperature": self._temperature,
-                "top_p": 0.95,
-            },
+            "config": config,
         }
         finish_reason = FINISH_REASON_UNKNOWN
         input_tokens = 0

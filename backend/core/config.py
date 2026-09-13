@@ -229,6 +229,14 @@ class Settings(BaseSettings):
     # AI (Phase 4-6)
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    # Gemini 2.5 reasoning (thinking) budget for answer generation. Google
+    # counts thinking tokens against `max_output_tokens`, so dynamic thinking
+    # can quietly consume most of a small chat budget and truncate the visible
+    # answer (finish_reason=MAX_TOKENS, truncated=true). 0 disables thinking,
+    # a positive value caps thinking tokens (Gemini 2.5 Flash allows 1..24576),
+    # and a negative value leaves the SDK default (dynamic — not recommended
+    # for website-chat). Env: GEMINI_THINKING_BUDGET.
+    gemini_thinking_budget: int = 0
     embedding_model: str = "gemini-embedding-001"
     # Increment when preprocessing or embedding semantics change; existing
     # chunks must be re-indexed before the new version can retrieve them.

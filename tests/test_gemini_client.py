@@ -194,6 +194,55 @@ async def test_maps_roles_onto_gemini_roles(fake_sdk) -> None:
     assert config["temperature"] == 0.2
 
 
+async def test_thinking_config_disabled_by_default(fake_sdk) -> None:
+    """Budget 0 pins `thinking_config` so hidden reasoning cannot eat the
+    visible-output budget (root-cause fix for MAX_TOKENS truncation)."""
+    fake_sdk.chunks = [FakeGenerationChunk(text="ok")]
+    client = _client(fake_sdk, thinking_budget=0)
+
+    async for _ in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        pass
+
+    assert fake_sdk.last_request["config"]["thinking_config"] == {"thinking_budget": 0}
+
+
+async def test_thinking_config_caps_positive_budget(fake_sdk) -> None:
+    """A positive budget is forwarded verbatim as the thinking cap."""
+    fake_sdk.chunks = [FakeGenerationChunk(text="ok")]
+    client = _client(fake_sdk, thinking_budget=2048)
+
+    async for _ in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        pass
+
+    assert fake_sdk.last_request["config"]["thinking_config"] == {"thinking_budget": 2048}
+
+
+async def test_thinking_config_omitted_for_dynamic_budget(fake_sdk) -> None:
+    """A negative budget keeps the SDK default (dynamic thinking)."""
+    fake_sdk.chunks = [FakeGenerationChunk(text="ok")]
+    client = _client(fake_sdk, thinking_budget=-1)
+
+    async for _ in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        pass
+
+    assert "thinking_config" not in fake_sdk.last_request["config"]
+
+
+async def test_thinking_config_defaults_from_settings(fake_sdk) -> None:
+    """When not overridden, the client uses settings.gemini_thinking_budget."""
+    settings = get_settings()
+    old_budget = settings.gemini_thinking_budget
+    settings.gemini_thinking_budget = 0
+    try:
+        fake_sdk.chunks = [FakeGenerationChunk(text="ok")]
+        client = _client(fake_sdk)
+        async for _ in client.stream_generate(system="sys", messages=[("user", "hi")]):
+            pass
+        assert fake_sdk.last_request["config"]["thinking_config"] == {"thinking_budget": 0}
+    finally:
+        settings.gemini_thinking_budget = old_budget
+
+
 async def test_no_text_chunks_yield_nothing(fake_sdk) -> None:
     fake_sdk.chunks = [FakeGenerationChunk(text=None)]
     client = _client(fake_sdk)
