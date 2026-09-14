@@ -43,6 +43,10 @@ class ConversationMessageOut(BaseModel):
     response_time: float | None
     input_tokens: int
     output_tokens: int
+    # Turn outcome marker: "" on successful/legacy turns, "failed" when the
+    # generation errored after streaming a partial answer that is preserved in
+    # `content`. Additive field — the UI renders a partial-answer notice.
+    status: str = ""
     created_at: datetime
 
 

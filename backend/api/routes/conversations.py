@@ -111,6 +111,7 @@ async def get_conversation(
                 response_time=message.response_time,
                 input_tokens=message.input_tokens,
                 output_tokens=message.output_tokens,
+                status=message.status,
                 created_at=message.created_at,
             )
             for message in item.messages

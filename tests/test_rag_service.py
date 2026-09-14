@@ -15,7 +15,12 @@ from backend.core.config import get_settings
 from backend.core.embedding_identity import EmbeddingIdentity
 from backend.core.errors import EmbeddingUnavailableError, GenerationError
 from backend.core.metrics import render_prometheus, reset_registry
-from backend.models.chat_message import CHAT_ROLE_ASSISTANT, CHAT_ROLE_USER, ChatMessage
+from backend.models.chat_message import (
+    CHAT_MESSAGE_STATUS_FAILED,
+    CHAT_ROLE_ASSISTANT,
+    CHAT_ROLE_USER,
+    ChatMessage,
+)
 from backend.models.chat_session import ChatSession
 from backend.models.knowledge_chunk import KnowledgeChunk
 from backend.prompts.rag import RAG_PROMPT_VERSION, UNKNOWN_ANSWER_FALLBACK
@@ -29,6 +34,10 @@ from backend.services.chat.context_optimizer import OptimizationMetrics
 from backend.services.chat.query_classifier import QueryComplexity
 from backend.services.chat.rag_service import RagService
 from backend.services.chat.retrieval_strategy import RetrievalMetricsInfo
+from backend.services.conversations.conversation_service import (
+    CONVERSATION_STATUS_FAILED,
+    ConversationService,
+)
 from backend.utils.prompt_security import InjectionTracker
 
 from tests.chat_helpers import (
@@ -39,6 +48,7 @@ from tests.chat_helpers import (
 )
 from tests.fakes import (
     BlockingWriteCacheStore,
+    FakeAuditLogRepository,
     FakeCacheStore,
     FakeChatMessageRepository,
     FakeChatSessionRepository,
@@ -62,6 +72,65 @@ def backend_settings():
 
 async def _stream(env, **kwargs):
     return await consume(env.rag.stream_answer(**kwargs))
+
+
+class _FailAfterDeltasGeneration(FakeGenerationClient):
+    """Fake that streams `deltas` then raises `failure` mid-stream.
+
+    Models the production incident: a provider error after one or more
+    assistant deltas were already sent to the client.
+    """
+
+    def __init__(self, deltas: list[str], failure: Exception) -> None:
+        super().__init__(deltas=deltas)
+        self.failure = failure
+
+    def stream_generate(
+        self,
+        *,
+        system: str,
+        messages: list[tuple[str, str]],
+        max_tokens: int = 0,
+    ):
+        self.calls.append({"system": system, "messages": messages, "max_tokens": max_tokens})
+        self.last_max_tokens = max_tokens
+
+        async def _stream():
+            self._active_provider = self.name
+            for delta in self.deltas:
+                yield delta
+            raise self.failure
+
+        return _stream()
+
+
+class _FailingPersistenceMessageRepository(FakeChatMessageRepository):
+    """Message repository whose assistant `create` raises — tests that the
+    original generation failure is never masked by a persistence error while
+    user turns still persist normally."""
+
+    async def create(self, message: ChatMessage) -> None:
+        if message.role == CHAT_ROLE_ASSISTANT:
+            raise RuntimeError("messages collection unavailable")
+        await super().create(message)
+
+
+def _with_generation(env, generation) -> None:
+    env.generation = generation
+    env.rag = RagService(
+        websites=env.websites,
+        vector=env.vector,
+        embedder=env.embedder,
+        generation=generation,
+        sessions=env.sessions,
+        messages=env.messages,
+        usage=env.usage,
+        cache=env.cache,
+        top_k=5,
+        memory_turns=8,
+        allow_reranking=False,
+        injection_tracker=None,
+    )
 
 
 def _message_event(events):
@@ -256,6 +325,210 @@ async def test_generation_failure_emits_error_and_persists_user_turn() -> None:
     assert len(env.messages.messages) == 1
     assert env.messages.messages[0].role == CHAT_ROLE_USER
     assert env.usage.records == []
+
+
+async def test_failure_before_first_delta_persists_nothing_partial() -> None:
+    """Pre-first-delta provider failure: no (empty) assistant message is ever
+    persisted — the failure is surfaced only through the SSE error."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    env.generation.failures = [GenerationError("model exploded")]
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    assert events[-1]["event"] == "error"
+    assert events[-1]["data"]["code"] == "GENERATION_FAILED"
+    assert len(env.messages.messages) == 1
+    assert env.messages.messages[0].role == CHAT_ROLE_USER
+    assert not any(m.status for m in env.messages.messages)
+
+
+async def test_failure_after_one_delta_persists_partial_answer() -> None:
+    """Mid-stream failure after exactly one delta: the partial content is
+    persisted as an assistant turn marked failed; the error is still emitted
+    and no `done` terminal frame is produced."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    failing = _FailAfterDeltasGeneration(["Indira University provides"], GenerationError("boom"))
+    _with_generation(env, failing)
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    # The delta reached the client before the provider error.
+    assert _message_event(events) == ["Indira University provides"]
+    assert events[-1]["event"] == "error"
+    assert events[-1]["data"]["code"] == "GENERATION_FAILED"
+    assert not any(event["event"] == "done" for event in events)
+
+    user, assistant = env.messages.messages
+    assert user.role == CHAT_ROLE_USER
+    assert assistant.role == CHAT_ROLE_ASSISTANT
+    assert assistant.content == "Indira University provides"
+    assert assistant.status == CHAT_MESSAGE_STATUS_FAILED
+    # The provider reported no terminal reason -> never fabricated; not
+    # truncated either.
+    assert assistant.finish_reason == ""
+    assert assistant.truncated is False
+    # Failed generations stay non-billable and untouched in usage records.
+    assert assistant.input_tokens == 0 and assistant.output_tokens == 0
+    assert assistant.total_tokens == 0 and assistant.estimated_cost == 0.0
+    assert env.usage.records == []
+
+
+async def test_failure_after_multiple_deltas_persists_full_partial_content() -> None:
+    """Mid-stream failure after several deltas: the persisted content is the
+    exact concatenation of every streamed delta — no content is lost."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    failing = _FailAfterDeltasGeneration(
+        ["Indira University provides", " courses in", " engineering"],
+        GenerationError("boom"),
+    )
+    _with_generation(env, failing)
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    assert _message_event(events) == [
+        "Indira University provides",
+        " courses in",
+        " engineering",
+    ]
+    assert events[-1]["event"] == "error"
+
+    user, assistant = env.messages.messages
+    assert assistant.role == CHAT_ROLE_ASSISTANT
+    assert assistant.content == "Indira University provides courses in engineering"
+    assert assistant.status == CHAT_MESSAGE_STATUS_FAILED
+
+
+async def test_normal_stop_unchanged_and_not_marked_failed() -> None:
+    """A healthy STOP generation keeps the existing shape and is NOT marked
+    failed (status stays the default "")."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    assert _done_event(events)["data"]["finish_reason"] == "STOP"
+    assert env.messages.messages[-1].role == CHAT_ROLE_ASSISTANT
+    assert env.messages.messages[-1].status == ""
+    assert env.messages.messages[-1].finish_reason == "STOP"
+    assert env.messages.messages[-1].truncated is False
+
+
+async def test_max_tokens_truncation_unchanged_no_duplicate_record() -> None:
+    """MAX_TOKENS truncation is persisted exactly once with `truncated=True`
+    and is NOT conflated with a failed turn."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1, knowledge_chunks=1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    env.generation.finish_reason = "MAX_TOKENS"
+    env.generation.truncated = True
+    env.generation.output_tokens = 512
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    done = _done_event(events)
+    assert done["data"]["finish_reason"] == "MAX_TOKENS"
+    assert done["data"]["truncated"] is True
+    assistant = env.messages.messages[-1]
+    assert assistant.status == ""
+    assert assistant.truncated is True
+    assert assistant.finish_reason == "MAX_TOKENS"
+    # Exactly one assistant record for the turn (user + assistant).
+    assert [m.role for m in env.messages.messages] == [CHAT_ROLE_USER, CHAT_ROLE_ASSISTANT]
+
+
+async def test_partial_failure_marks_dashboard_conversation_failed() -> None:
+    """After a mid-stream failure the persisted assistant turn surfaces as a
+    `failed` conversation (never "awaiting reply", never "answered")."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    _with_generation(
+        env,
+        _FailAfterDeltasGeneration(["Indira University provides"], GenerationError("boom")),
+    )
+
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    session = next(iter(env.sessions.sessions.values()))
+    service = ConversationService(
+        sessions=env.sessions,
+        messages=env.messages,
+        audit=FakeAuditLogRepository(),
+    )
+    detail = await service.get_conversation(TENANT_A, session.session_id)
+    assert detail.messages[-1].role == CHAT_ROLE_ASSISTANT
+    assert detail.messages[-1].status == CHAT_MESSAGE_STATUS_FAILED
+    assert detail.status == CONVERSATION_STATUS_FAILED
+    # Last-activity behavior: the partial persistence touches the session, so
+    # the detail's `updated_at` reflects session.last_activity as usual.
+    assert detail.updated_at == session.last_activity
+
+
+async def test_partial_persist_failure_does_not_mask_generation_failure() -> None:
+    """If persisting the partial answer fails, the original generation error is
+    still the primary signal: the SSE error is emitted unchanged."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    _with_generation(
+        env,
+        _FailAfterDeltasGeneration(["Indira University provides"], GenerationError("boom")),
+    )
+    env.messages = _FailingPersistenceMessageRepository()
+    env.rag = RagService(
+        websites=env.websites,
+        vector=env.vector,
+        embedder=env.embedder,
+        generation=env.generation,
+        sessions=env.sessions,
+        messages=env.messages,
+        usage=env.usage,
+        cache=env.cache,
+        top_k=5,
+        memory_turns=8,
+        allow_reranking=False,
+    )
+
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    assert events[-1]["event"] == "error"
+    assert events[-1]["data"]["code"] == "GENERATION_FAILED"
+
+
+async def test_retry_creates_fresh_generation_without_duplicating_partial() -> None:
+    """A healthy retry after a partial failure starts a new user turn; the
+    prior failed partial stays untouched and no duplicate assistant record is
+    created for the failed turn."""
+    env = build_chat_env()
+    await make_website(env, tenant_id=TENANT_A, website_id=WEB_1)
+    await make_chunk(env, tenant_id=TENANT_A, website_id=WEB_1, text="Some knowledge.")
+    failing = _FailAfterDeltasGeneration(["Indira University provides"], GenerationError("boom"))
+    _with_generation(env, failing)
+
+    await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    _with_generation(env, FakeGenerationClient(deltas=["Hello", " world!"]))
+    events = await _stream(env, tenant_id=TENANT_A, website_id=WEB_1, question="Hello?")
+
+    assert _message_event(events) == ["Hello", " world!"]
+    assert len(env.messages.messages) == 4
+    assert [m.role for m in env.messages.messages] == [
+        CHAT_ROLE_USER,
+        CHAT_ROLE_ASSISTANT,
+        CHAT_ROLE_USER,
+        CHAT_ROLE_ASSISTANT,
+    ]
+    assert env.messages.messages[1].status == CHAT_MESSAGE_STATUS_FAILED
+    assert env.messages.messages[1].content == "Indira University provides"
+    assert env.messages.messages[3].status == ""
+    assert env.messages.messages[3].finish_reason == "STOP"
 
 
 async def test_embedding_failure_emits_error_and_skips_model() -> None:

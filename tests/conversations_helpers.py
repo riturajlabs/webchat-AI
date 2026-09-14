@@ -44,13 +44,15 @@ async def seed_conversation(
     session_id: str,
     website_id: str = "web-1",
     visitor_id: str = "visitor-1",
-    turns: list[tuple[str, str]] | None = None,
+    turns: list[tuple[str, str] | dict] | None = None,
     last_activity: datetime | None = None,
 ) -> str:
     """Seed one conversation with a session and (optionally) message turns.
 
-    Turns are `(role, content)` pairs in chronological order. Assistant turns
-    get deterministic sources/token/latency so detail tests can assert them.
+    Turns are either ``(role, content)`` pairs in chronological order or dicts
+    with ``role``/``content`` plus optional per-message flags (``status``,
+    ``truncated``). Assistant turns get deterministic sources/token/latency so
+    detail tests can assert them.
     """
     session = ChatSession.new(
         tenant_id=tenant_id,
@@ -62,14 +64,30 @@ async def seed_conversation(
         session.last_activity = last_activity
     await env.sessions.create(session)
 
-    for role, content in turns or []:
-        message = ChatMessage.new(
-            tenant_id=tenant_id,
-            website_id=website_id,
-            session_id=session_id,
-            role=role,
-            content=content,
-        )
+    for turn in turns or []:
+        if isinstance(turn, dict):
+            role = turn["role"]
+            content = turn["content"]
+            message = ChatMessage.new(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+            )
+            if "status" in turn:
+                message.status = turn["status"]
+            if "truncated" in turn:
+                message.truncated = turn["truncated"]
+        else:
+            role, content = turn
+            message = ChatMessage.new(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+            )
         if role == "assistant":
             message.sources = [_ASSISTANT_SOURCE]
             message.response_time = 1.25

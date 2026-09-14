@@ -55,6 +55,7 @@ from backend.core.prompt_guard import InjectionVerdict, validate_response
 from backend.core.quota import LLMQuotaService
 from backend.core.security import new_id
 from backend.models.chat_message import (
+    CHAT_MESSAGE_STATUS_FAILED,
     CHAT_ROLE_ASSISTANT,
     CHAT_ROLE_USER,
     ChatMessage,
@@ -630,6 +631,70 @@ class RagService:
         ):
             yield event
         record_chat_failure(reason=reason)
+
+    async def _persist_partial_answer(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        session: ChatSession,
+        deltas: list[str],
+        sources: list[dict[str, Any]],
+        started: float,
+        t2: float,
+        ttft_ms: float | None,
+    ) -> None:
+        """Best-effort persist of a partially-streamed answer after a failure.
+
+        Mirrors the success-path assistant document (same content shape, same
+        `sources`) but marks the turn ``CHAT_MESSAGE_STATUS_FAILED`` so the
+        transcript keeps the partial reply the visitor actually saw instead of
+        ending on the user turn (which left the dashboard "awaiting reply").
+        Failed generations stay non-billable by construction: tokens/cost stay
+        zero and usage records are untouched, matching the pre-existing
+        failure path. The write is guarded: a persistence error is logged and
+        swallowed so the original generation failure remains the only signal
+        surfaced to the client.
+        """
+        partial = "".join(deltas)
+        if not partial:
+            return
+        try:
+            assistant = ChatMessage.new(
+                tenant_id=tenant_id,
+                website_id=website_id,
+                session_id=session.session_id,
+                role=CHAT_ROLE_ASSISTANT,
+                content=partial,
+            )
+            assistant.sources = sources
+            assistant.status = CHAT_MESSAGE_STATUS_FAILED
+            # Provider never reported a terminal reason, so finish_reason is
+            # intentionally left "" rather than fabricated; truncated=False.
+            assistant.response_time = time.monotonic() - started
+            assistant.latency_generation_ms = round((time.perf_counter() - t2) * 1000.0, 2)
+            assistant.latency_ttft_ms = _round_ms(ttft_ms)
+            await asyncio.gather(
+                self._messages.create(assistant),
+                self._sessions.touch(session.session_id),
+                return_exceptions=True,
+            )
+            logger.warning(
+                "rag_partial_answer_persisted tenant=%s website=%s session=%s "
+                "chars=%d status=failed",
+                tenant_id,
+                website_id,
+                session.session_id,
+                len(partial),
+            )
+        except Exception as exc:
+            logger.warning(
+                "rag_partial_answer_persist_failed tenant=%s website=%s session=%s",
+                tenant_id,
+                website_id,
+                session.session_id,
+                exc_info=exc,
+            )
 
     async def _retrieve(
         self,
@@ -1447,6 +1512,22 @@ class RagService:
         except Exception as exc:
             await self._stop_history_task(history_task)
             logger.exception("answer generation failed (session=%s)", session.session_id)
+            # Preserve the partial reply the visitor already received. Without
+            # an assistant turn the transcript ends on the user message and the
+            # dashboard reports "Awaiting reply" even though the client showed
+            # a partial answer; this record marks the turn failed instead. The
+            # error event below still surfaces the failure truthfully.
+            if deltas:
+                await self._persist_partial_answer(
+                    tenant_id=tenant_id,
+                    website_id=website_id,
+                    session=session,
+                    deltas=deltas,
+                    sources=sources,
+                    started=started,
+                    t2=t2,
+                    ttft_ms=ttft_ms,
+                )
             yield _error_event(_error_code(exc), _safe_message(exc))
             record_chat_failure(reason="generation_error")
             record_llm_failure(code=_error_code(exc))

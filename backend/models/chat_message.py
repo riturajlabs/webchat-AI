@@ -24,6 +24,12 @@ CHAT_ROLE_SYSTEM = "system"
 
 CHAT_ROLES = {CHAT_ROLE_USER, CHAT_ROLE_ASSISTANT, CHAT_ROLE_SYSTEM}
 
+# Turn outcome marker. The "" default (legacy rows, successful turns) keeps
+# every pre-existing document compatible; "failed" marks a turn where the
+# generation errored after streaming a partial answer (the partial content is
+# preserved, the turn is never billed, and the SSE error still surfaces).
+CHAT_MESSAGE_STATUS_FAILED = "failed"
+
 
 class ChatMessage(BaseModel):
     """A single turn in a conversation (docs/05 §10)."""
@@ -55,6 +61,12 @@ class ChatMessage(BaseModel):
     # missing in storage — but the generation itself was cut short.
     finish_reason: str = ""
     truncated: bool = False
+    # Turn outcome: "" on successful/legacy rows, CHAT_MESSAGE_STATUS_FAILED
+    # when generation errored after streaming a partial answer that was kept in
+    # `content`. Additive field — the dashboard conversation status is still
+    # derived from the last role (Phase 11.2), so a persisted assistant turn
+    # no longer reads as "awaiting" after a mid-stream failure.
+    status: str = ""
     # Per-stage latency breakdown (milliseconds, Phase 12.6). Assistant
     # messages record where the response time went so the performance dashboard
     # can report average embedding/retrieval/generation latency per window.
@@ -110,6 +122,7 @@ class ChatMessage(BaseModel):
 
 
 __all__ = [
+    "CHAT_MESSAGE_STATUS_FAILED",
     "CHAT_ROLE_ASSISTANT",
     "CHAT_ROLE_SYSTEM",
     "CHAT_ROLE_USER",

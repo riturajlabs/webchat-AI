@@ -227,9 +227,9 @@ describe('useConversation', () => {
     unmount();
   });
 
-  it('stops polling after an answered state even if the query is re-observed', async () => {
+  it('stops polling after a failed state even if the query is re-observed', async () => {
     mockedGetApi.mockImplementation((path: string) => {
-      if (path === '/api/conversations/conv-1') return Promise.resolve(detail('answered'));
+      if (path === '/api/conversations/conv-1') return Promise.resolve(detail('failed'));
       return Promise.reject(new Error(`Unexpected path ${path}`));
     });
 
@@ -240,7 +240,7 @@ describe('useConversation', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(result.current.data?.status).toBe('answered');
+    expect(result.current.data?.status).toBe('failed');
     const calls = mockedGetApi.mock.calls.length;
 
     await act(async () => {

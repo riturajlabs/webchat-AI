@@ -57,6 +57,7 @@ function MessageSources({ sources }: { sources: ConversationMessage['sources'] }
  */
 function MessageBubble({ message }: { message: ConversationMessage }) {
   const isUser = message.role === 'user';
+  const isFailedPartial = !isUser && message.status === 'failed';
   return (
     <article
       aria-label={`${isUser ? 'Visitor' : 'Assistant'} message`}
@@ -93,6 +94,11 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
 
         {!isUser ? (
           <>
+            {isFailedPartial ? (
+              <p className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-400">
+                Partial answer — the generation failed before completing this reply.
+              </p>
+            ) : null}
             <MessageSources sources={message.sources} />
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Clock className="size-3.5" aria-hidden="true" />

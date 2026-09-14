@@ -32,6 +32,7 @@ class MessageSummary:
         first_content: str,
         last_content: str,
         last_role: str,
+        last_status: str = "",
         last_created_at: datetime | None = None,
         total_input_tokens: int = 0,
         total_output_tokens: int = 0,
@@ -41,6 +42,7 @@ class MessageSummary:
         self.first_content = first_content
         self.last_content = last_content
         self.last_role = last_role
+        self.last_status = last_status
         self.last_created_at = last_created_at
         self.total_input_tokens = total_input_tokens
         self.total_output_tokens = total_output_tokens
@@ -146,6 +148,7 @@ class MongoChatMessageRepository:
                     "first_content": {"$first": "$content"},
                     "last_content": {"$last": "$content"},
                     "last_role": {"$last": "$role"},
+                    "last_status": {"$last": "$status"},
                     "last_created_at": {"$last": "$created_at"},
                     "total_input_tokens": {"$sum": "$input_tokens"},
                     "total_output_tokens": {"$sum": "$output_tokens"},
@@ -161,6 +164,7 @@ class MongoChatMessageRepository:
                 first_content=str(doc.get("first_content") or ""),
                 last_content=str(doc.get("last_content") or ""),
                 last_role=str(doc.get("last_role") or ""),
+                last_status=str(doc.get("last_status") or ""),
                 last_created_at=doc.get("last_created_at"),
                 total_input_tokens=int(doc.get("total_input_tokens", 0)),
                 total_output_tokens=int(doc.get("total_output_tokens", 0)),

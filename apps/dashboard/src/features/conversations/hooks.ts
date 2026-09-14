@@ -24,10 +24,13 @@ export const CONVERSATIONS_LIST_REFRESH_MS = 8_000;
 /**
  * How often an individual conversation is refreshed while it can still be
  * changing. `status` is 'awaiting' while the assistant is (or is about to be)
- * replying and 'answered' once the turn is complete, so polling stops once the
- * conversation is terminal ('answered').
+ * replying and terminal ('answered'/'failed') once the turn is over, so
+ * polling stops once the conversation is terminal.
  */
 export const CONVERSATION_ACTIVE_REFRESH_MS = 5_000;
+
+/** Conversation statuses that will not change on their own — no more polling. */
+const TERMINAL_STATUSES = new Set(['answered', 'failed']);
 
 export interface ConversationsParams {
   page: number;
@@ -60,7 +63,9 @@ export function useConversation(sessionId: string) {
       api.get<ConversationDetail>(`/api/conversations/${encodeURIComponent(sessionId)}`),
     enabled: sessionId.length > 0,
     refetchInterval: (query) =>
-      query.state.data?.status === 'answered' ? false : CONVERSATION_ACTIVE_REFRESH_MS,
+      query.state.data?.status && TERMINAL_STATUSES.has(query.state.data.status)
+        ? false
+        : CONVERSATION_ACTIVE_REFRESH_MS,
   });
 }
 

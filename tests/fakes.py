@@ -1400,6 +1400,7 @@ class FakeChatMessageRepository:
                 first_content=ordered[0].content,
                 last_content=ordered[-1].content,
                 last_role=ordered[-1].role,
+                last_status=ordered[-1].status,
                 last_created_at=ordered[-1].created_at,
                 total_input_tokens=sum(message.input_tokens for message in ordered),
                 total_output_tokens=sum(message.output_tokens for message in ordered),

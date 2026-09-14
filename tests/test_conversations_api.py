@@ -230,6 +230,95 @@ async def test_get_conversation_returns_full_history(client) -> None:
     assert body["messages"][1]["output_tokens"] == 50
 
 
+async def test_list_and_detail_status_user_only_is_awaiting(client) -> None:
+    """Case USER ONLY: the conversation awaits a reply."""
+    test_client, conv_env = client
+    headers, tenant_id = _auth(test_client)
+    await _seed(conv_env, tenant_id=tenant_id, session_id="sess-user-only", turns=[("user", "Hi")])
+
+    listed = test_client.get("/api/conversations", headers=headers).json()
+    assert listed["items"][0]["status"] == "awaiting"
+
+    detail = test_client.get("/api/conversations/sess-user-only", headers=headers).json()
+    assert detail["status"] == "awaiting"
+
+
+async def test_list_and_detail_status_completed_assistant_is_answered(client) -> None:
+    """Case ASSISTANT status="" → answered."""
+    test_client, conv_env = client
+    headers, tenant_id = _auth(test_client)
+    await _seed(
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="sess-answered",
+        turns=[("user", "Hi"), ("assistant", "Hello!")],
+    )
+
+    listed = test_client.get("/api/conversations", headers=headers).json()
+    assert listed["items"][0]["status"] == "answered"
+
+    detail = test_client.get("/api/conversations/sess-answered", headers=headers).json()
+    assert detail["status"] == "answered"
+    assert detail["messages"][1]["status"] == ""
+
+
+async def test_list_and_detail_status_failed_partial_is_failed(client) -> None:
+    """Case ASSISTANT status="failed" → failed."""
+    test_client, conv_env = client
+    headers, tenant_id = _auth(test_client)
+    await _seed(
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="sess-failed",
+        turns=[
+            ("user", "Hi"),
+            {
+                "role": "assistant",
+                "content": "Here is a partial answer",
+                "status": "failed",
+            },
+        ],
+    )
+
+    listed = test_client.get("/api/conversations", headers=headers).json()
+    assert listed["items"][0]["status"] == "failed"
+    assert listed["items"][0]["last_message"] == "Here is a partial answer"
+
+    detail = test_client.get("/api/conversations/sess-failed", headers=headers).json()
+    assert detail["status"] == "failed"
+    # The failed turn is truthfully exposed at the message level too.
+    assert detail["messages"][1]["status"] == "failed"
+    assert detail["messages"][1]["content"] == "Here is a partial answer"
+    # Last-activity behavior: the API `updated_at` mirrors the session's
+    # last_activity, which the partial-persistence path touches.
+    assert detail["updated_at"] == conv_env.sessions.sessions["sess-failed"].last_activity.strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
+
+
+async def test_list_and_detail_status_truncated_is_answered(client) -> None:
+    """Case ASSISTANT truncated=true, status="" → answered (a rooted
+    MAX_TOKENS stop is still a completed generation)."""
+    test_client, conv_env = client
+    headers, tenant_id = _auth(test_client)
+    await _seed(
+        conv_env,
+        tenant_id=tenant_id,
+        session_id="sess-truncated",
+        turns=[
+            ("user", "Hi"),
+            {"role": "assistant", "content": "Answer…", "truncated": True},
+        ],
+    )
+
+    listed = test_client.get("/api/conversations", headers=headers).json()
+    assert listed["items"][0]["status"] == "answered"
+
+    detail = test_client.get("/api/conversations/sess-truncated", headers=headers).json()
+    assert detail["status"] == "answered"
+    assert detail["messages"][1]["status"] == ""
+
+
 async def test_get_conversation_requires_authentication(client) -> None:
     test_client, _ = client
     response = test_client.get("/api/conversations")

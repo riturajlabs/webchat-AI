@@ -219,6 +219,20 @@ describe('ConversationsPage', () => {
     expect(within(link).getByText('Answered')).toBeInTheDocument();
   });
 
+  it('labels a failed partial reply with a truthful Failed badge', () => {
+    const failed = {
+      ...CONVERSATION,
+      id: 'conv-failed',
+      last_message: 'Here is a partial answer',
+      status: 'failed',
+    } as const;
+    mockConversations({ data: { ...LIST_RESPONSE, items: [failed] } });
+    renderListPage();
+    const link = screen.getByRole('link', { name: /visitor-1/ });
+    expect(within(link).getByText('Here is a partial answer')).toBeInTheDocument();
+    expect(within(link).getByText('Failed')).toBeInTheDocument();
+  });
+
   it('shows the total conversation count above the list', () => {
     renderListPage();
     expect(screen.getByText('1 conversation')).toBeInTheDocument();
@@ -325,6 +339,46 @@ describe('ConversationDetailPage', () => {
     expect(articles[1]).toHaveAccessibleName('Assistant message');
     // Per-message timestamps render as <time> elements.
     expect(screen.getAllByRole('time').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows the Failed badge and a partial-answer notice for a failed turn', () => {
+    const failedDetail: ConversationDetail = {
+      ...DETAIL,
+      status: 'failed',
+      messages: [
+        {
+          role: 'user',
+          content: 'What are your pricing plans?',
+          sources: [],
+          response_time: null,
+          input_tokens: 0,
+          output_tokens: 0,
+          created_at: '2026-08-01T10:00:00Z',
+        },
+        {
+          role: 'assistant',
+          content: 'We offer three plans.',
+          sources: [],
+          response_time: 1.25,
+          input_tokens: 100,
+          output_tokens: 50,
+          status: 'failed',
+          created_at: '2026-08-01T10:00:03Z',
+        },
+      ],
+    };
+    mockedUseConversation.mockReturnValue({
+      data: failedDetail,
+      isPending: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useConversation>);
+    renderDetailPage();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(
+      screen.getByText('Partial answer — the generation failed before completing this reply.'),
+    ).toBeInTheDocument();
   });
 
   it('renders the full message history with sources and usage', () => {

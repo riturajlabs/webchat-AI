@@ -7,11 +7,13 @@ import type { ConversationStatus } from './types';
 export const STATUS_LABELS: Record<ConversationStatus, string> = {
   answered: 'Answered',
   awaiting: 'Awaiting reply',
+  failed: 'Failed',
 };
 
 export const STATUS_STYLES: Record<ConversationStatus, string> = {
   answered: 'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-400',
   awaiting: 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-400',
+  failed: 'bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-400',
 };
 
 /** Anonymous widget visitors carry a random cookie id; show a friendly label. */

@@ -2,7 +2,7 @@
  * Conversation domain types mirrored from the backend API (Phase 11.2).
  */
 
-export type ConversationStatus = 'answered' | 'awaiting';
+export type ConversationStatus = 'answered' | 'awaiting' | 'failed';
 
 export interface ConversationSummary {
   id: string;
@@ -38,6 +38,9 @@ export interface ConversationMessage {
   response_time: number | null;
   input_tokens: number;
   output_tokens: number;
+  /** Turn outcome marker: '' on successful/legacy turns, 'failed' on a
+   * partially-streamed answer whose generation errored. */
+  status?: string;
   created_at: string;
 }
 

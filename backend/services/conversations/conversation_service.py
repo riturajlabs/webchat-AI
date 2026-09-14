@@ -16,16 +16,24 @@ from datetime import datetime
 
 from backend.core.errors import SessionNotFoundError
 from backend.models.audit_log import AUDIT_CONVERSATION_DELETED, AuditLog
-from backend.models.chat_message import CHAT_ROLE_ASSISTANT, ChatMessage
+from backend.models.chat_message import (
+    CHAT_MESSAGE_STATUS_FAILED,
+    CHAT_ROLE_ASSISTANT,
+    ChatMessage,
+)
 from backend.models.chat_session import ChatSession
 from backend.repositories.audit_log_repository import AuditLogRepository
 from backend.repositories.chat_message_repository import ChatMessageRepository, MessageSummary
 from backend.repositories.chat_session_repository import ChatSessionRepository
 
 # Derived conversation state (docs/04, Phase 11.2 UI status column):
-# the last turn decides whether the conversation is awaiting an answer.
+# `answered` when the last assistant turn completed truthfully (including a
+# MAX_TOKENS-truncated generation, which is still a finished turn), `failed`
+# when the last assistant turn errored after streaming a partial answer, and
+# `awaiting` while the last turn is a user question with no assistant reply.
 CONVERSATION_STATUS_ANSWERED = "answered"
 CONVERSATION_STATUS_AWAITING = "awaiting"
+CONVERSATION_STATUS_FAILED = "failed"
 
 _MAX_TITLE_CHARS = 80
 _MAX_PREVIEW_CHARS = 140
@@ -123,12 +131,16 @@ class ConversationService:
         if session is None:
             raise SessionNotFoundError("Conversation not found.")
         messages = await self._messages.list_by_session(tenant_id, session_id)
+        last = messages[-1] if messages else None
         return ConversationDetailItem(
             id=session.session_id,
             website_id=session.website_id,
             visitor_id=session.visitor_id,
             title=self._title(messages),
-            status=_status_from_last_role(messages[-1].role if messages else None),
+            status=_status_from_last_turn(
+                last.role if last else None,
+                last.status if last else "",
+            ),
             created_at=session.started_at,
             updated_at=session.last_activity,
             messages=messages,
@@ -189,7 +201,7 @@ class ConversationService:
             title=_truncate(summary.first_content or _NEW_CONVERSATION_TITLE, _MAX_TITLE_CHARS),
             message_count=summary.message_count,
             last_message=_truncate(summary.last_content, _MAX_PREVIEW_CHARS),
-            status=_status_from_last_role(summary.last_role),
+            status=_status_from_last_turn(summary.last_role, summary.last_status),
             created_at=session.started_at,
             updated_at=session.last_activity,
         )
@@ -200,10 +212,12 @@ class ConversationService:
         return _truncate(first.content if first else _NEW_CONVERSATION_TITLE, _MAX_TITLE_CHARS)
 
 
-def _status_from_last_role(last_role: str | None) -> str:
-    if last_role == CHAT_ROLE_ASSISTANT:
-        return CONVERSATION_STATUS_ANSWERED
-    return CONVERSATION_STATUS_AWAITING
+def _status_from_last_turn(last_role: str | None, last_status: str = "") -> str:
+    if last_role != CHAT_ROLE_ASSISTANT:
+        return CONVERSATION_STATUS_AWAITING
+    if last_status == CHAT_MESSAGE_STATUS_FAILED:
+        return CONVERSATION_STATUS_FAILED
+    return CONVERSATION_STATUS_ANSWERED
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -216,6 +230,7 @@ def _truncate(text: str, limit: int) -> str:
 __all__ = [
     "CONVERSATION_STATUS_ANSWERED",
     "CONVERSATION_STATUS_AWAITING",
+    "CONVERSATION_STATUS_FAILED",
     "ConversationDetailItem",
     "ConversationService",
     "ConversationSummaryItem",
