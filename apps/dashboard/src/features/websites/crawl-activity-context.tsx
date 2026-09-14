@@ -24,7 +24,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+
+import { knowledgeDocumentsOptions, summaryFromQueryState } from '@/features/knowledge/hooks';
+import { isKnowledgePipelineActive } from '@/features/knowledge/status';
 
 import { activeCrawlStore, type ActiveCrawlStore } from './active-crawl-store';
 import {
@@ -144,6 +147,15 @@ function CrawlJobSync({
   const crawlJob = crawlJobQuery.data ?? null;
   const terminal = crawlJob !== null && TERMINAL_CRAWL_STATUSES.has(crawlJob.status);
 
+  // Per-document knowledge state for this website. The backend can persist
+  // `knowledge_status = 'ready'` as soon as the FIRST document embeds, while
+  // siblings are still pending/processing/rate-limited — so settlement (and
+  // therefore when the watcher can stop) is decided from the documents.
+  const documentsQuery = useQuery(knowledgeDocumentsOptions(websiteId));
+  const docsActive =
+    !documentsQuery.isError &&
+    isKnowledgePipelineActive(summaryFromQueryState(documentsQuery?.data));
+
   // 'active' polls the website at the fast refresh interval while knowledge is
   // embedding; 'idle' is entered when the knowledge-start grace expires without
   // embedding starting — the website is downshifted to a low-frequency watch
@@ -156,7 +168,7 @@ function CrawlJobSync({
   const websiteQuery = useWebsite(websiteId, {
     refetchInterval: terminal
       ? (query) => {
-          if (isWebsiteSettled(query.state.data?.knowledge_status)) return false;
+          if (isWebsiteSettled(query.state.data?.knowledge_status) && !docsActive) return false;
           return knowledgeWatch === 'idle' ? knowledgeIdleRefreshMs : refreshIntervalMs;
         }
       : refreshIntervalMs,
@@ -208,13 +220,15 @@ function CrawlJobSync({
 
   const stateRef = useRef({
     jobFailed: crawlJob?.status === 'failed',
-    settle: isWebsiteSettled(website?.knowledge_status),
+    settle: isWebsiteSettled(website?.knowledge_status) && !docsActive,
     knowledgeStatus: website?.knowledge_status,
+    docsActive,
   });
   stateRef.current = {
     jobFailed: crawlJob?.status === 'failed',
-    settle: isWebsiteSettled(website?.knowledge_status),
+    settle: isWebsiteSettled(website?.knowledge_status) && !docsActive,
     knowledgeStatus: website?.knowledge_status,
+    docsActive,
   };
 
   const finishRef = useRef(finish);
@@ -245,14 +259,15 @@ function CrawlJobSync({
       void queryClient.invalidateQueries({ queryKey: websiteKeys.detail(websiteId) });
     }
     const id = setInterval(() => {
-      const { jobFailed, settle, knowledgeStatus } = stateRef.current;
+      const { jobFailed, settle, knowledgeStatus, docsActive } = stateRef.current;
       const elapsed = terminalAtRef.current === null ? 0 : Date.now() - terminalAtRef.current;
       if (settle) {
         finishRef.current();
       } else if (jobFailed && elapsed > failureVisibilityMs) {
         finishRef.current();
-      } else if (knowledgeStatus === 'processing') {
-        // Embedding started (possibly late): resume fresh polling.
+      } else if (knowledgeStatus === 'processing' || docsActive) {
+        // Embedding is running (possibly started late after the grace window):
+        // resume fresh polling so per-document progress stays live.
         if (knowledgeWatchRef.current !== 'active') {
           setKnowledgeWatch('active');
         }

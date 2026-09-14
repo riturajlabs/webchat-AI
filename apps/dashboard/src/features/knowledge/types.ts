@@ -7,7 +7,18 @@
  * what went wrong and let the owner re-process a page manually.
  */
 
-export type KnowledgeDocumentStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type KnowledgeDocumentStatus =
+  'pending' | 'processing' | 'completed' | 'failed' | 'rate_limited';
+
+/** A document that is permanently terminal and will not move again on its own. */
+export const TERMINAL_KNOWLEDGE_STATUSES: ReadonlySet<KnowledgeDocumentStatus> = new Set([
+  'completed',
+  'failed',
+]);
+
+export function isKnowledgeDocumentTerminal(status: KnowledgeDocumentStatus): boolean {
+  return TERMINAL_KNOWLEDGE_STATUSES.has(status);
+}
 
 export interface KnowledgeDocument {
   id: string;
@@ -27,6 +38,8 @@ export interface KnowledgeDocumentSummary {
   processing: number;
   completed: number;
   failed: number;
+  /** Docs awaiting a deferred retry after provider quota/rate-limit rejection (non-terminal). */
+  rate_limited: number;
 }
 
 export interface KnowledgeDocumentsResponse {

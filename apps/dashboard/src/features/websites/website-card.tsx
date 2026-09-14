@@ -4,6 +4,8 @@ import { ChevronDown, ExternalLink, Pencil, Play, RefreshCw, Trash2, Loader2 } f
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { DocumentProgressPanel } from '@/features/knowledge/document-progress-panel';
+import { useKnowledgeReadiness } from '@/features/knowledge/hooks';
 import { WebsiteStatusBadge } from './status-badge';
 import { CrawlJobProgressBar, GeneratingEmbeddingsStatus } from './crawl-job-progress-bar';
 import { KnowledgeBadge } from './knowledge-badge';
@@ -41,10 +43,20 @@ export function WebsiteCard({
   useEffect(() => {
     setImageSrc(website.preview_image || DEFAULT_WEBSITE_IMAGE);
   }, [website.preview_image]);
+  // Per-document readiness derived from the documents API — the backend can
+  // persist `knowledge_status = 'ready'` while sibling docs still embed, so the
+  // true state comes from the documents summary, not the website flag.
+  const { readiness, query } = useKnowledgeReadiness(website);
+  const currentDocument = query.data?.documents.find(
+    (document) => document.status === 'processing',
+  );
   const isRunning = crawlJob?.status === 'running' || crawlPending;
   // A crawl that is actually in flight takes precedence over the knowledge
   // phase: the embedding block only shows once the crawl job is done (or was
-  // never tracked) but the knowledge base is still being embedded.
+  // never tracked) but the knowledge base is still being embedded. The legacy
+  // `isEmbeddingInProgress` fallback covers a brief window while the per-document
+  // data is still being fetched (the persisted status says `processing`).
+  const embeddingActive = readiness.isEmbedding || isEmbeddingInProgress(website);
   const jobActive =
     crawlJob !== null && crawlJob.status !== 'completed' && crawlJob.status !== 'failed';
 
@@ -72,7 +84,7 @@ export function WebsiteCard({
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         </div>
-        <WebsiteStatusBadge website={website} />
+        <WebsiteStatusBadge website={website} readiness={readiness} />
       </div>
 
       <div className="flex items-center gap-4 text-sm text-muted-foreground">
@@ -81,13 +93,13 @@ export function WebsiteCard({
           {website.pages_indexed === 1 ? 'page' : 'pages'} indexed
         </span>
         <span className="text-border">·</span>
-        <KnowledgeBadge status={website.knowledge_status} />
+        <KnowledgeBadge status={readiness.status} embedding={readiness.isEmbedding} />
       </div>
 
       {crawlJob && (crawlJob.status === 'failed' || jobActive) ? (
         <CrawlJobProgressBar job={crawlJob} progress={crawlProgress} sseConnected={sseConnected} />
-      ) : isEmbeddingInProgress(website) ? (
-        <GeneratingEmbeddingsStatus website={website} />
+      ) : embeddingActive ? (
+        <GeneratingEmbeddingsStatus website={website} currentDocument={currentDocument} />
       ) : crawlJob ? (
         <CrawlJobProgressBar job={crawlJob} progress={crawlProgress} sseConnected={sseConnected} />
       ) : null}
@@ -139,30 +151,33 @@ export function WebsiteCard({
           Advanced details
         </button>
         {detailsOpen ? (
-          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <dt>Knowledge status</dt>
-            <dd className="text-right font-medium capitalize text-foreground min-w-0">
-              {website.knowledge_status}
-            </dd>
-            <dt>Chunks created</dt>
-            <dd className="text-right font-medium text-foreground min-w-0">
-              {website.knowledge_chunks}
-            </dd>
-            <dt>Documents embedded</dt>
-            <dd className="text-right font-medium text-foreground min-w-0">
-              {website.knowledge_documents}
-            </dd>
-            <dt>Widget ID</dt>
-            <dd className="min-w-0 max-w-full text-right font-mono font-medium text-foreground">
-              {website.widget_id ? (
-                <span className="break-all" title={website.widget_id}>
-                  {website.widget_id}
-                </span>
-              ) : (
-                '—'
-              )}
-            </dd>
-          </dl>
+          <div className="space-y-3">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <dt>Knowledge status</dt>
+              <dd className="text-right font-medium capitalize text-foreground min-w-0">
+                {readiness.status ?? website.knowledge_status}
+              </dd>
+              <dt>Chunks created</dt>
+              <dd className="text-right font-medium text-foreground min-w-0">
+                {website.knowledge_chunks}
+              </dd>
+              <dt>Documents embedded</dt>
+              <dd className="text-right font-medium text-foreground min-w-0">
+                {website.knowledge_documents}
+              </dd>
+              <dt>Widget ID</dt>
+              <dd className="min-w-0 max-w-full text-right font-mono font-medium text-foreground">
+                {website.widget_id ? (
+                  <span className="break-all" title={website.widget_id}>
+                    {website.widget_id}
+                  </span>
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </dl>
+            <DocumentProgressPanel websiteId={website.id} />
+          </div>
         ) : null}
       </div>
     </div>

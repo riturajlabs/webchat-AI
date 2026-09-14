@@ -1,8 +1,24 @@
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { deriveKnowledgeReadiness } from '@/features/knowledge/status';
+import type { KnowledgeReadiness } from '@/features/knowledge/status';
+import { useKnowledgeReadiness } from '@/features/knowledge/hooks';
 
 import { WebsiteCard } from './website-card';
 import type { Website } from './types';
+
+vi.mock('@/features/knowledge/hooks', () => ({
+  useKnowledgeReadiness: vi.fn(),
+}));
+
+vi.mock('@/features/knowledge/document-progress-panel', () => ({
+  DocumentProgressPanel: ({ websiteId }: { websiteId: string }) => (
+    <div data-testid="document-progress-panel" data-website-id={websiteId} />
+  ),
+}));
+
+const mockedUseKnowledgeReadiness = vi.mocked(useKnowledgeReadiness);
 
 const SITE: Website = {
   id: 'site-1',
@@ -22,6 +38,13 @@ const SITE: Website = {
   last_knowledge_at: null,
 };
 
+function mockReadiness(readiness: KnowledgeReadiness) {
+  mockedUseKnowledgeReadiness.mockReturnValue({
+    readiness,
+    query: { data: undefined },
+  } as unknown as ReturnType<typeof useKnowledgeReadiness>);
+}
+
 function renderCard(website: Website = SITE) {
   return render(
     <div className="w-64">
@@ -38,6 +61,15 @@ function renderCard(website: Website = SITE) {
     </div>,
   );
 }
+
+beforeEach(() => {
+  mockReadiness(
+    deriveKnowledgeReadiness(
+      { total: 3, pending: 0, processing: 0, completed: 3, failed: 0, rate_limited: 0 },
+      SITE,
+    ),
+  );
+});
 
 describe('WebsiteCard responsive behavior', () => {
   it('wraps the action buttons instead of forcing the card wider than its container', () => {
@@ -70,7 +102,12 @@ describe('WebsiteCard responsive behavior', () => {
 });
 
 describe('WebsiteCard knowledge phase', () => {
-  it('shows the embedding-in-progress block instead of "ready" while knowledge is processing', () => {
+  it('shows the embedding-in-progress block instead of "ready" while documents are being embedded', () => {
+    const readiness = deriveKnowledgeReadiness(
+      { total: 43, pending: 7, processing: 1, completed: 35, failed: 0, rate_limited: 0 },
+      { ...SITE, knowledge_status: 'processing' },
+    );
+    mockReadiness(readiness);
     renderCard({ ...SITE, knowledge_status: 'processing' });
     // The status badge switches to the embedding state — no green "ready".
     expect(screen.queryByText('ready')).not.toBeInTheDocument();
@@ -79,5 +116,31 @@ describe('WebsiteCard knowledge phase', () => {
     // Truthful counts only: documents/chunks already reported by the website
     // API, not an invented percentage.
     expect(screen.getByText('3 documents embedded · 42 chunks')).toBeInTheDocument();
+  });
+
+  it('never shows ready while documents are rate_limited, even if knowledge_status is ready', () => {
+    const readiness = deriveKnowledgeReadiness(
+      { total: 43, pending: 0, processing: 0, completed: 35, failed: 0, rate_limited: 8 },
+      SITE,
+    );
+    mockReadiness(readiness);
+    renderCard();
+    expect(screen.queryByText('ready')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Generating embeddings…').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows Checking… until the per-document status has been observed', () => {
+    mockReadiness({
+      known: false,
+      isEmbedding: false,
+      isReady: false,
+      isFailed: false,
+      isSettled: false,
+      status: null,
+      summary: null,
+    });
+    renderCard();
+    expect(screen.queryByText('ready')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Checking…').length).toBeGreaterThanOrEqual(1);
   });
 });

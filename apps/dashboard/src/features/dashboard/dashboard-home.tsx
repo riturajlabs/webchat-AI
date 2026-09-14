@@ -14,9 +14,13 @@ import {
 
 import { useAuth } from '@/features/auth/auth-context';
 import { OnboardingChecklist } from '@/features/dashboard/onboarding-checklist';
+import {
+  useKnowledgeReadinessForSites,
+  type SiteKnowledgeReadiness,
+} from '@/features/knowledge/hooks';
 import { WebsiteStatusBadge } from '@/features/websites/status-badge';
 import { useWebsites } from '@/features/websites/hooks';
-import { isChatReady, isEmbeddingInProgress } from '@/features/websites/types';
+import { isEmbeddingInProgress } from '@/features/websites/types';
 import type { Website } from '@/features/websites/types';
 import { useUsage } from '@/features/usage/hooks';
 import { useConversations } from '@/features/conversations/hooks';
@@ -91,10 +95,17 @@ export function DashboardHome() {
     (site) =>
       site.status === 'pending' || site.status === 'crawling' || site.status === 'processing',
   ).length;
-  // "Ready" means chat-ready: the crawl AND the knowledge base are both done.
-  const ready = websites.filter(isChatReady).length;
-  const embedding = websites.filter(isEmbeddingInProgress).length;
-  const failed = websites.filter((site) => site.status === 'failed').length;
+  // Derived per-document readiness: a site only counts as chat-ready once the
+  // documents confirm the pipeline drained, never from the prematurely-`ready`
+  // persisted flag. The legacy `isEmbeddingInProgress` fallback covers the brief
+  // window while /documents data is still being fetched for a genuinely
+  // processing site.
+  const readinessForSites = useKnowledgeReadinessForSites(websites);
+  const ready = readinessForSites.filter(({ readiness }) => readiness.isReady).length;
+  const embedding = readinessForSites.filter(
+    ({ site, readiness }) => readiness.isEmbedding || isEmbeddingInProgress(site),
+  ).length;
+  const failed = readinessForSites.filter(({ readiness }) => readiness.isFailed).length;
 
   const conversationCount = conversationsData?.total;
   const messagesSent = usageData?.usage?.messages_sent;
@@ -142,7 +153,7 @@ export function DashboardHome() {
     {
       label: 'Install widget',
       href: '/widget',
-      done: websites.some(isChatReady),
+      done: readinessForSites.some(({ readiness }) => readiness.isReady),
     },
   ];
 
@@ -219,7 +230,7 @@ export function DashboardHome() {
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <div className="flex flex-col gap-4 lg:col-span-2">
               {websites.length > 0 ? (
-                <RecentWebsites websites={websites} />
+                <RecentWebsites readinessForSites={readinessForSites} />
               ) : (
                 <EmptyState
                   title="No websites yet"
@@ -247,8 +258,10 @@ export function DashboardHome() {
   );
 }
 
-function RecentWebsites({ websites }: { websites: Website[] }) {
-  const recent = [...websites].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 4);
+function RecentWebsites({ readinessForSites }: { readinessForSites: SiteKnowledgeReadiness[] }) {
+  const recent = [...readinessForSites]
+    .sort((a, b) => b.site.created_at.localeCompare(a.site.created_at))
+    .slice(0, 4);
 
   return (
     <Card>
@@ -258,7 +271,7 @@ function RecentWebsites({ websites }: { websites: Website[] }) {
       </CardHeader>
       <CardContent>
         <ul className="flex flex-col divide-y">
-          {recent.map((website) => (
+          {recent.map(({ site: website, readiness }) => (
             <li key={website.id} className="flex items-center justify-between gap-4 py-3">
               <div className="min-w-0">
                 <Link href="/websites" className="block truncate font-medium hover:underline">
@@ -268,7 +281,7 @@ function RecentWebsites({ websites }: { websites: Website[] }) {
                   {website.url} · last crawled {formatDate(website.last_crawled_at)}
                 </p>
               </div>
-              <WebsiteStatusBadge website={website} />
+              <WebsiteStatusBadge website={website} readiness={readiness} />
             </li>
           ))}
         </ul>

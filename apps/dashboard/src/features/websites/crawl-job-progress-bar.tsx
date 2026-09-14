@@ -2,6 +2,8 @@
 
 import { AlertTriangle, Brain, FileText, Globe, Loader2 } from 'lucide-react';
 
+import type { KnowledgeDocument } from '@/features/knowledge/types';
+
 import type { CrawlJob, CrawlProgressEvent, Website } from './types';
 
 interface CrawlJobProgressBarProps {
@@ -14,25 +16,35 @@ function isActive(status: CrawlJob['status']): boolean {
   return status === 'pending' || status === 'running' || status === 'processing';
 }
 
+interface GeneratingEmbeddingsStatusProps {
+  website: Website;
+  /** The page currently being embedded, when the per-document API reports one. */
+  currentDocument?: KnowledgeDocument;
+}
+
 /**
- * Post-crawl knowledge/embedding phase. Rendered from the website snapshots the
- * crawl monitor already polls (`website.knowledge_status`) — no backend events.
- * Only truthful counts are shown (documents/chunks already reported by the API);
- * no synthetic 0–100% percentage is invented.
+ * Post-crawl knowledge/embedding phase. Rendered from the per-document status
+ * the dashboard polls once embedding is known to be active — no invented
+ * 0–100% percentage, only truthful counts the backend already reported.
  */
-export function GeneratingEmbeddingsStatus({ website }: { website: Website }) {
+export function GeneratingEmbeddingsStatus({
+  website,
+  currentDocument,
+}: GeneratingEmbeddingsStatusProps) {
   return (
     <div role="status" className="flex flex-col gap-1 text-xs text-muted-foreground">
       <div className="flex items-center gap-2">
         <Brain className="size-3 shrink-0" aria-hidden="true" />
-        <span className="font-medium">
-          Generating embeddings…
-          <span aria-hidden="true" />
-        </span>
+        <span className="font-medium">Generating embeddings…</span>
       </div>
-      {website.knowledge_documents > 0 ? (
+      {currentDocument ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+          <span className="truncate">{currentDocument.title || currentDocument.url}</span>
+        </div>
+      ) : website.knowledge_documents > 0 ? (
         <div className="flex items-center gap-2">
-          <Loader2 className="size-3 animate-spin shrink-0" aria-hidden="true" />
+          <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
           <span>
             {website.knowledge_documents}{' '}
             {website.knowledge_documents === 1 ? 'document' : 'documents'} embedded ·{' '}

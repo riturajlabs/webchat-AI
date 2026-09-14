@@ -7,6 +7,8 @@ import { api } from '@/lib/api';
 import { createActiveCrawlStore, type ActiveCrawlStore } from './active-crawl-store';
 import { CrawlActivityProvider, useCrawlActivity } from './crawl-activity-context';
 import { crawlJobKeys, useWebsites } from './hooks';
+import { knowledgeKeys } from '@/features/knowledge/hooks';
+import type { KnowledgeDocumentsResponse } from '@/features/knowledge/types';
 import type { CrawlJob, Website } from './types';
 
 vi.mock('@/lib/api', () => ({
@@ -146,6 +148,32 @@ const JOB_FAILED: CrawlJob = {
   error_message: 'Browser crashed',
 };
 
+const docsForSite = (
+  summary: KnowledgeDocumentsResponse['summary'],
+): KnowledgeDocumentsResponse => ({
+  website_id: 'site-1',
+  summary,
+  documents: [],
+});
+
+const docsSettled: KnowledgeDocumentsResponse['summary'] = {
+  total: 43,
+  pending: 0,
+  processing: 0,
+  completed: 43,
+  failed: 0,
+  rate_limited: 0,
+};
+
+const docsPrematureReady: KnowledgeDocumentsResponse['summary'] = {
+  total: 43,
+  pending: 0,
+  processing: 0,
+  completed: 35,
+  failed: 0,
+  rate_limited: 8,
+};
+
 /* ------------------------------------------------------------------ */
 /*  Harness                                                            */
 /* ------------------------------------------------------------------ */
@@ -239,6 +267,7 @@ async function observeJobStatus(queryClient: QueryClient, jobId: string): Promis
 describe('CrawlActivityProvider + monitor', () => {
   let sites: Record<string, Website>;
   let jobs: Record<string, CrawlJob>;
+  let docs: Record<string, KnowledgeDocumentsResponse>;
 
   beforeEach(() => {
     MockEventSource.instances = [];
@@ -248,12 +277,26 @@ describe('CrawlActivityProvider + monitor', () => {
 
     sites = { 'site-1': { ...SITE }, 'site-2': { ...SITE2 } };
     jobs = { 'job-1': { ...JOB_RUNNING } };
+    docs = {
+      'site-1': docsForSite({
+        total: 0,
+        pending: 0,
+        processing: 0,
+        completed: 0,
+        failed: 0,
+        rate_limited: 0,
+      }),
+    };
 
     mockedGet.mockImplementation((path: string) => {
       const jobMatch = path.match(/^\/api\/crawl-jobs\/(.+)$/);
       if (jobMatch) {
         const found = jobs[jobMatch[1]!];
         return found ? Promise.resolve(found) : Promise.reject(new Error('job not found'));
+      }
+      const docMatch = path.match(/^\/api\/knowledge\/websites\/(.+)\/documents$/);
+      if (docMatch) {
+        return Promise.resolve(docs[docMatch[1]!] ?? docsForSite(docsSettled));
       }
       if (path === '/api/websites') {
         return Promise.resolve(Object.values(sites));
@@ -389,6 +432,49 @@ describe('CrawlActivityProvider + monitor', () => {
       ),
     );
     await waitFor(() => expect(screen.getByTestId('list')).toHaveTextContent('list:8:ready'));
+  });
+
+  it('keeps watching a website whose persisted knowledge_status is prematurely ready while documents are still non-terminal', async () => {
+    const store = createActiveCrawlStore();
+    store.set('site-1', 'job-1');
+    const { queryClient } = renderMonitor(store);
+
+    const es = latest();
+    await act(async () => {
+      es.triggerOpen();
+    });
+    await act(async () => {
+      es.triggerEvent('crawl.completed', { status: 'completed' });
+    });
+
+    // The crawl completes and knowledge_status flips to 'ready' immediately
+    // (backend `_refresh_website` marks ready after the first document) even
+    // though 8 documents are still rate_limited awaiting a deferred retry.
+    jobs['job-1'] = { ...JOB_COMPLETED };
+    sites['site-1'] = { ...SITE_READY };
+    docs['site-1'] = docsForSite(docsPrematureReady);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: knowledgeKeys.documents('site-1') });
+    });
+    await observeJobStatus(queryClient, 'job-1');
+    await waitFor(() =>
+      expect(screen.getByTestId('probe-site-1')).toHaveTextContent('completed|no-sse|'),
+    );
+
+    // The watcher must NOT settle: `knowledge_status` alone says ready, but the
+    // /documents summary proves the pipeline is still active.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(store.getJobs().size).toBe(1);
+
+    // Documents drain: the next documents refresh confirms settlement.
+    docs['site-1'] = docsForSite(docsSettled);
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: knowledgeKeys.documents('site-1') });
+    });
+    await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 2000 });
+    await waitFor(() =>
+      expect(screen.getByTestId('probe-site-1')).toHaveTextContent('idle|no-sse|'),
+    );
   });
 
   it('keeps tracking a completed job after the grace window at low frequency, then settles when embedding later starts', async () => {

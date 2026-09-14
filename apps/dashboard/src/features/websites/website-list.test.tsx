@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDeleteWebsite, useStartCrawl, useWebsites } from './hooks';
 import { activeCrawlStore } from './active-crawl-store';
 import { useCrawlActivity } from './crawl-activity-context';
+import { useKnowledgeReadiness } from '@/features/knowledge/hooks';
+import { deriveKnowledgeReadiness } from '@/features/knowledge/status';
 import { WebsiteList } from './website-list';
 import { DEFAULT_WEBSITE_IMAGE } from './constants';
 import type { CrawlActivity } from './crawl-activity-context';
@@ -16,6 +18,14 @@ vi.mock('./hooks', () => ({
   useStartCrawl: vi.fn(),
   websitesKeys: { all: ['websites'] as const },
   TERMINAL_CRAWL_STATUSES: new Set(['completed', 'failed']),
+}));
+
+vi.mock('@/features/knowledge/hooks', () => ({
+  useKnowledgeReadiness: vi.fn(),
+}));
+
+vi.mock('@/features/knowledge/document-progress-panel', () => ({
+  DocumentProgressPanel: () => <div data-testid="document-progress-panel" />,
 }));
 
 vi.mock('./active-crawl-store', () => ({
@@ -43,6 +53,7 @@ const mockedUseWebsites = vi.mocked(useWebsites);
 const mockedUseDeleteWebsite = vi.mocked(useDeleteWebsite);
 const mockedUseStartCrawl = vi.mocked(useStartCrawl);
 const mockedUseCrawlActivity = vi.mocked(useCrawlActivity);
+const mockedUseKnowledgeReadiness = vi.mocked(useKnowledgeReadiness);
 const mockedStoreSet = vi.mocked(activeCrawlStore.set);
 
 const SITE: Website = {
@@ -107,6 +118,23 @@ function mockActivity(activity: Partial<CrawlActivity>) {
   });
 }
 
+function mockReadinessFor(website: Website) {
+  mockedUseKnowledgeReadiness.mockReturnValue({
+    readiness: deriveKnowledgeReadiness(
+      {
+        total: website.knowledge_documents,
+        pending: 0,
+        processing: website.knowledge_status === 'processing' ? 1 : 0,
+        completed: website.knowledge_status === 'ready' ? website.knowledge_documents : 0,
+        failed: 0,
+        rate_limited: 0,
+      },
+      website,
+    ),
+    query: { data: undefined },
+  } as unknown as ReturnType<typeof useKnowledgeReadiness>);
+}
+
 function renderList() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -121,6 +149,7 @@ function renderList() {
 beforeEach(() => {
   sessionStorage.clear();
   mockWebsites({ data: [SITE] });
+  mockReadinessFor(SITE);
   mockedUseDeleteWebsite.mockReturnValue({
     mutateAsync: vi.fn().mockResolvedValue(undefined),
   } as unknown as ReturnType<typeof useDeleteWebsite>);
@@ -159,7 +188,9 @@ describe('WebsiteList', () => {
   });
 
   it('renders the websites when loaded', () => {
-    mockWebsites({ data: [{ ...SITE, knowledge_status: 'ready' }] });
+    const ready: Website = { ...SITE, knowledge_status: 'ready' };
+    mockWebsites({ data: [ready] });
+    mockReadinessFor(ready);
     renderList();
     expect(screen.getByText('Acme Inc')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /acme.example.com/ })).toBeInTheDocument();
@@ -398,7 +429,9 @@ describe('WebsiteList', () => {
   it('does not render crawl progress for websites without an active job or pending knowledge', () => {
     // Fully settled site: no active crawl job and no embedding in progress —
     // there is nothing progress-like to show.
-    mockWebsites({ data: [{ ...SITE, knowledge_status: 'ready' }] });
+    const ready: Website = { ...SITE, knowledge_status: 'ready' };
+    mockWebsites({ data: [ready] });
+    mockReadinessFor(ready);
     renderList();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
