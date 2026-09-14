@@ -119,7 +119,8 @@ Additive and backward-compatible. `done` keeps `status` (set by the existing
 - Recommended production starting values (tune from `generation_outcome` logs +
   truncation rate): `CHAT_SIMPLE_MAX_OUTPUT_TOKENS=1024–1536`,
   `CHAT_COMPLEX_MAX_OUTPUT_TOKENS=3072–4096`, `CHAT_MAX_OUTPUT_TOKENS=4096`.
-  These are the `0` placeholders in `.env.production.example`.
+  These are now the committed values in `.env.production.example`
+  (`1024` / `3072` / `4096`).
 
 ---
 
