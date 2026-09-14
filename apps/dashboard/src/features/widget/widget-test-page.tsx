@@ -47,7 +47,15 @@ export function WidgetTestPage() {
   } = useWidgetConfig(selected);
 
   const widgetId = widgetResponse?.widget.widget_id ?? null;
-  const { data: status, isPending: statusPending } = useWidgetPublicStatus(widgetId);
+  // The widget's real API origin: the backend-generated embed script pins it
+  // via `data-api-base-url` (the backend origin, cross-origin to the
+  // dashboard). The origin-guard probe must hit that cross-origin URL so the
+  // browser sends `Origin: <dashboard origin>` — a same-origin dashboard URL
+  // would omit the header and the guard could never pass.
+  const apiBaseUrl = widgetResponse
+    ? (parseApiBaseUrl(widgetResponse.embed_script) ?? API_BASE_URL)
+    : null;
+  const { data: status, isPending: statusPending } = useWidgetPublicStatus(widgetId, apiBaseUrl);
 
   if (isPending) {
     return (
@@ -91,9 +99,6 @@ export function WidgetTestPage() {
   }
 
   const scriptSrc = widgetResponse ? parseScriptSrc(widgetResponse.embed_script) : null;
-  const apiBaseUrl = widgetResponse
-    ? (parseApiBaseUrl(widgetResponse.embed_script) ?? API_BASE_URL)
-    : null;
   const previewHtml =
     scriptSrc && widgetId
       ? buildWidgetTestHtml({ scriptSrc, widgetId, apiBaseUrl: apiBaseUrl ?? undefined })
@@ -158,7 +163,7 @@ export function WidgetTestPage() {
               <dl className="flex flex-col gap-3">
                 <InfoRow label="Widget ID" value={widgetResponse.widget.widget_id} />
                 <InfoRow label="Embed script src" value={scriptSrc ?? '—'} />
-                <InfoRow label="Widget API URL" value={`${API_BASE_URL}/api/widget/v1`} />
+                <InfoRow label="Widget API URL" value={`${apiBaseUrl ?? ''}/api/widget/v1`} />
                 <InfoRow
                   label="Browser origin (sent as Origin header)"
                   value={browserOrigin || '—'}

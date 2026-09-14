@@ -391,9 +391,9 @@ function TestStep({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const { data: status, isPending: statusPending } = useWidgetPublicStatus(widgetId);
   const scriptSrc = parseScriptSrc(embedScript);
   const apiBaseUrl = parseApiBaseUrl(embedScript) ?? API_BASE_URL;
+  const { data: status, isPending: statusPending } = useWidgetPublicStatus(widgetId, apiBaseUrl);
   const previewHtml = scriptSrc ? buildWidgetTestHtml({ scriptSrc, widgetId, apiBaseUrl }) : null;
 
   return (

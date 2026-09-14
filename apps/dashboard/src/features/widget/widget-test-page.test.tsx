@@ -54,6 +54,11 @@ const WIDGET: WidgetConfig = {
   updated_at: '2026-08-01T00:00:00Z',
 };
 
+const EMBED_SCRIPT_WITH_API_BASE =
+  '<script src="https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js" ' +
+  'data-widget-id="widget-test-1" ' +
+  'data-api-base-url="http://localhost:8000" defer></script>';
+
 function setup(status: {
   statusCode: number;
   enabled?: boolean;
@@ -71,9 +76,7 @@ function setup(status: {
   mockedUseWidgetConfig.mockReturnValue({
     data: {
       widget: WIDGET,
-      embed_script:
-        '<script src="http://localhost:8080/webchat-widget.iife.min.js" ' +
-        'data-widget-id="widget-test-1" defer></script>',
+      embed_script: EMBED_SCRIPT_WITH_API_BASE,
     },
     isPending: false,
     isError: false,
@@ -93,11 +96,20 @@ describe('WidgetTestPage', () => {
 
     expect(screen.getByText('widget-test-1')).toBeInTheDocument();
     expect(
-      screen.getByText('http://localhost:8080/webchat-widget.iife.min.js'),
+      screen.getByText('https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js'),
     ).toBeInTheDocument();
     expect(screen.getByText('http://localhost:8000/api/widget/v1')).toBeInTheDocument();
     expect(screen.getByText('http://localhost:3000')).toBeInTheDocument();
     expect(screen.getByTitle('Widget live preview')).toBeInTheDocument();
+  });
+
+  it('probes the origin guard with the cross-origin widget API base', () => {
+    setup({ statusCode: 200, enabled: true, allowedDomains: ['example.com'] });
+
+    expect(mockedUseWidgetPublicStatus).toHaveBeenCalledWith(
+      'widget-test-1',
+      'http://localhost:8000',
+    );
   });
 
   it('reports an allowed origin and lists the widget domains', () => {

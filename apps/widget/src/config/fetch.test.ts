@@ -92,7 +92,7 @@ describe('fetchPublicConfig', () => {
     );
     await expect(fetchPublicConfig(OPTIONS, fetchImpl, store)).rejects.toMatchObject({
       code: 'widget_not_found',
-      userMessage: 'Invalid widget ID',
+      userMessage: 'Invalid widget ID.',
       status: 404,
     });
   });
@@ -107,7 +107,7 @@ describe('fetchPublicConfig', () => {
     );
     await expect(fetchPublicConfig(OPTIONS, fetchImpl, store)).rejects.toMatchObject({
       code: 'widget_disabled',
-      userMessage: 'This assistant is currently unavailable',
+      userMessage: 'This assistant is currently unavailable.',
     });
   });
 });

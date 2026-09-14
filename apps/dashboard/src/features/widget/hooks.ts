@@ -35,15 +35,22 @@ export function useUpdateWidgetConfig() {
 /**
  * Live check of the public widget config endpoint from the dashboard origin.
  *
- * The browser sends `Origin: <dashboard origin>` on this cross-origin request,
- * so the result doubles as a real-time probe of the backend origin guard (see
- * `fetchPublicConfig`).
+ * The probe must be CROSS-ORIGIN for the browser to send an `Origin` header:
+ * a widget API base URL that resolves to the dashboard's own origin (the
+ * same-origin proxy kept for the authenticated API client) makes the browser
+ * omit `Origin` on GETs, so the backend — correctly — answers
+ * `WIDGET_ORIGIN_NOT_ALLOWED` ("a valid Origin header is required"). The
+ * widget's real API base (the embed script's `data-api-base-url`) is the
+ * backend origin, so probing it lets the browser send
+ * `Origin: <dashboard origin>`, which the configured dashboard-origin
+ * allowlist permits. `apiBaseUrl` defaults to `API_BASE_URL` for local
+ * development, where the dashboard already calls the backend cross-origin.
  */
-export function useWidgetPublicStatus(widgetId: string | null) {
+export function useWidgetPublicStatus(widgetId: string | null, apiBaseUrl: string | null) {
   return useQuery({
-    queryKey: ['widget-public-status', widgetId ?? ''],
-    queryFn: () => fetchPublicConfig(API_BASE_URL, widgetId ?? ''),
-    enabled: widgetId !== null,
+    queryKey: ['widget-public-status', widgetId ?? '', apiBaseUrl ?? ''],
+    queryFn: () => fetchPublicConfig(apiBaseUrl ?? API_BASE_URL, widgetId ?? ''),
+    enabled: widgetId !== null && apiBaseUrl !== null,
     retry: false,
     refetchOnWindowFocus: false,
   });

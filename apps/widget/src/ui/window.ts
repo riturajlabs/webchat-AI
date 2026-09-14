@@ -21,6 +21,19 @@ import { createComposer } from './composer';
 import type { ChatComposer } from './composer';
 import { botGlyph, closeIcon, footerLogo } from './icons';
 import { createSuggested } from './suggested';
+
+/**
+ * Content of the error/notice banner. `title` is a short concise heading,
+ * `message` the human-readable explanation. Retry is only offered when the
+ * failure is retryable; a safe backend correlation id may be shown subtly.
+ */
+export interface BannerContent {
+  title: string;
+  message: string;
+  retryable: boolean;
+  requestId?: string | null;
+}
+
 export interface ChatWindowOptions {
   config: WidgetPublicConfig;
   messagesElement: HTMLElement;
@@ -29,7 +42,7 @@ export interface ChatWindowOptions {
   onSuggested: (question: string) => void;
   /** Re-send the last failed question (plan §9 retry action). */
   onRetry: () => void;
-  /** Dismiss the banner (plan §9). */
+  /** Dismiss the banner (plan §9). Also fired by the 15s auto-dismiss. */
   onDismiss: () => void;
   isDisabled: () => boolean;
   /** Stop-generation action wired to the composer Stop button (Phase 10). */
@@ -41,8 +54,8 @@ export interface ChatWindow {
   composer: ChatComposer;
   suggested: HTMLElement;
   syncSuggested(questions: string[]): void;
-  /** `retryable` shows the Retry action alongside the message. */
-  setBanner(message: string | null, retryable?: boolean): void;
+  /** Set the banner to `banner`, or clear it with `null`. */
+  setBanner(banner: BannerContent | null): void;
   /** Current banner message text ('' when none). */
   currentBanner(): string;
   /** Reflect the streaming state on the composer (Send ↔ Stop, Phase 10). */
@@ -57,10 +70,19 @@ export interface ChatWindow {
   trapFocus(): void;
   /** Release the focus trap (called when the window closes). */
   releaseFocus(): void;
+  /** Release timers so a destroyed widget never fires late callbacks. */
+  dispose(): void;
 }
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * How long an error notification stays visible before auto-dismissing
+ * (production hardening). The banner disappears on its own after 15s; the
+ * conversation, partial answer and sources are untouched.
+ */
+export const BANNER_AUTO_DISMISS_MS = 15_000;
 
 export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const root = document.createElement('section');
@@ -152,8 +174,28 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   banner.setAttribute('role', 'alert');
   banner.hidden = true;
 
-  const bannerMessage = document.createElement('span');
+  const bannerHeader = document.createElement('div');
+  bannerHeader.className = 'wc-banner-header';
+
+  const bannerTitle = document.createElement('span');
+  bannerTitle.className = 'wc-banner-title';
+
+  const bannerClose = document.createElement('button');
+  bannerClose.type = 'button';
+  bannerClose.className = 'wc-banner-close';
+  bannerClose.setAttribute('aria-label', 'Dismiss error');
+  bannerClose.appendChild(closeIcon());
+  bannerClose.addEventListener('click', options.onDismiss);
+
+  bannerHeader.appendChild(bannerTitle);
+  bannerHeader.appendChild(bannerClose);
+
+  const bannerMessage = document.createElement('p');
   bannerMessage.className = 'wc-banner-message';
+
+  const bannerReference = document.createElement('span');
+  bannerReference.className = 'wc-banner-reference';
+  bannerReference.hidden = true;
 
   const retryButton = document.createElement('button');
   retryButton.type = 'button';
@@ -161,15 +203,58 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   retryButton.textContent = 'Retry';
   retryButton.addEventListener('click', options.onRetry);
 
-  const dismissButton = document.createElement('button');
-  dismissButton.type = 'button';
-  dismissButton.className = 'wc-banner-dismiss';
-  dismissButton.textContent = 'Dismiss';
-  dismissButton.addEventListener('click', options.onDismiss);
-
+  banner.appendChild(bannerHeader);
   banner.appendChild(bannerMessage);
+  banner.appendChild(bannerReference);
   banner.appendChild(retryButton);
-  banner.appendChild(dismissButton);
+
+  // --- Banner auto-dismiss (production hardening) ---------------------------
+  // The error notification disappears on its own 15s after it becomes visible.
+  // The timer only (re)starts when the banner CONTENT changes: syncRenderer
+  // re-asserts the same banner on every state pass, which must not keep
+  // pushing the expiry out. Identical content is a no-op (no DOM writes, no
+  // redundant alert re-announcements).
+
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastBannerSignature: string | null = null;
+
+  function clearHideTimer(): void {
+    if (hideTimer !== null) {
+      clearTimeout(hideTimer);
+      hideTimer = null;
+    }
+  }
+
+  function showBanner(content: BannerContent): void {
+    const signature = `${content.title}\u0000${content.message}\u0000${content.retryable}\u0000${content.requestId ?? ''}`;
+    if (signature === lastBannerSignature && !banner.hidden) {
+      return; // Same banner already rendered — leave the timer running.
+    }
+    lastBannerSignature = signature;
+    bannerTitle.textContent = content.title;
+    bannerMessage.textContent = content.message;
+    bannerReference.hidden = !content.requestId;
+    bannerReference.textContent = content.requestId ? `Reference: ${content.requestId}` : '';
+    retryButton.hidden = !content.retryable;
+    banner.hidden = false;
+    clearHideTimer();
+    hideTimer = setTimeout(() => {
+      hideTimer = null;
+      lastBannerSignature = null;
+      clearBanner(); // Hide locally so dismissal is immediate regardless of caller.
+      options.onDismiss();
+    }, BANNER_AUTO_DISMISS_MS);
+  }
+
+  function clearBanner(): void {
+    clearHideTimer();
+    lastBannerSignature = null;
+    bannerTitle.textContent = '';
+    bannerMessage.textContent = '';
+    bannerReference.hidden = true;
+    bannerReference.textContent = '';
+    banner.hidden = true;
+  }
 
   const messages = options.messagesElement;
 
@@ -254,11 +339,12 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
       suggested.replaceWith(next);
       suggested = next;
     },
-    setBanner(message: string | null, retryable = false): void {
-      bannerMessage.textContent = message ?? '';
-      banner.hidden = !message;
-      retryButton.hidden = !message || !retryable;
-      dismissButton.hidden = !message;
+    setBanner(content: BannerContent | null): void {
+      if (content) {
+        showBanner(content);
+      } else {
+        clearBanner();
+      }
     },
     currentBanner(): string {
       return bannerMessage.textContent ?? '';
@@ -294,6 +380,10 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
       }
       trapped = false;
       document.removeEventListener('keydown', onKeyDown, true);
+    },
+    dispose(): void {
+      clearHideTimer();
+      lastBannerSignature = null;
     },
   };
 

@@ -40,7 +40,7 @@ describe('mintSessionToken', () => {
     );
     await expect(mintSessionToken(OPTIONS, 'visitor-1', fetchImpl)).rejects.toMatchObject({
       code: 'widget_not_found',
-      userMessage: 'Invalid widget ID',
+      userMessage: 'Invalid widget ID.',
       status: 404,
     });
   });
@@ -54,7 +54,7 @@ describe('mintSessionToken', () => {
     );
     await expect(mintSessionToken(OPTIONS, 'visitor-1', fetchImpl)).rejects.toMatchObject({
       code: 'widget_disabled',
-      userMessage: 'This assistant is currently unavailable',
+      userMessage: 'This assistant is currently unavailable.',
       retryable: false,
     });
   });

@@ -580,7 +580,7 @@ describe('mount integration', () => {
     // The visitor is told what happened and can type again immediately.
     expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
     expect(shadow.querySelector('.wc-banner')?.textContent).toContain(
-      'Unable to connect right now',
+      "We couldn't maintain the connection",
     );
     expect(shadow.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(false);
 
@@ -908,7 +908,7 @@ describe('banner lifecycle + motion handling audit fixes', () => {
       expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
     });
 
-    (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+    (shadow.querySelector('.wc-banner-close') as HTMLButtonElement).click();
     expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
 
     // Every state transition re-runs syncRenderer; the dismissed error must
@@ -922,7 +922,7 @@ describe('banner lifecycle + motion handling audit fixes', () => {
         expect(shadow.querySelector('.wc-banner')?.textContent).toContain('offline');
       });
       // Still offline: dismissing connectivity info must stick too.
-      (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+      (shadow.querySelector('.wc-banner-close') as HTMLButtonElement).click();
       window.dispatchEvent(new Event('offline'));
       await vi.waitFor(() => {
         expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
@@ -951,7 +951,7 @@ describe('banner lifecycle + motion handling audit fixes', () => {
     await vi.waitFor(() => {
       expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
     });
-    (shadow.querySelector('.wc-banner-dismiss') as HTMLButtonElement).click();
+    (shadow.querySelector('.wc-banner-close') as HTMLButtonElement).click();
     expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(true);
 
     // A successful turn must NOT resurrect the stale error…

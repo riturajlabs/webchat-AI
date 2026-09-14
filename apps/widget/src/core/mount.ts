@@ -247,18 +247,36 @@ export function mount(options: WidgetHostOptions): WidgetController {
   let bannerDismissedFor: string | null = null;
 
   /** The current banner-worthy condition, or null when things are fine. */
-  function currentBannerCause(): { key: string; message: string; retryable: boolean } | null {
+  function currentBannerCause(): {
+    key: string;
+    title: string;
+    message: string;
+    retryable: boolean;
+    requestId?: string | null;
+  } | null {
     if (widgetUnavailable) {
-      return { key: 'unavailable', message: WIDGET_UNAVAILABLE_BANNER, retryable: false };
+      return {
+        key: 'unavailable',
+        title: 'Assistant unavailable',
+        message: WIDGET_UNAVAILABLE_BANNER,
+        retryable: false,
+      };
     }
     if (isOffline()) {
-      return { key: 'offline', message: OFFLINE_BANNER, retryable: false };
+      return {
+        key: 'offline',
+        title: "You're offline",
+        message: OFFLINE_BANNER,
+        retryable: false,
+      };
     }
     if (lastError) {
       return {
         key: `error:${lastError.userMessage}`,
+        title: lastError.userTitle,
         message: lastError.userMessage,
         retryable: lastError.retryable,
+        requestId: lastError.requestId,
       };
     }
     return null;
@@ -459,7 +477,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
         lastFailedQuestion = question;
         lastError = error;
         reportTurnErrorId(widgetId, error);
-        windowElement.setBanner(error.userMessage, error.retryable);
+        windowElement.setBanner({
+          title: error.userTitle,
+          message: error.userMessage,
+          retryable: error.retryable,
+          requestId: error.requestId,
+        });
         conversation.failTurn(turnId, error.userMessage);
       },
     };
@@ -497,7 +520,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
         lastFailedQuestion = question;
         lastError = error;
         reportTurnErrorId(widgetId, error);
-        windowElement.setBanner(error.userMessage, error.retryable);
+        windowElement.setBanner({
+          title: error.userTitle,
+          message: error.userMessage,
+          retryable: error.retryable,
+          requestId: error.requestId,
+        });
         conversation.failTurn(turnId, error.userMessage);
       }
     } finally {
@@ -624,7 +652,12 @@ export function mount(options: WidgetHostOptions): WidgetController {
     if (!cause || cause.key === bannerDismissedFor) {
       windowElement.setBanner(null);
     } else {
-      windowElement.setBanner(cause.message, cause.retryable);
+      windowElement.setBanner({
+        title: cause.title,
+        message: cause.message,
+        retryable: cause.retryable,
+        requestId: cause.requestId,
+      });
     }
 
     const state = conversation.getState();
@@ -769,6 +802,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
       window.removeEventListener('online', onConnectivityChange);
       window.removeEventListener('offline', onConnectivityChange);
       windowElement.releaseFocus();
+      windowElement.dispose();
       shadowRoot.replaceChildren();
       mountedHosts.delete(host);
       host.remove();

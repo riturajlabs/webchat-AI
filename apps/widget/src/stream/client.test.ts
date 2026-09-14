@@ -296,7 +296,7 @@ describe('streamChat', () => {
     const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
 
     expect(result.completed).toBe(false);
-    expect(result.error?.code).toBe('ai_unavailable');
+    expect(result.error?.code).toBe('generation_failed');
     // One failure transition only: the trailing failed done must not
     // produce a duplicate onError (no double error banner in the UI).
     expect(h.onError).toHaveBeenCalledTimes(1);
@@ -338,7 +338,7 @@ describe('streamChat', () => {
 
     expect(result.error?.code).toBe('ai_unavailable');
     expect(result.error?.userMessage).toBe(
-      'The assistant is temporarily unavailable. Please try again.',
+      'The AI service is temporarily unavailable. Please try again in a moment.',
     );
     expect(result.error?.retryable).toBe(true);
     expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'ai_unavailable' }));
@@ -363,7 +363,7 @@ describe('streamChat', () => {
     const resultUnknown = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchUnknown);
     expect(resultUnknown.error?.code).toBe('server');
     expect(resultUnknown.error?.userMessage).toBe(
-      'Sorry, I couldn’t process that. Please try again.',
+      'Something unexpected prevented the assistant from completing this response. Please try again.',
     );
   });
 
@@ -423,7 +423,7 @@ describe('streamChat', () => {
     };
     const result = await streamChat(OPTIONS, { question: 'hi' }, h, client, fetchImpl);
     expect(result.error?.code).toBe('widget_disabled');
-    expect(result.error?.userMessage).toBe('This assistant is currently unavailable');
+    expect(result.error?.userMessage).toBe('This assistant is currently unavailable.');
     expect(h.onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'widget_disabled' }));
   });
 

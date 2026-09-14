@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createChatWindow } from './window';
+import { BANNER_AUTO_DISMISS_MS, createChatWindow } from './window';
 import { defaultConfig, type WidgetPublicConfig } from '../config/types';
 
 function setup(configOverrides: Partial<WidgetPublicConfig> = {}) {
@@ -139,31 +139,156 @@ describe('createChatWindow', () => {
 
   it('sets and clears the banner', () => {
     const { windowApi } = setup();
-    windowApi.setBanner("Can't reach the assistant");
-    expect(windowApi.currentBanner()).toBe("Can't reach the assistant");
+    windowApi.setBanner({
+      title: "Couldn't connect",
+      message: "We couldn't maintain the connection. Check your connection and try again.",
+      retryable: false,
+    });
+    expect(windowApi.currentBanner()).toBe(
+      "We couldn't maintain the connection. Check your connection and try again.",
+    );
     windowApi.setBanner(null);
     expect(windowApi.currentBanner()).toBe('');
+  });
+
+  it('renders a titled banner with an optional reference', () => {
+    const { windowApi } = setup();
+    windowApi.setBanner({
+      title: 'Request timed out',
+      message: 'The assistant took too long to respond. Please try again.',
+      retryable: true,
+      requestId: 'ABC123',
+    });
+    const title = windowApi.element.querySelector<HTMLElement>('.wc-banner-title');
+    const reference = windowApi.element.querySelector<HTMLElement>('.wc-banner-reference');
+    expect(title?.textContent).toBe('Request timed out');
+    expect(reference?.textContent).toBe('Reference: ABC123');
+    expect(reference?.hidden).toBe(false);
+
+    // No request id → the reference line stays hidden.
+    windowApi.setBanner({
+      title: 'Request timed out',
+      message: 'The assistant took too long to respond. Please try again.',
+      retryable: true,
+    });
+    expect(reference?.hidden).toBe(true);
   });
 
   it('shows Retry only for retryable banners and wires actions', () => {
     const { windowApi, onRetry, onDismiss } = setup();
 
-    windowApi.setBanner('Something went wrong', true);
-    expect(windowApi.currentBanner()).toBe('Something went wrong');
+    windowApi.setBanner({
+      title: 'Something went wrong',
+      message: 'Something unexpected prevented the assistant from completing this response.',
+      retryable: true,
+    });
+    expect(windowApi.currentBanner()).toBe(
+      'Something unexpected prevented the assistant from completing this response.',
+    );
     const retry = windowApi.element.querySelector<HTMLButtonElement>('.wc-banner-retry');
-    const dismiss = windowApi.element.querySelector<HTMLButtonElement>('.wc-banner-dismiss');
+    const closeBtn = windowApi.element.querySelector<HTMLButtonElement>('.wc-banner-close');
     expect(retry?.hidden).toBe(false);
-    expect(dismiss?.hidden).toBe(false);
+    expect(closeBtn).not.toBeNull();
+    expect(closeBtn?.getAttribute('aria-label')).toBe('Dismiss error');
 
     retry?.click();
     expect(onRetry).toHaveBeenCalledTimes(1);
-    dismiss?.click();
+    closeBtn?.click();
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
+    // Icon-only close — the old text "Dismiss" button is gone.
+    expect(windowApi.element.querySelector('.wc-banner-dismiss')).toBeNull();
+
     // Non-retryable banners hide the Retry action.
-    windowApi.setBanner('Limit reached');
+    windowApi.setBanner({
+      title: 'Message limit reached',
+      message: 'You have reached the message limit.',
+      retryable: false,
+    });
     expect(retry?.hidden).toBe(true);
-    expect(dismiss?.hidden).toBe(false);
+  });
+
+  it('auto-dismisses the banner after 15 seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const { windowApi, onDismiss } = setup();
+      windowApi.setBanner({
+        title: "Couldn't connect",
+        message: "We couldn't maintain the connection. Check your connection and try again.",
+        retryable: true,
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(BANNER_AUTO_DISMISS_MS - 1);
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(windowApi.currentBanner()).not.toBe('');
+      vi.advanceTimersByTime(1);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+      expect(windowApi.currentBanner()).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-asserting the same banner does not restart auto-dismiss', () => {
+    vi.useFakeTimers();
+    try {
+      const { windowApi, onDismiss } = setup();
+      const banner = {
+        title: 'Request timed out',
+        message: 'The assistant took too long to respond. Please try again.',
+        retryable: true,
+      };
+      windowApi.setBanner(banner);
+      vi.advanceTimersByTime(BANNER_AUTO_DISMISS_MS - 10_000);
+      windowApi.setBanner({ ...banner }); // syncRenderer re-asserts identical content
+      vi.advanceTimersByTime(5_000);
+      expect(onDismiss).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(5_000);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a new error restarts the auto-dismiss countdown', () => {
+    vi.useFakeTimers();
+    try {
+      const { windowApi, onDismiss } = setup();
+      windowApi.setBanner({
+        title: "Couldn't connect",
+        message: "We couldn't maintain the connection. Check your connection and try again.",
+        retryable: true,
+      });
+      vi.advanceTimersByTime(10_000);
+      windowApi.setBanner({
+        title: 'Assistant unavailable',
+        message: 'The AI service is temporarily unavailable. Please try again in a moment.',
+        retryable: true,
+      });
+      vi.advanceTimersByTime(BANNER_AUTO_DISMISS_MS - 1);
+      expect(onDismiss).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dispose clears the auto-dismiss timer', () => {
+    vi.useFakeTimers();
+    try {
+      const { windowApi, onDismiss } = setup();
+      windowApi.setBanner({
+        title: "Couldn't connect",
+        message: "We couldn't maintain the connection. Check your connection and try again.",
+        retryable: true,
+      });
+      windowApi.dispose();
+      vi.advanceTimersByTime(BANNER_AUTO_DISMISS_MS + 10_000);
+      expect(onDismiss).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('syncSuggested swaps the suggested-questions row', () => {

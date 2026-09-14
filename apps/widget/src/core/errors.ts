@@ -16,6 +16,8 @@ export type WidgetErrorCode =
   | 'invalid'
   | 'validation'
   | 'ai_unavailable'
+  | 'generation_failed'
+  | 'embedding'
   | 'config'
   | 'widget_not_found'
   | 'widget_disabled'
@@ -38,22 +40,54 @@ export interface WidgetErrorOptions {
   requestId?: string | null;
 }
 
+/**
+ * Per-category error banner copy (production hardening). Each taxonomy code has
+ * a distinct short title and a human-readable explanation so the visitor is
+ * never dumped into a single generic sentence. The private `message` in the
+ * constructor is the raw/technical text and is never rendered directly; the UI
+ * uses `userTitle` + `userMessage`.
+ */
 const USER_FACING_MESSAGES: Record<WidgetErrorCode, string> = {
-  network: 'Unable to connect right now. Please try again.',
-  timeout: 'The assistant took too long to respond',
-  unauthorized: 'Session expired, please retry',
-  limit: 'Message limit reached',
-  server: 'Sorry, I couldn’t process that. Please try again.',
-  invalid: 'That request could not be sent',
+  network: "We couldn't maintain the connection. Check your connection and try again.",
+  timeout: 'The assistant took too long to respond. Please try again.',
+  unauthorized: 'Your session expired. Please try again.',
+  limit: 'You have reached the message limit.',
+  server:
+    'Something unexpected prevented the assistant from completing this response. Please try again.',
+  invalid: 'That request could not be sent.',
   validation: 'Please check your message and try again.',
-  ai_unavailable: 'The assistant is temporarily unavailable. Please try again.',
-  config: 'Unable to load widget settings',
-  widget_not_found: 'Invalid widget ID',
-  widget_disabled: 'This assistant is currently unavailable',
-  website_not_ready: 'This assistant is still being set up',
-  origin: 'This domain is not allowed to embed this assistant',
-  domain_not_configured: 'No allowed domains are configured for this assistant',
+  ai_unavailable: 'The AI service is temporarily unavailable. Please try again in a moment.',
+  generation_failed:
+    'Your answer could not be completed because the AI generation service stopped unexpectedly. The partial response has been preserved.',
+  embedding:
+    "This website's knowledge is currently unavailable, so the assistant couldn't complete the request.",
+  config: 'Unable to load widget settings.',
+  widget_not_found: 'Invalid widget ID.',
+  widget_disabled: 'This assistant is currently unavailable.',
+  website_not_ready: 'This assistant is still being set up.',
+  origin: 'This domain is not allowed to embed this assistant.',
+  domain_not_configured: 'No allowed domains are configured for this assistant.',
   session: "Couldn't start the conversation. Please try again.",
+};
+
+const USER_FACING_TITLES: Record<WidgetErrorCode, string> = {
+  network: "Couldn't connect",
+  timeout: 'Request timed out',
+  unauthorized: 'Session expired',
+  limit: 'Message limit reached',
+  server: 'Something went wrong',
+  invalid: 'Invalid request',
+  validation: 'Validation error',
+  ai_unavailable: 'Assistant unavailable',
+  generation_failed: "Assistant couldn't finish",
+  embedding: 'Knowledge unavailable',
+  config: 'Unable to load settings',
+  widget_not_found: 'Widget not found',
+  widget_disabled: 'Assistant unavailable',
+  website_not_ready: 'Assistant being set up',
+  origin: 'Domain not allowed',
+  domain_not_configured: 'No allowed domains',
+  session: 'Session error',
 };
 
 function isRetryable(code: WidgetErrorCode): boolean {
@@ -63,6 +97,8 @@ function isRetryable(code: WidgetErrorCode): boolean {
     case 'unauthorized':
     case 'server':
     case 'ai_unavailable':
+    case 'generation_failed':
+    case 'embedding':
     case 'session':
       return true;
     default:
@@ -91,6 +127,11 @@ export class WidgetError extends Error {
 
   get userMessage(): string {
     return USER_FACING_MESSAGES[this.code];
+  }
+
+  /** Short, scannable banner heading for the error category. */
+  get userTitle(): string {
+    return USER_FACING_TITLES[this.code];
   }
 }
 
@@ -141,11 +182,11 @@ const BACKEND_CODE_MAP: Record<string, WidgetErrorCode> = {
   INVALID_TOKEN: 'unauthorized',
   TOKEN_EXPIRED: 'unauthorized',
   GENERATION_TIMEOUT: 'timeout',
-  GENERATION_FAILED: 'ai_unavailable',
+  GENERATION_FAILED: 'generation_failed',
   GENERATION_UNAVAILABLE: 'ai_unavailable',
   AI_UNAVAILABLE: 'ai_unavailable',
-  EMBEDDING_FAILED: 'ai_unavailable',
-  EMBEDDING_UNAVAILABLE: 'ai_unavailable',
+  EMBEDDING_FAILED: 'embedding',
+  EMBEDDING_UNAVAILABLE: 'embedding',
   INVALID_QUESTION: 'validation',
   VALIDATION_ERROR: 'validation',
   WIDGET_ORIGIN_NOT_ALLOWED: 'origin',

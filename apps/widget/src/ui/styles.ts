@@ -174,7 +174,9 @@ export const WIDGET_STYLES = `
   .wc-more-toggle:focus-visible,
   .wc-code-copy:focus-visible,
   .wc-chip:focus-visible,
-  .wc-star:focus-visible {
+  .wc-star:focus-visible,
+  .wc-banner-close:focus-visible,
+  .wc-banner-retry:focus-visible {
     outline: 2px solid var(--wc-focus-ring, var(--wc-accent));
     outline-offset: 2px;
   }
@@ -345,15 +347,80 @@ export const WIDGET_STYLES = `
     width: auto;
     height: auto;
     clip: auto;
-    padding: 8px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 14px 0;
+    padding: 12px 14px;
     background: color-mix(in srgb, var(--wc-error, #ef4444) 12%, transparent);
-    color: var(--wc-error, #ef4444);
+    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 45%, transparent);
+    border-radius: 12px;
+    color: var(--wc-text);
     font-size: 0.9em;
+    box-sizing: border-box;
   }
 
   :host([data-dark='1']) .wc-banner {
     background: color-mix(in srgb, var(--wc-error, #ef4444) 18%, transparent);
-    color: color-mix(in srgb, var(--wc-error, #ef4444) 85%, #ffffff);
+    border-color: color-mix(in srgb, var(--wc-error, #ef4444) 60%, transparent);
+  }
+
+  .wc-banner-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .wc-banner-title {
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .wc-banner-message {
+    margin: 0;
+    line-height: 1.45;
+  }
+
+  .wc-banner-reference {
+    font-size: 0.82em;
+    color: var(--wc-muted);
+  }
+
+  .wc-banner-close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: -6px -8px 0 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--wc-error, #ef4444);
+    cursor: pointer;
+  }
+
+  .wc-banner-close:hover {
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 16%, transparent);
+  }
+
+  .wc-banner-retry {
+    align-self: flex-start;
+    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 50%, transparent);
+    background: var(--wc-surface-elevated);
+    color: var(--wc-error, #ef4444);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.9em;
+    font-weight: 500;
+    cursor: pointer;
+    min-height: 32px;
+  }
+
+  .wc-banner-retry:hover {
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 14%, transparent);
   }
 
   /* ---- Messages + bubbles ------------------------------------------------ */

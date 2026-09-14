@@ -50,7 +50,12 @@ describe('widget accessibility (axe-core)', () => {
       createBubble({ id: 'a2', role: 'assistant', content: '', error: true }),
     );
     windowApi.syncSuggested(['What is pricing?', 'Docs']);
-    windowApi.setBanner("Can't reach the assistant", true);
+    windowApi.setBanner({
+      title: "Couldn't connect",
+      message: "We couldn't maintain the connection. Check your connection and try again.",
+      retryable: true,
+      requestId: 'ABC123',
+    });
 
     document.body.appendChild(windowApi.element);
     try {

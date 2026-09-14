@@ -11,10 +11,21 @@ import {
 describe('WidgetError', () => {
   it('exposes a stable user-facing message per code', () => {
     expect(new WidgetError({ code: 'network', message: 'x' }).userMessage).toBe(
-      'Unable to connect right now. Please try again.',
+      "We couldn't maintain the connection. Check your connection and try again.",
     );
     expect(new WidgetError({ code: 'widget_disabled', message: 'x' }).userMessage).toBe(
-      'This assistant is currently unavailable',
+      'This assistant is currently unavailable.',
+    );
+  });
+
+  it('exposes a distinct short title per code', () => {
+    expect(new WidgetError({ code: 'network', message: 'x' }).userTitle).toBe("Couldn't connect");
+    expect(new WidgetError({ code: 'timeout', message: 'x' }).userTitle).toBe('Request timed out');
+    expect(new WidgetError({ code: 'generation_failed', message: 'x' }).userTitle).toBe(
+      "Assistant couldn't finish",
+    );
+    expect(new WidgetError({ code: 'embedding', message: 'x' }).userTitle).toBe(
+      'Knowledge unavailable',
     );
   });
 
@@ -23,6 +34,9 @@ describe('WidgetError', () => {
     expect(new WidgetError({ code: 'timeout', message: 'x' }).retryable).toBe(true);
     expect(new WidgetError({ code: 'unauthorized', message: 'x' }).retryable).toBe(true);
     expect(new WidgetError({ code: 'server', message: 'x' }).retryable).toBe(true);
+    expect(new WidgetError({ code: 'ai_unavailable', message: 'x' }).retryable).toBe(true);
+    expect(new WidgetError({ code: 'generation_failed', message: 'x' }).retryable).toBe(true);
+    expect(new WidgetError({ code: 'embedding', message: 'x' }).retryable).toBe(true);
     expect(new WidgetError({ code: 'limit', message: 'x' }).retryable).toBe(false);
     expect(new WidgetError({ code: 'widget_disabled', message: 'x' }).retryable).toBe(false);
     expect(new WidgetError({ code: 'website_not_ready', message: 'x' }).retryable).toBe(false);
@@ -61,7 +75,7 @@ describe('errorFromApiBody', () => {
       error: { code: 'WIDGET_NOT_FOUND', message: 'Widget not found.' },
     });
     expect(error.code).toBe('widget_not_found');
-    expect(error.userMessage).toBe('Invalid widget ID');
+    expect(error.userMessage).toBe('Invalid widget ID.');
     expect(error.status).toBe(404);
   });
 
@@ -70,7 +84,7 @@ describe('errorFromApiBody', () => {
       error: { code: 'WIDGET_DISABLED', message: 'Widget is not available.' },
     });
     expect(error.code).toBe('widget_disabled');
-    expect(error.userMessage).toBe('This assistant is currently unavailable');
+    expect(error.userMessage).toBe('This assistant is currently unavailable.');
     expect(error.retryable).toBe(false);
   });
 
@@ -79,7 +93,7 @@ describe('errorFromApiBody', () => {
       error: { code: 'WIDGET_ORIGIN_NOT_ALLOWED', message: 'nope' },
     });
     expect(error.code).toBe('origin');
-    expect(error.userMessage).toBe('This domain is not allowed to embed this assistant');
+    expect(error.userMessage).toBe('This domain is not allowed to embed this assistant.');
   });
 
   it('maps an unconfigured domain allowlist', () => {
@@ -90,7 +104,7 @@ describe('errorFromApiBody', () => {
       },
     });
     expect(error.code).toBe('domain_not_configured');
-    expect(error.userMessage).toBe('No allowed domains are configured for this assistant');
+    expect(error.userMessage).toBe('No allowed domains are configured for this assistant.');
     expect(error.retryable).toBe(false);
   });
 
@@ -106,7 +120,9 @@ describe('errorFromApiBody', () => {
       error: { code: 'INTERNAL_DB_PASSWORD', message: 'leak' },
     });
     expect(error.code).toBe('server');
-    expect(error.userMessage).toBe('Sorry, I couldn’t process that. Please try again.');
+    expect(error.userMessage).toBe(
+      'Something unexpected prevented the assistant from completing this response. Please try again.',
+    );
   });
 });
 
@@ -120,7 +136,11 @@ describe('errorFromSseCode', () => {
     expect(errorFromSseCode('RATE_LIMIT_EXCEEDED', 'm').code).toBe('limit');
     expect(errorFromSseCode('INVALID_CREDENTIALS', 'm').code).toBe('unauthorized');
     expect(errorFromSseCode('GENERATION_TIMEOUT', 'm').code).toBe('timeout');
+    expect(errorFromSseCode('GENERATION_FAILED', 'm').code).toBe('generation_failed');
+    expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'm').code).toBe('ai_unavailable');
     expect(errorFromSseCode('AI_UNAVAILABLE', 'm').code).toBe('ai_unavailable');
+    expect(errorFromSseCode('EMBEDDING_FAILED', 'm').code).toBe('embedding');
+    expect(errorFromSseCode('EMBEDDING_UNAVAILABLE', 'm').code).toBe('embedding');
     expect(errorFromSseCode('VALIDATION_ERROR', 'm').code).toBe('validation');
     expect(errorFromSseCode('WIDGET_DOMAIN_NOT_CONFIGURED', 'm').code).toBe(
       'domain_not_configured',
@@ -129,12 +149,23 @@ describe('errorFromSseCode', () => {
 
   it('provides actionable messages for AI and validation failures', () => {
     expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').userMessage).toBe(
-      'The assistant is temporarily unavailable. Please try again.',
+      'The AI service is temporarily unavailable. Please try again in a moment.',
+    );
+    expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').userTitle).toBe(
+      'Assistant unavailable',
+    );
+    expect(errorFromSseCode('GENERATION_FAILED', 'internal detail').userMessage).toBe(
+      'Your answer could not be completed because the AI generation service stopped unexpectedly. The partial response has been preserved.',
+    );
+    expect(errorFromSseCode('EMBEDDING_FAILED', 'internal detail').userMessage).toBe(
+      "This website's knowledge is currently unavailable, so the assistant couldn't complete the request.",
     );
     expect(errorFromSseCode('INVALID_QUESTION', 'internal detail').userMessage).toBe(
       'Please check your message and try again.',
     );
     expect(errorFromSseCode('GENERATION_UNAVAILABLE', 'internal detail').retryable).toBe(true);
+    expect(errorFromSseCode('GENERATION_FAILED', 'internal detail').retryable).toBe(true);
+    expect(errorFromSseCode('EMBEDDING_FAILED', 'internal detail').retryable).toBe(true);
   });
 
   it('carries the optional request id (Phase 2 tracing)', () => {
@@ -150,7 +181,7 @@ describe('errorFromSseCode', () => {
   it('surfaces an invalid widget id with an actionable message', () => {
     const error = errorFromSseCode('WIDGET_NOT_FOUND', 'Widget not found.');
     expect(error.code).toBe('widget_not_found');
-    expect(error.userMessage).toBe('Invalid widget ID');
+    expect(error.userMessage).toBe('Invalid widget ID.');
     expect(error.retryable).toBe(false);
   });
 
