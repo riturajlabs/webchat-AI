@@ -186,6 +186,22 @@ def _emit_stream_telemetry(
         pass
 
 
+def _safe_token_count(val: object) -> int:
+    """Normalize optional token counts from SDK metadata safely.
+
+    Handles None, 0, positive integers, or numeric strings, defaulting to 0.
+    """
+    if val is None:
+        return 0
+    if isinstance(val, (int, float, str, bytes, bytearray)):
+        try:
+            count = int(val)
+            return count if count >= 0 else 0
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 class GoogleGeminiClient:
     """`gemini-2.5-flash` streaming via the Google GenAI async SDK."""
 
@@ -405,9 +421,15 @@ class GoogleGeminiClient:
                         finish_reason = normalize_gemini_finish_reason(fr)
                 metadata = getattr(chunk, "usage_metadata", None)
                 if metadata is not None:
-                    input_tokens = int(getattr(metadata, "prompt_token_count", 0))
-                    output_tokens = int(getattr(metadata, "candidates_token_count", 0))
-                    reasoning_tokens = int(getattr(metadata, "thoughts_token_count", 0))
+                    raw_input = getattr(metadata, "prompt_token_count", None)
+                    if raw_input is not None:
+                        input_tokens = _safe_token_count(raw_input)
+                    raw_output = getattr(metadata, "candidates_token_count", None)
+                    if raw_output is not None:
+                        output_tokens = _safe_token_count(raw_output)
+                    raw_reasoning = getattr(metadata, "thoughts_token_count", None)
+                    if raw_reasoning is not None:
+                        reasoning_tokens = _safe_token_count(raw_reasoning)
             self._usage = GenerationUsage(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,

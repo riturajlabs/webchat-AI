@@ -599,7 +599,9 @@ describe('CrawlActivityProvider + monitor', () => {
 
     // ...then the monitor drops it so nothing lingers.
     await waitFor(() => expect(store.getJobs().size).toBe(0), { timeout: 2000 });
-    expect(screen.getByTestId('probe-site-1')).toHaveTextContent('idle|no-sse|');
+    await waitFor(() =>
+      expect(screen.getByTestId('probe-site-1')).toHaveTextContent('idle|no-sse|'),
+    );
   });
 
   it('keeps tracking and reconnects the SSE stream after a network failure', async () => {

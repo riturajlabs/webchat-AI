@@ -13,6 +13,7 @@ from backend.ai.gemini import (
     GenerationUsage,
     GoogleGeminiClient,
     _classify_gemini_exception,
+    _safe_token_count,
 )
 from backend.core.config import get_settings
 from backend.core.errors import GenerationError, GenerationUnavailableError
@@ -20,9 +21,9 @@ from backend.core.errors import GenerationError, GenerationUnavailableError
 
 @dataclass
 class FakeUsageMetadata:
-    prompt_token_count: int
-    candidates_token_count: int
-    thoughts_token_count: int = 0
+    prompt_token_count: int | None = None
+    candidates_token_count: int | None = None
+    thoughts_token_count: int | None = None
 
 
 @dataclass
@@ -398,3 +399,296 @@ async def test_telemetry_never_leaks_secrets(fake_sdk, caplog) -> None:
             for attr in ("model", "phase", "exception_type", "exception_category"):
                 val = getattr(r, attr, None)
                 assert secret_key not in str(val)
+
+
+def test_safe_token_count_semantics() -> None:
+    """Verify safe token conversion: None -> 0, 0 -> 0, N -> N, invalid -> 0."""
+    assert _safe_token_count(None) == 0
+    assert _safe_token_count(0) == 0
+    assert _safe_token_count(1) == 1
+    assert _safe_token_count(123) == 123
+    assert _safe_token_count("456") == 456
+    assert _safe_token_count(-5) == 0
+    assert _safe_token_count("not-a-number") == 0
+    assert _safe_token_count(object()) == 0
+
+
+async def test_stream_tolerates_none_token_metadata_and_preserves_text(fake_sdk) -> None:
+    """Regression test: Gemini emits text with thoughts_token_count=None and
+    candidates_token_count=None. Stream must continue normally without TypeError,
+    preserve the generated text, and report zero for missing token counts."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(
+            text="Indira University provides",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=None,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = []
+    async for delta in client.stream_generate(system="sys", messages=[("user", "hi")]):
+        deltas.append(delta)
+
+    assert deltas == ["Indira University provides"]
+    assert client.usage == GenerationUsage(
+        input_tokens=0,
+        output_tokens=0,
+        finish_reason="UNKNOWN",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_stream_token_metadata_all_none(fake_sdk) -> None:
+    """All token fields are None."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(
+            text="chunk text",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=None,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+            candidates=[FakeCandidate(finish_reason="STOP")],
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["chunk text"]
+    assert client.usage == GenerationUsage(
+        input_tokens=0,
+        output_tokens=0,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_stream_token_metadata_mixed_cases(fake_sdk) -> None:
+    """Mixed token metadata: prompt_token_count=123, candidates=None, thoughts=None."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(
+            text="mixed token chunk",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=123,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["mixed token chunk"]
+    assert client.usage == GenerationUsage(
+        input_tokens=123,
+        output_tokens=0,
+        finish_reason="UNKNOWN",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_case_a_stop_with_complete_usage_metadata(fake_sdk) -> None:
+    """CASE A: STOP + complete usage metadata."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Complete response"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="STOP")],
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=50,
+                candidates_token_count=30,
+                thoughts_token_count=10,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Complete response"]
+    assert client.usage == GenerationUsage(
+        input_tokens=50,
+        output_tokens=30,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=10,
+    )
+
+
+async def test_case_b_stop_with_none_optional_usage_metadata(fake_sdk) -> None:
+    """CASE B: STOP + None optional usage metadata."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Response without thought tokens"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="STOP")],
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=50,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Response without thought tokens"]
+    assert client.usage == GenerationUsage(
+        input_tokens=50,
+        output_tokens=0,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_case_c_max_tokens_with_usage_metadata(fake_sdk) -> None:
+    """CASE C: MAX_TOKENS + usage metadata."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Truncated response"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="MAX_TOKENS")],
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=40,
+                candidates_token_count=100,
+                thoughts_token_count=20,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Truncated response"]
+    assert client.usage == GenerationUsage(
+        input_tokens=40,
+        output_tokens=100,
+        finish_reason="MAX_TOKENS",
+        truncated=True,
+        reasoning_tokens=20,
+    )
+
+
+async def test_case_d_max_tokens_with_none_optional_usage_metadata(fake_sdk) -> None:
+    """CASE D: MAX_TOKENS + None optional usage metadata."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Truncated response no thoughts"),
+        FakeGenerationChunk(
+            text=None,
+            candidates=[FakeCandidate(finish_reason="MAX_TOKENS")],
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=40,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Truncated response no thoughts"]
+    assert client.usage == GenerationUsage(
+        input_tokens=40,
+        output_tokens=0,
+        finish_reason="MAX_TOKENS",
+        truncated=True,
+        reasoning_tokens=0,
+    )
+
+
+async def test_case_e_delta_then_none_metadata_then_successful_chunk(fake_sdk) -> None:
+    """CASE E: text delta + None usage metadata + subsequent successful chunk."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(
+            text="Indira University provides ",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=100,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        ),
+        FakeGenerationChunk(
+            text="world-class education.",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=100,
+                candidates_token_count=15,
+                thoughts_token_count=None,
+            ),
+            candidates=[FakeCandidate(finish_reason="STOP")],
+        ),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Indira University provides ", "world-class education."]
+    assert client.usage == GenerationUsage(
+        input_tokens=100,
+        output_tokens=15,
+        finish_reason="STOP",
+        truncated=False,
+        reasoning_tokens=0,
+    )
+
+
+async def test_case_f_delta_with_none_metadata_then_legitimate_upstream_exception(
+    fake_sdk, caplog
+) -> None:
+    """CASE F: text delta + None usage metadata + legitimate upstream exception.
+    Only legitimate upstream exceptions should produce GENERATION_FAILED."""
+    import logging
+
+    async def _failing_stream():
+        yield FakeGenerationChunk(
+            text="Indira University provides ",
+            usage_metadata=FakeUsageMetadata(
+                prompt_token_count=100,
+                candidates_token_count=None,
+                thoughts_token_count=None,
+            ),
+        )
+        raise ConnectionResetError("Google dropped socket")
+
+    async def _mock_generate(*args, **kwargs):
+        return _failing_stream()
+
+    client = _client(fake_sdk)
+    fake_sdk.aio.models.generate_content_stream = _mock_generate
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(GenerationError, match="Google dropped socket"):
+            async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
+                pass
+
+    telemetry_records = [
+        r for r in caplog.records if getattr(r, "event", None) == "gemini_stream_exception"
+    ]
+    assert len(telemetry_records) >= 1
+    rec = telemetry_records[0]
+    assert rec.exception_category == "connection_error"
+    assert rec.started_streaming is True
+    assert rec.phase == "inter_chunk"
+
+
+async def test_missing_usage_metadata_never_fails_generation(fake_sdk) -> None:
+    """Missing usage metadata by itself must NEVER become a generation failure."""
+    fake_sdk.chunks = [
+        FakeGenerationChunk(text="Chunk 1", usage_metadata=None, candidates=None),
+        FakeGenerationChunk(text="Chunk 2", usage_metadata=None, candidates=None),
+    ]
+    client = _client(fake_sdk)
+
+    deltas = [d async for d in client.stream_generate(system="sys", messages=[("user", "hi")])]
+    assert deltas == ["Chunk 1", "Chunk 2"]
+    assert client.usage == GenerationUsage(
+        input_tokens=0,
+        output_tokens=0,
+        finish_reason="UNKNOWN",
+        truncated=False,
+        reasoning_tokens=0,
+    )
