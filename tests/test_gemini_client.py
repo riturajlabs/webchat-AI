@@ -9,7 +9,11 @@ API key is needed; the fake mirrors the SDK surface
 from dataclasses import dataclass
 
 import pytest
-from backend.ai.gemini import GenerationUsage, GoogleGeminiClient
+from backend.ai.gemini import (
+    GenerationUsage,
+    GoogleGeminiClient,
+    _classify_gemini_exception,
+)
 from backend.core.config import get_settings
 from backend.core.errors import GenerationError, GenerationUnavailableError
 
@@ -312,3 +316,85 @@ async def test_mid_stream_stall_raises_generation_error(fake_sdk, monkeypatch) -
     with pytest.raises(GenerationError, match="boom"):
         async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
             pass
+
+
+def test_classify_gemini_exception() -> None:
+    assert _classify_gemini_exception(TimeoutError("read timeout")) == "timeout"
+
+    class GoogleAPIError(Exception):
+        pass
+
+    assert (
+        _classify_gemini_exception(GoogleAPIError("503 Service Unavailable"))
+        == "provider_api_error"
+    )
+
+    assert (
+        _classify_gemini_exception(ConnectionResetError("peer closed connection"))
+        == "connection_error"
+    )
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    assert _classify_gemini_exception(RemoteProtocolError("illegal chunk")) == "stream_closed"
+
+    assert _classify_gemini_exception(ValueError("bad arg")) == "unknown"
+
+
+async def test_mid_stream_failure_logs_structured_telemetry(fake_sdk, caplog) -> None:
+    import logging
+
+    async def _failing_stream():
+        yield FakeGenerationChunk(text="first chunk")
+        raise ConnectionResetError("mid-stream disconnect")
+
+    async def _mock_generate(*args, **kwargs):
+        return _failing_stream()
+
+    client = _client(fake_sdk)
+    fake_sdk.aio.models.generate_content_stream = _mock_generate
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(GenerationError):
+            async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
+                pass
+
+    telemetry_records = [
+        r for r in caplog.records if getattr(r, "event", None) == "gemini_stream_exception"
+    ]
+    assert len(telemetry_records) >= 1
+    rec = telemetry_records[0]
+    assert rec.exception_category == "connection_error"
+    assert rec.started_streaming is True
+    assert rec.phase == "inter_chunk"
+    assert rec.model == "gemini-2.5-flash"
+    assert rec.output_tokens >= 0
+    assert rec.elapsed_ms >= 0
+
+
+async def test_telemetry_never_leaks_secrets(fake_sdk, caplog) -> None:
+    import logging
+
+    secret_key = "AIzaSySecretApiKey12345"
+
+    async def _failing_stream():
+        yield FakeGenerationChunk(text="first chunk")
+        raise RuntimeError(f"failed with key {secret_key}")
+
+    async def _mock_generate(*args, **kwargs):
+        return _failing_stream()
+
+    client = _client(fake_sdk)
+    fake_sdk.aio.models.generate_content_stream = _mock_generate
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(GenerationError):
+            async for _ in client.stream_generate(system="s", messages=[("user", "q")]):
+                pass
+
+    for r in caplog.records:
+        if getattr(r, "event", None) == "gemini_stream_exception":
+            for attr in ("model", "phase", "exception_type", "exception_category"):
+                val = getattr(r, attr, None)
+                assert secret_key not in str(val)

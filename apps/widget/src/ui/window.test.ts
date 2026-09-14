@@ -229,6 +229,26 @@ describe('createChatWindow', () => {
     }
   });
 
+  it('does not auto-dismiss the banner when requestId is present', () => {
+    vi.useFakeTimers();
+    try {
+      const { windowApi, onDismiss } = setup();
+      windowApi.setBanner({
+        title: "Assistant couldn't finish",
+        message:
+          'Your answer could not be completed because the AI generation service stopped unexpectedly. The partial response has been preserved.',
+        retryable: true,
+        requestId: 'req_123456',
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(BANNER_AUTO_DISMISS_MS * 2);
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(windowApi.currentBanner()).not.toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('re-asserting the same banner does not restart auto-dismiss', () => {
     vi.useFakeTimers();
     try {

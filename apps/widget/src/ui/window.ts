@@ -238,12 +238,18 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
     retryButton.hidden = !content.retryable;
     banner.hidden = false;
     clearHideTimer();
-    hideTimer = setTimeout(() => {
-      hideTimer = null;
-      lastBannerSignature = null;
-      clearBanner(); // Hide locally so dismissal is immediate regardless of caller.
-      options.onDismiss();
-    }, BANNER_AUTO_DISMISS_MS);
+    // B & C: When a support reference/correlation ID exists, do NOT auto-dismiss
+    // the banner after 15s. It must remain visible until the visitor dismisses (×),
+    // clicks Retry, or a new turn replaces the state. Banners without a requestId
+    // retain the existing 15s auto-dismiss countdown.
+    if (!content.requestId) {
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        lastBannerSignature = null;
+        clearBanner(); // Hide locally so dismissal is immediate regardless of caller.
+        options.onDismiss();
+      }, BANNER_AUTO_DISMISS_MS);
+    }
   }
 
   function clearBanner(): void {

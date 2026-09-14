@@ -293,7 +293,7 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage, list?: HTMLElemen
 
   // Sources + per-message retry (rebuilt only when their inputs change).
   syncSources(bubble, message);
-  syncRetry(bubble, message);
+  syncRetry(bubble, message, list);
 
   // Inline [n] markers -> clickable citation links (audit W-09), only for
   // completed answers that actually carry sources.
@@ -423,9 +423,18 @@ function syncSources(bubble: HTMLElement, message: ChatMessage): void {
   renderedSources.set(bubble, signature);
 }
 
-function syncRetry(bubble: HTMLElement, message: ChatMessage): void {
+export function syncRetry(bubble: HTMLElement, message: ChatMessage, list?: HTMLElement): void {
   let retry = bubble.querySelector<HTMLButtonElement>('.wc-retry-message');
-  const showRetry = message.role === 'assistant' && message.error;
+  // Suppress duplicate bubble-level retry if a top-level error banner with Retry is active
+  const bannerHasRetry =
+    list?.dataset?.bannerActive === 'true' ||
+    Boolean(
+      typeof list?.closest === 'function' &&
+      list
+        .closest('.wc-chat-window')
+        ?.querySelector('.wc-banner:not([hidden]) .wc-banner-retry:not([hidden])'),
+    );
+  const showRetry = message.role === 'assistant' && message.error && !bannerHasRetry;
   if (showRetry) {
     if (!retry) {
       retry = document.createElement('button');

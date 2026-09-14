@@ -325,6 +325,8 @@ export function mount(options: WidgetHostOptions): WidgetController {
       lastFailedQuestion = null;
       lastError = null;
       windowElement.setBanner(null);
+      messageList.removeAttribute('data-banner-active');
+      renderMessagesNow();
     },
     onStop: () => {
       if (conversation.getState().streaming) {
@@ -396,6 +398,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
     windowElement.composer.reset();
     windowElement.setBanner(null);
+    messageList.removeAttribute('data-banner-active');
     lastFailedQuestion = null;
     lastError = null;
     // A fresh attempt re-arms the banner: a visitor who retries deserves to
@@ -483,6 +486,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
           retryable: error.retryable,
           requestId: error.requestId,
         });
+        if (error.retryable) {
+          messageList.setAttribute('data-banner-active', 'true');
+        } else {
+          messageList.removeAttribute('data-banner-active');
+        }
         conversation.failTurn(turnId, error.userMessage);
       },
     };
@@ -526,6 +534,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
           retryable: error.retryable,
           requestId: error.requestId,
         });
+        if (error.retryable) {
+          messageList.setAttribute('data-banner-active', 'true');
+        } else {
+          messageList.removeAttribute('data-banner-active');
+        }
         conversation.failTurn(turnId, error.userMessage);
       }
     } finally {
@@ -651,6 +664,7 @@ export function mount(options: WidgetHostOptions): WidgetController {
     }
     if (!cause || cause.key === bannerDismissedFor) {
       windowElement.setBanner(null);
+      messageList.removeAttribute('data-banner-active');
     } else {
       windowElement.setBanner({
         title: cause.title,
@@ -658,6 +672,11 @@ export function mount(options: WidgetHostOptions): WidgetController {
         retryable: cause.retryable,
         requestId: cause.requestId,
       });
+      if (cause.retryable) {
+        messageList.setAttribute('data-banner-active', 'true');
+      } else {
+        messageList.removeAttribute('data-banner-active');
+      }
     }
 
     const state = conversation.getState();

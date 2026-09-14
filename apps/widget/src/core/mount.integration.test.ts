@@ -574,8 +574,10 @@ describe('mount integration', () => {
     await vi.waitFor(() => {
       expect(shadow.querySelector('.wc-bubble-error')).toBeTruthy();
     });
-    // The failed turn offers Retry and never keeps the Stop button active.
-    expect(shadow.querySelector('.wc-retry-message')).toBeTruthy();
+    // The failed turn offers Retry via the banner and suppresses duplicate bubble retry;
+    // it never keeps the Stop button active.
+    expect(shadow.querySelector<HTMLButtonElement>('.wc-banner-retry')?.hidden).toBe(false);
+    expect(shadow.querySelector('.wc-retry-message')).toBeNull();
     expect(shadow.querySelector<HTMLButtonElement>('.wc-stop')?.hidden).toBe(true);
     // The visitor is told what happened and can type again immediately.
     expect(shadow.querySelector<HTMLElement>('.wc-banner')?.hidden).toBe(false);
@@ -583,6 +585,10 @@ describe('mount integration', () => {
       "We couldn't maintain the connection",
     );
     expect(shadow.querySelector<HTMLTextAreaElement>('textarea')?.disabled).toBe(false);
+
+    // When the banner is dismissed, bubble retry appears as fallback
+    (shadow.querySelector('.wc-banner-close') as HTMLButtonElement).click();
+    expect(shadow.querySelector('.wc-retry-message')).toBeTruthy();
 
     controller.destroy();
   });

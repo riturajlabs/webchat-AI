@@ -333,8 +333,7 @@ export const WIDGET_STYLES = `
     background: color-mix(in srgb, var(--wc-close-button-fg, var(--wc-header-text, #ffffff)) 18%, transparent);
   }
 
-  .wc-status-live,
-  .wc-banner {
+  .wc-status-live {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -352,8 +351,8 @@ export const WIDGET_STYLES = `
     gap: 6px;
     margin: 10px 14px 0;
     padding: 12px 14px;
-    background: color-mix(in srgb, var(--wc-error, #ef4444) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 45%, transparent);
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 10%, var(--wc-surface, #ffffff));
+    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 35%, var(--wc-surface, #ffffff));
     border-radius: 12px;
     color: var(--wc-text);
     font-size: 0.9em;
@@ -361,13 +360,13 @@ export const WIDGET_STYLES = `
   }
 
   :host([data-dark='1']) .wc-banner {
-    background: color-mix(in srgb, var(--wc-error, #ef4444) 18%, transparent);
-    border-color: color-mix(in srgb, var(--wc-error, #ef4444) 60%, transparent);
+    background: color-mix(in srgb, var(--wc-error, #ef4444) 16%, var(--wc-surface-elevated, #1e293b));
+    border-color: color-mix(in srgb, var(--wc-error, #ef4444) 45%, var(--wc-surface-elevated, #1e293b));
   }
 
   .wc-banner-header {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 8px;
   }
@@ -394,7 +393,8 @@ export const WIDGET_STYLES = `
     justify-content: center;
     width: 28px;
     height: 28px;
-    margin: -6px -8px 0 0;
+    margin: 0;
+    padding: 0;
     border: none;
     border-radius: 50%;
     background: transparent;
@@ -408,7 +408,7 @@ export const WIDGET_STYLES = `
 
   .wc-banner-retry {
     align-self: flex-start;
-    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 50%, transparent);
+    border: 1px solid color-mix(in srgb, var(--wc-error, #ef4444) 40%, var(--wc-surface, #ffffff));
     background: var(--wc-surface-elevated);
     color: var(--wc-error, #ef4444);
     border-radius: 8px;
@@ -614,6 +614,12 @@ export const WIDGET_STYLES = `
     font-size: 0.85em;
     cursor: pointer;
     min-height: 24px;
+  }
+
+  /* Suppress bubble retry when banner retry is active (Phase 8 error UX hardening) */
+  .wc-chat-window:has(.wc-banner:not([hidden]) .wc-banner-retry:not([hidden])) .wc-retry-message,
+  .wc-messages[data-banner-active='true'] .wc-retry-message {
+    display: none !important;
   }
 
   /* Show more/less toggle for long answers (Phase 10). */

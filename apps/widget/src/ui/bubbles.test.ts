@@ -7,6 +7,7 @@ import {
   createWelcomeBubble,
   renderMessages,
   setBusy,
+  syncRetry,
   toggleExpanded,
   wireMessageActions,
 } from './bubbles';
@@ -71,6 +72,19 @@ describe('createBubble', () => {
     expect(retry?.getAttribute('aria-label')).toBeTruthy();
 
     expect(createBubble(message('assistant', 'ok')).querySelector('.wc-retry-message')).toBeNull();
+  });
+
+  it('suppresses per-message Retry action when banner retry is active', () => {
+    const list = document.createElement('div');
+    list.setAttribute('data-banner-active', 'true');
+    const failedMsg = message('assistant', 'oops', { error: true });
+    const failed = createBubble(failedMsg, list);
+    expect(failed.querySelector('.wc-retry-message')).toBeNull();
+
+    // Re-syncing when banner is no longer active restores the retry button
+    list.removeAttribute('data-banner-active');
+    syncRetry(failed, failedMsg, list);
+    expect(failed.querySelector('.wc-retry-message')).toBeTruthy();
   });
 
   it('renders the source/citation list', () => {

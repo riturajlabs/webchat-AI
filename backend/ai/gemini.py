@@ -12,6 +12,7 @@ settings (env) and is never logged or exposed (00-AI-Development-Rules §12,
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -23,6 +24,7 @@ from backend.ai.finish_reason import (
 )
 from backend.core.config import get_settings
 from backend.core.errors import GenerationError, GenerationUnavailableError
+from backend.core.logging import get_request_id
 
 logger = logging.getLogger("webchat_ai")
 
@@ -71,6 +73,117 @@ class GenerationClient(Protocol):
         messages: list[tuple[str, str]],
         max_tokens: int = 0,
     ) -> AsyncIterator[str]: ...
+
+
+def _classify_gemini_exception(exc: BaseException) -> str:
+    """Normalize upstream exception into stable safe taxonomy:
+    timeout | provider_api_error | network_error | connection_error | stream_closed | unknown
+    """
+    candidates = [exc]
+    if exc.__cause__ is not None:
+        candidates.append(exc.__cause__)
+    if exc.__context__ is not None:
+        candidates.append(exc.__context__)
+
+    for e in candidates:
+        if isinstance(e, (TimeoutError, asyncio.TimeoutError)):
+            return "timeout"
+        type_name = type(e).__name__
+        mod_name = type(e).__module__ or ""
+        msg = str(e).lower()
+
+        # Provider API errors (Google GenAI APIError, ServerError, ClientError, etc.)
+        if "APIError" in type_name or "ClientError" in type_name or "ServerError" in type_name:
+            return "provider_api_error"
+        if "genai" in mod_name and "error" in mod_name.lower():
+            return "provider_api_error"
+        if any(
+            code in msg
+            for code in (
+                "503",
+                "429",
+                "resourceexhausted",
+                "service unavailable",
+                "api error",
+                "quota",
+            )
+        ):
+            return "provider_api_error"
+
+        # Connection reset / broken pipe / refused
+        if isinstance(
+            e, (ConnectionError, ConnectionResetError, BrokenPipeError, ConnectionRefusedError)
+        ):
+            return "connection_error"
+        if "connection" in type_name.lower() or "connection reset" in msg or "broken pipe" in msg:
+            return "connection_error"
+
+        # Stream closed / EOF / protocol error
+        if any(
+            term in type_name
+            for term in ("RemoteProtocolError", "ClientPayloadError", "IncompleteRead")
+        ):
+            return "stream_closed"
+        if "stream closed" in msg or "eof occurred" in msg:
+            return "stream_closed"
+
+        # General network / transport errors
+        if any(
+            term in type_name
+            for term in ("NetworkError", "TransportError", "SSLError", "SocketError", "gaierror")
+        ):
+            return "network_error"
+        if "network" in msg or "socket" in msg or "dns" in msg:
+            return "network_error"
+
+    return "unknown"
+
+
+def _emit_stream_telemetry(
+    *,
+    model: str,
+    phase: str,
+    started_streaming: bool,
+    exc: BaseException,
+    category: str,
+    elapsed_ms: float,
+    output_tokens: int = 0,
+    finish_reason: str = "",
+    timeout_seconds: float | None = None,
+) -> None:
+    """Emit structured telemetry for Gemini stream failure.
+
+    Safe metadata only — never logs user content, prompts, or credentials.
+    Logging failures are caught and swallowed so telemetry never breaks execution.
+    """
+    try:
+        req_id = get_request_id()
+        extra: dict[str, Any] = {
+            "event": "gemini_stream_exception",
+            "provider": "gemini",
+            "model": model,
+            "phase": phase,
+            "started_streaming": started_streaming,
+            "exception_type": type(exc).__name__,
+            "exception_category": category,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "output_tokens": output_tokens,
+            "finish_reason": finish_reason,
+            "request_id": req_id if req_id != "-" else None,
+        }
+        if timeout_seconds is not None:
+            extra["timeout_seconds"] = timeout_seconds
+        logger.warning(
+            "gemini_stream_exception provider=gemini model=%s category=%s type=%s elapsed_ms=%.2f",
+            model,
+            category,
+            type(exc).__name__,
+            elapsed_ms,
+            extra=extra,
+        )
+    except Exception:
+        # Telemetry logging must NEVER cause generation to fail
+        pass
 
 
 class GoogleGeminiClient:
@@ -224,9 +337,11 @@ class GoogleGeminiClient:
         input_tokens = 0
         output_tokens = 0
         reasoning_tokens = 0
+        started_time = time.perf_counter()
+        first_chunk = True
+        emitted_any = False
         try:
             stream = await self._client().aio.models.generate_content_stream(**request)
-            first_chunk = True
             while True:
                 try:
                     chunk = await asyncio.wait_for(
@@ -238,11 +353,38 @@ class GoogleGeminiClient:
                         ),
                     )
                 except TimeoutError as exc:
+                    elapsed_ms = (time.perf_counter() - started_time) * 1000.0
                     if first_chunk:
+                        _emit_stream_telemetry(
+                            model=self._model,
+                            phase="first_token",
+                            started_streaming=False,
+                            exc=exc,
+                            category="timeout",
+                            elapsed_ms=elapsed_ms,
+                            output_tokens=output_tokens,
+                            finish_reason=""
+                            if finish_reason == FINISH_REASON_UNKNOWN
+                            else finish_reason,
+                            timeout_seconds=self._first_token_timeout_seconds,
+                        )
                         raise GenerationUnavailableError(
                             "Gemini did not produce a first token within "
                             f"{self._first_token_timeout_seconds}s."
                         ) from exc
+                    _emit_stream_telemetry(
+                        model=self._model,
+                        phase="inter_chunk",
+                        started_streaming=emitted_any,
+                        exc=exc,
+                        category="timeout",
+                        elapsed_ms=elapsed_ms,
+                        output_tokens=output_tokens,
+                        finish_reason=""
+                        if finish_reason == FINISH_REASON_UNKNOWN
+                        else finish_reason,
+                        timeout_seconds=self._timeout_seconds,
+                    )
                     raise GenerationError(
                         f"Gemini answer stream stalled for {self._timeout_seconds}s."
                     ) from exc
@@ -251,6 +393,7 @@ class GoogleGeminiClient:
                 first_chunk = False
                 text = getattr(chunk, "text", None)
                 if text:
+                    emitted_any = True
                     yield text
                 # Termination metadata: the per-chunk `finish_reason` is None
                 # until the final chunk; keep the last non-None value (defensive
@@ -274,7 +417,21 @@ class GoogleGeminiClient:
             )
         except GenerationUnavailableError:
             raise
+        except GenerationError:
+            raise
         except Exception as exc:  # noqa: BLE001 - normalized below
+            elapsed_ms = (time.perf_counter() - started_time) * 1000.0
+            category = _classify_gemini_exception(exc)
+            _emit_stream_telemetry(
+                model=self._model,
+                phase="inter_chunk" if not first_chunk else "first_token",
+                started_streaming=emitted_any,
+                exc=exc,
+                category=category,
+                elapsed_ms=elapsed_ms,
+                output_tokens=output_tokens,
+                finish_reason="" if finish_reason == FINISH_REASON_UNKNOWN else finish_reason,
+            )
             raise GenerationError(f"Answer generation failed: {exc}") from exc
 
 
