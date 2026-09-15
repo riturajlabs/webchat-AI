@@ -858,12 +858,19 @@ class FakeDocumentRepository:
                 break
         self._documents[document.id] = document
 
-    async def count_by_website(self, tenant_id: str, website_id: str) -> int:
+    async def count_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> int:
         return len(
             [
                 document
                 for document in self._documents.values()
-                if document.tenant_id == tenant_id and document.website_id == website_id
+                if document.tenant_id == tenant_id
+                and document.website_id == website_id
+                and (
+                    source_type is None
+                    or getattr(document, "source_type", "website") == source_type
+                )
             ]
         )
 
@@ -909,11 +916,18 @@ class FakeDocumentRepository:
             ]
         )
 
-    async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]:
+    async def all_checksums(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[str]:
         return [
             document.checksum
             for document in self._documents.values()
-            if document.tenant_id == tenant_id and document.website_id == website_id
+            if document.tenant_id == tenant_id
+            and document.website_id == website_id
+            and (
+                source_type is None
+                or getattr(document, "source_type", "website") == source_type
+            )
         ]
 
     async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None:
@@ -925,11 +939,30 @@ class FakeDocumentRepository:
     async def find_by_id_any(self, document_id: str) -> Document | None:
         return self._documents.get(document_id)
 
-    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]:
+    async def find_by_file_checksum(
+        self, tenant_id: str, website_id: str, file_checksum_sha256: str
+    ) -> Document | None:
+        for document in self._documents.values():
+            if (
+                document.tenant_id == tenant_id
+                and document.website_id == website_id
+                and getattr(document, "file_checksum_sha256", None) == file_checksum_sha256
+            ):
+                return document
+        return None
+
+    async def list_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[Document]:
         return [
             document
             for document in self._documents.values()
-            if document.tenant_id == tenant_id and document.website_id == website_id
+            if document.tenant_id == tenant_id
+            and document.website_id == website_id
+            and (
+                source_type is None
+                or getattr(document, "source_type", "website") == source_type
+            )
         ]
 
     async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int:

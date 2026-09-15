@@ -25,7 +25,9 @@ class DocumentRepository(Protocol):
 
     async def upsert(self, document: Document) -> None: ...
 
-    async def count_by_website(self, tenant_id: str, website_id: str) -> int: ...
+    async def count_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> int: ...
 
     # Phase 13 billing: tenant-wide document count for the `max_documents`
     # plan limit (live count, not event tally).
@@ -35,7 +37,9 @@ class DocumentRepository(Protocol):
 
     async def count_non_terminal_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
-    async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]: ...
+    async def all_checksums(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[str]: ...
 
     async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None: ...
 
@@ -43,7 +47,13 @@ class DocumentRepository(Protocol):
     # ownership from stored data (never from untrusted input).
     async def find_by_id_any(self, document_id: str) -> Document | None: ...
 
-    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]: ...
+    async def find_by_file_checksum(
+        self, tenant_id: str, website_id: str, file_checksum_sha256: str
+    ) -> Document | None: ...
+
+    async def list_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[Document]: ...
 
     # Audit R-02: purge pages removed from the site (crawl reconciliation)
     # and drop the whole corpus when the parent website is deleted.
@@ -80,10 +90,22 @@ class MongoDocumentRepository:
                 query, {"$set": update_payload(document)}, upsert=False
             )
 
-    async def count_by_website(self, tenant_id: str, website_id: str) -> int:
-        return await self._collection.count_documents(
-            {"tenant_id": tenant_id, "website_id": website_id}
-        )
+    @staticmethod
+    def _build_source_filter(source_type: str | None) -> dict[str, Any]:
+        if source_type is None:
+            return {}
+        if source_type == "website":
+            # Legacy documents have no source_type field; treat missing as "website"
+            return {"source_type": {"$ne": "file"}}
+        return {"source_type": source_type}
+
+    async def count_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> int:
+        query: dict[str, Any] = {"tenant_id": tenant_id, "website_id": website_id}
+        if source_type is not None:
+            query.update(self._build_source_filter(source_type))
+        return await self._collection.count_documents(query)
 
     async def count_by_tenant(self, tenant_id: str) -> int:
         return await self._collection.count_documents({"tenant_id": tenant_id})
@@ -116,9 +138,14 @@ class MongoDocumentRepository:
             }
         )
 
-    async def all_checksums(self, tenant_id: str, website_id: str) -> list[str]:
+    async def all_checksums(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[str]:
+        query: dict[str, Any] = {"tenant_id": tenant_id, "website_id": website_id}
+        if source_type is not None:
+            query.update(self._build_source_filter(source_type))
         cursor = self._collection.find(
-            {"tenant_id": tenant_id, "website_id": website_id},
+            query,
             projection={"checksum": 1, "_id": 0},
         )
         return [str(doc["checksum"]) async for doc in cursor]
@@ -131,8 +158,25 @@ class MongoDocumentRepository:
         doc = await self._collection.find_one({"_id": document_id})
         return Document.from_doc(doc) if doc is not None else None
 
-    async def list_by_website(self, tenant_id: str, website_id: str) -> list[Document]:
-        cursor = self._collection.find({"tenant_id": tenant_id, "website_id": website_id})
+    async def find_by_file_checksum(
+        self, tenant_id: str, website_id: str, file_checksum_sha256: str
+    ) -> Document | None:
+        doc = await self._collection.find_one(
+            {
+                "tenant_id": tenant_id,
+                "website_id": website_id,
+                "file_checksum_sha256": file_checksum_sha256,
+            }
+        )
+        return Document.from_doc(doc) if doc is not None else None
+
+    async def list_by_website(
+        self, tenant_id: str, website_id: str, *, source_type: str | None = None
+    ) -> list[Document]:
+        query: dict[str, Any] = {"tenant_id": tenant_id, "website_id": website_id}
+        if source_type is not None:
+            query.update(self._build_source_filter(source_type))
+        cursor = self._collection.find(query)
         return [Document.from_doc(doc) async for doc in cursor]
 
     async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int:

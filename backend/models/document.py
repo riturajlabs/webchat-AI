@@ -23,9 +23,13 @@ DOCUMENT_STATUS_READY = "ready"
 
 DOCUMENT_STATUSES = {DOCUMENT_STATUS_READY}
 
+SOURCE_TYPE_WEBSITE = "website"
+SOURCE_TYPE_FILE = "file"
+SOURCE_TYPES = {SOURCE_TYPE_WEBSITE, SOURCE_TYPE_FILE}
+
 
 class Document(BaseModel):
-    """Cleaned page content for one crawled URL of a tenant's website."""
+    """Cleaned page content or uploaded file content for one URL/source of a tenant's website."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -56,6 +60,15 @@ class Document(BaseModel):
     knowledge_last_attempt_at: datetime | None = None
     knowledge_failure_reason: str | None = None
 
+    # Knowledge source discriminator: "website" (default) or "file"
+    source_type: str = SOURCE_TYPE_WEBSITE
+    # File-specific metadata (populated only when source_type == SOURCE_TYPE_FILE)
+    file_name: str | None = None
+    file_size_bytes: int | None = None
+    mime_type: str | None = None
+    storage_key: str | None = None
+    file_checksum_sha256: str | None = None
+
     @classmethod
     def new(
         cls,
@@ -67,6 +80,12 @@ class Document(BaseModel):
         content: str,
         checksum: str,
         language: str = "",
+        source_type: str = SOURCE_TYPE_WEBSITE,
+        file_name: str | None = None,
+        file_size_bytes: int | None = None,
+        mime_type: str | None = None,
+        storage_key: str | None = None,
+        file_checksum_sha256: str | None = None,
     ) -> "Document":
         now = utcnow()
         return cls(
@@ -78,6 +97,12 @@ class Document(BaseModel):
             content=content,
             checksum=checksum,
             language=language,
+            source_type=source_type,
+            file_name=file_name,
+            file_size_bytes=file_size_bytes,
+            mime_type=mime_type,
+            storage_key=storage_key,
+            file_checksum_sha256=file_checksum_sha256,
             created_at=now,
             updated_at=now,
         )

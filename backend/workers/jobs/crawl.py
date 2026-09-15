@@ -497,7 +497,12 @@ async def _run_crawl_job_impl(
         )
 
         website.status = WEBSITE_STATUS_READY
-        website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
+        try:
+            website.pages_indexed = await documents.count_by_website(
+                job.tenant_id, job.website_id, source_type="website"
+            )
+        except TypeError:
+            website.pages_indexed = await documents.count_by_website(job.tenant_id, job.website_id)
         website.last_crawled_at = job.completed_at
         website.checksum = await _site_checksum(documents, job.tenant_id, job.website_id)
         if session.preview_image is not None:
@@ -867,7 +872,16 @@ async def _purge_removed_documents(
         keep = set(crawled_urls)
         forgive = set(errored_urls)
         stored = await documents.list_by_website(tenant_id, website_id)
-        stale = [doc for doc in stored if doc.url not in keep and doc.url not in forgive]
+        # Source-aware safeguard: only website documents participate in crawl URL reconciliation.
+        # Uploaded files (source_type == "file") must NEVER be purged by a website crawl.
+        # Legacy documents missing source_type default to "website".
+        stale = [
+            doc
+            for doc in stored
+            if getattr(doc, "source_type", "website") == "website"
+            and doc.url not in keep
+            and doc.url not in forgive
+        ]
         for document in stale:
             if vector is not None:
                 await vector.delete_by_document(tenant_id, document.id)
@@ -891,7 +905,10 @@ async def _purge_removed_documents(
 
 async def _site_checksum(documents: Any, tenant_id: str, website_id: str) -> str:
     """Aggregate checksum over the website's stored documents (Phase 5 diff)."""
-    digests = await documents.all_checksums(tenant_id, website_id)
+    try:
+        digests = await documents.all_checksums(tenant_id, website_id, source_type="website")
+    except TypeError:
+        digests = await documents.all_checksums(tenant_id, website_id)
     return hashlib.sha256("".join(sorted(digests)).encode("utf-8")).hexdigest()
 
 

@@ -1,10 +1,10 @@
 /**
  * Knowledge document types mirrored from the backend knowledge API.
  *
- * Each crawled page maps to one `KnowledgeDocument` whose `status` is one of
- * the pipeline states (pending/processing/completed/failed). Failed documents
- * carry a `failure_reason` and retry accounting so the dashboard can surface
- * what went wrong and let the owner re-process a page manually.
+ * Each crawled page or uploaded file maps to one `KnowledgeDocument` whose `status`
+ * is one of the pipeline states (pending/processing/completed/failed). Failed
+ * documents carry a `failure_reason` and retry accounting so the dashboard can
+ * surface what went wrong and let the owner re-process a page manually.
  */
 
 export type KnowledgeDocumentStatus =
@@ -20,6 +20,8 @@ export function isKnowledgeDocumentTerminal(status: KnowledgeDocumentStatus): bo
   return TERMINAL_KNOWLEDGE_STATUSES.has(status);
 }
 
+export type KnowledgeSourceType = 'website' | 'file';
+
 export interface KnowledgeDocument {
   id: string;
   website_id: string;
@@ -30,6 +32,10 @@ export interface KnowledgeDocument {
   retry_count: number;
   last_attempt_at: string | null;
   chunks: number;
+  source_type?: KnowledgeSourceType;
+  file_name?: string | null;
+  file_size_bytes?: number | null;
+  mime_type?: string | null;
 }
 
 export interface KnowledgeDocumentSummary {
@@ -52,4 +58,26 @@ export interface RetryDocumentResponse {
   document_id: string;
   website_id: string;
   status: string;
+}
+
+export interface UploadDocumentItem {
+  id: string;
+  website_id: string;
+  file_name: string;
+  file_size_bytes: number;
+  mime_type: string;
+  status: string;
+  char_count: number;
+  pages?: number | null;
+}
+
+export interface KnowledgeUploadResponse {
+  website_id: string;
+  uploaded: UploadDocumentItem[];
+}
+
+export interface DocumentDeleteResponse {
+  document_id: string;
+  website_id: string;
+  deleted: boolean;
 }

@@ -11,8 +11,10 @@ import type { Website } from '@/features/websites/types';
 
 import { deriveKnowledgeReadiness, knowledgePollIntervalMs } from './status';
 import type {
+  DocumentDeleteResponse,
   KnowledgeDocumentsResponse,
   KnowledgeDocumentSummary,
+  KnowledgeUploadResponse,
   RetryDocumentResponse,
 } from './types';
 
@@ -91,6 +93,38 @@ export function useRetryDocument(websiteId: string | null) {
   return useMutation({
     mutationFn: (documentId: string) =>
       api.post<RetryDocumentResponse>(`/api/knowledge/documents/${documentId}/retry`),
+    onSuccess: () => {
+      if (websiteId !== null) {
+        void queryClient.invalidateQueries({ queryKey: knowledgeKeys.documents(websiteId) });
+      }
+    },
+  });
+}
+
+export function useUploadDocuments(websiteId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (files: File[]) => {
+      const formData = new FormData();
+      files.forEach((file) => formData.append('files', file));
+      return api.post<KnowledgeUploadResponse>(
+        `/api/knowledge/websites/${websiteId}/documents/upload`,
+        formData,
+      );
+    },
+    onSuccess: () => {
+      if (websiteId !== null) {
+        void queryClient.invalidateQueries({ queryKey: knowledgeKeys.documents(websiteId) });
+      }
+    },
+  });
+}
+
+export function useDeleteDocument(websiteId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (documentId: string) =>
+      api.delete<DocumentDeleteResponse>(`/api/knowledge/documents/${documentId}`),
     onSuccess: () => {
       if (websiteId !== null) {
         void queryClient.invalidateQueries({ queryKey: knowledgeKeys.documents(websiteId) });

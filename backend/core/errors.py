@@ -416,3 +416,59 @@ class InvalidGrantError(AppError):
 
     status_code = 400
     code = "INVALID_GRANT"
+
+
+class StorageError(AppError):
+    """A failure occurred within the storage subsystem."""
+
+    status_code = 500
+    code = "STORAGE_ERROR"
+
+
+class StorageFileNotFoundError(AppError):
+    """Requested stored file does not exist or does not belong to the tenant."""
+
+    status_code = 404
+    code = "FILE_NOT_FOUND"
+
+
+class DocumentCorruptedError(AppError):
+    """Uploaded document file is malformed or corrupted."""
+
+    status_code = 422
+    code = "DOCUMENT_CORRUPTED"
+
+
+class DocumentPasswordProtectedError(AppError):
+    """Uploaded document file is encrypted or password-protected."""
+
+    status_code = 422
+    code = "DOCUMENT_PASSWORD_PROTECTED"
+
+
+class DocumentTooLargeError(AppError):
+    """Uploaded document file exceeds maximum size, page count, or character limit."""
+
+    status_code = 422
+    code = "DOCUMENT_TOO_LARGE"
+
+
+class DocumentNoTextError(AppError):
+    """Uploaded document yielded no extractable text."""
+
+    status_code = 422
+    code = "DOCUMENT_NO_TEXT"
+
+
+class DuplicateFileError(AppError):
+    """Identical file has already been uploaded for this website."""
+
+    status_code = 409
+    code = "DUPLICATE_FILE"
+
+
+class NotAFileError(AppError):
+    """Document does not have a downloadable file attachment."""
+
+    status_code = 400
+    code = "NOT_A_FILE"

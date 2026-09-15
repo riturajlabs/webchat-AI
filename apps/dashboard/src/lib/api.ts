@@ -237,7 +237,8 @@ export async function request<T>(
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  if (init.body && !headers.has('Content-Type')) {
+  const isFormData = typeof FormData !== 'undefined' && init.body instanceof FormData;
+  if (init.body && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   if (CSRF_PROTECTED_PATHS.has(path)) {
@@ -291,11 +292,12 @@ export const api = {
     return request<T>(path);
   },
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<T> {
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     return request<T>(
       path,
       {
         method: 'POST',
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
       },
       options,
     );

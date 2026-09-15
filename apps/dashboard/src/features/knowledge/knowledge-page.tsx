@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ChevronDown, Database, ExternalLink } from 'lucide-react';
+import { ChevronDown, Database, ExternalLink, Upload } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import { KnowledgeBadge } from '@/features/websites/knowledge-badge';
 import { DocumentProgressPanel } from './document-progress-panel';
 import { useKnowledgeReadinessForSites } from './hooks';
 import type { KnowledgeReadiness } from './status';
+import { UploadKnowledgeDialog } from './upload-modal';
 
 function KnowledgeStat({ label, value }: { label: string; value: number }) {
   return (
@@ -37,6 +38,7 @@ interface WebsiteRowProps {
 
 function WebsiteRow({ website, readiness }: WebsiteRowProps) {
   const [open, setOpen] = useState(true);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const panelId = `website-docs-${website.id}`;
 
   return (
@@ -60,7 +62,17 @@ function WebsiteRow({ website, readiness }: WebsiteRowProps) {
             <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
           </a>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs font-medium"
+            onClick={() => setUploadOpen(true)}
+          >
+            <Upload className="size-3.5 shrink-0" aria-hidden="true" />
+            <span>Upload files</span>
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -78,6 +90,12 @@ function WebsiteRow({ website, readiness }: WebsiteRowProps) {
           </Button>
         </div>
       </div>
+      <UploadKnowledgeDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        websiteId={website.id}
+        websiteName={website.name}
+      />
       {open ? (
         <div
           id={panelId}

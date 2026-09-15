@@ -15,6 +15,10 @@ from backend.services.ingestion.crawler import (
     PageFetcher,
 )
 from backend.services.ingestion.extractor import ExtractedPage, extract_page, pick_preview_image
+from backend.services.ingestion.file_extractor import (
+    ExtractedDocument,
+    extract_text_from_file,
+)
 from backend.services.ingestion.http_first import (
     HttpContentVerdict,
     HTTPFetchResult,
@@ -30,6 +34,7 @@ __all__ = [
     "CrawlFailureClassification",
     "CrawlMemoryGuardError",
     "CrawlSession",
+    "ExtractedDocument",
     "ExtractedPage",
     "FetchError",
     "FetchedPage",
@@ -41,6 +46,7 @@ __all__ = [
     "clean_html",
     "extract_http_content",
     "extract_page",
+    "extract_text_from_file",
     "fetch_http_page",
     "judge_http_content",
     "pick_preview_image",

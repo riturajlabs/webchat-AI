@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deriveKnowledgeReadiness, UNKNOWN_READINESS } from './status';
 
 import { KnowledgePage } from './knowledge-page';
-import { useKnowledgeDocuments, useKnowledgeReadinessForSites, useRetryDocument } from './hooks';
+import {
+  useKnowledgeDocuments,
+  useKnowledgeReadinessForSites,
+  useRetryDocument,
+  useUploadDocuments,
+  useDeleteDocument,
+} from './hooks';
 import type { KnowledgeDocumentsResponse } from './types';
 import type { Website } from '@/features/websites/types';
 
@@ -17,6 +23,8 @@ vi.mock('./hooks', () => ({
   useKnowledgeDocuments: vi.fn(),
   useKnowledgeReadinessForSites: vi.fn(),
   useRetryDocument: vi.fn(),
+  useUploadDocuments: vi.fn(),
+  useDeleteDocument: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -34,6 +42,8 @@ const mockedUseWebsites = vi.mocked((await import('@/features/websites/hooks')).
 const mockedUseKnowledgeDocuments = vi.mocked(useKnowledgeDocuments);
 const mockedUseKnowledgeReadinessForSites = vi.mocked(useKnowledgeReadinessForSites);
 const mockedUseRetryDocument = vi.mocked(useRetryDocument);
+const mockedUseUploadDocuments = vi.mocked(useUploadDocuments);
+const mockedUseDeleteDocument = vi.mocked(useDeleteDocument);
 
 const SITE: Website = {
   id: 'site-1',
@@ -161,6 +171,35 @@ function mockRetry() {
   } as unknown as ReturnType<typeof useRetryDocument>);
 }
 
+function mockUpload() {
+  mockedUseUploadDocuments.mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue({
+      website_id: 'site-1',
+      total_uploaded: 1,
+      documents: [
+        {
+          id: 'doc-upload-1',
+          file_name: 'test.pdf',
+          file_size_bytes: 1024,
+          mime_type: 'application/pdf',
+          status: 'pending',
+        },
+      ],
+    }),
+    isPending: false,
+  } as unknown as ReturnType<typeof useUploadDocuments>);
+}
+
+function mockDelete() {
+  mockedUseDeleteDocument.mockReturnValue({
+    mutateAsync: vi.fn().mockResolvedValue({
+      document_id: 'doc-ready-1',
+      status: 'deleted',
+    }),
+    isPending: false,
+  } as unknown as ReturnType<typeof useDeleteDocument>);
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
@@ -177,6 +216,8 @@ beforeEach(() => {
   mockReadinessForSites([SITE]);
   mockDocuments(READY_RESPONSE);
   mockRetry();
+  mockUpload();
+  mockDelete();
 });
 
 afterEach(() => {
@@ -318,5 +359,14 @@ describe('KnowledgePage', () => {
     await waitFor(() => expect(mutateAsync).toHaveBeenCalled());
     const { toast } = await import('sonner');
     expect(toast.error).toHaveBeenCalledWith('Retry failed.');
+  });
+
+  it('opens the upload files dialog when clicking Upload files button', () => {
+    renderPage();
+    const uploadButton = screen.getByRole('button', { name: /Upload files/i });
+    expect(uploadButton).toBeInTheDocument();
+    fireEvent.click(uploadButton);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Upload Knowledge Files/i })).toBeInTheDocument();
   });
 });

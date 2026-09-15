@@ -4,9 +4,12 @@ import {
   CheckCircle2,
   Circle,
   Clock4,
+  Download,
   ExternalLink,
+  FileText,
   Loader2,
   RotateCcw,
+  Trash2,
   XCircle,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -14,9 +17,11 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { API_BASE_URL } from '@/lib/api';
+import { getAccessToken } from '@/lib/session';
 import { cn } from '@/lib/utils';
 
-import { useKnowledgeDocuments, useRetryDocument } from './hooks';
+import { useDeleteDocument, useKnowledgeDocuments, useRetryDocument } from './hooks';
 import type { KnowledgeDocument, KnowledgeDocumentStatus } from './types';
 
 const STATUS_RANK: Record<KnowledgeDocumentStatus, number> = {
@@ -34,6 +39,13 @@ const STATUS_LABELS: Record<KnowledgeDocumentStatus, string> = {
   rate_limited: 'Retry scheduled',
   failed: 'Failed',
 };
+
+function formatFileSize(bytes?: number | null): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function DocumentStatusBadge({ status }: { status: KnowledgeDocumentStatus }) {
   const styles: Record<KnowledgeDocumentStatus, string> = {
@@ -99,7 +111,7 @@ function CurrentProcessing({ document }: { document: KnowledgeDocument }) {
       <div className="min-w-0">
         <p className="text-xs font-medium text-amber-800 dark:text-amber-300">Current processing</p>
         <span className="block min-w-0 truncate text-sm font-medium text-amber-900 dark:text-amber-200">
-          {document.title || document.url}
+          {document.file_name || document.title || document.url}
         </span>
         <p className="text-xs text-amber-700 dark:text-amber-400">Generating embeddings…</p>
       </div>
@@ -110,30 +122,86 @@ function CurrentProcessing({ document }: { document: KnowledgeDocument }) {
 function DocumentRow({
   document,
   onRetry,
+  onDelete,
+  onDownload,
   retrying,
+  deleting,
 }: {
   document: KnowledgeDocument;
   onRetry: (documentId: string) => void;
+  onDelete: (documentId: string) => void;
+  onDownload?: (document: KnowledgeDocument) => void;
   retrying: boolean;
+  deleting: boolean;
 }) {
   const failed = document.status === 'failed';
+  const isFile = document.source_type === 'file';
+
   return (
     <li className="flex flex-col gap-1 py-2">
-      <div className="flex min-w-0 items-center gap-2">
-        <DocumentStatusBadge status={document.status} />
-        <a
-          href={document.url}
-          target="_blank"
-          rel="noreferrer"
-          className={cn(
-            'inline-flex min-w-0 items-center gap-1 text-sm hover:underline',
-            failed ? 'text-destructive' : 'text-foreground',
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <DocumentStatusBadge status={document.status} />
+          {isFile ? (
+            <div className="flex min-w-0 items-center gap-1.5 text-sm">
+              <span className="inline-flex shrink-0 items-center gap-1 rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-800 dark:bg-blue-500/15 dark:text-blue-300">
+                <FileText className="size-2.5 shrink-0" />
+                FILE
+              </span>
+              <span className="min-w-0 truncate font-medium text-foreground">
+                {document.file_name || document.title}
+              </span>
+              {document.file_size_bytes ? (
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  ({formatFileSize(document.file_size_bytes)})
+                </span>
+              ) : null}
+            </div>
+          ) : (
+            <a
+              href={document.url}
+              target="_blank"
+              rel="noreferrer"
+              className={cn(
+                'inline-flex min-w-0 items-center gap-1 text-sm hover:underline',
+                failed ? 'text-destructive' : 'text-foreground',
+              )}
+            >
+              <span className="min-w-0 truncate">{document.title || document.url}</span>
+              <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </a>
           )}
-        >
-          <span className="min-w-0 truncate">{document.title || document.url}</span>
-          <ExternalLink className="size-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-        </a>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          {isFile && onDownload ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+              onClick={() => onDownload(document)}
+              title="Download file"
+              aria-label={`Download ${document.file_name || document.title}`}
+            >
+              <Download className="size-3.5" aria-hidden="true" />
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+            disabled={deleting}
+            onClick={() => onDelete(document.id)}
+            title="Delete document"
+            aria-label={`Delete ${document.file_name || document.title || document.url}`}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+          </Button>
+        </div>
       </div>
+
       {failed ? (
         <div className="flex items-center justify-between gap-2 pl-9">
           <p className="min-w-0 truncate text-xs text-destructive">
@@ -164,14 +232,15 @@ interface DocumentProgressPanelProps {
 
 /**
  * Per-document embedding progress for one website. Renders truthful counts,
- * the page currently being embedded, and a scrollable list of every document
- * with its state badge. Failed pages surface their `failure_reason` exactly as
- * the API provides it. No synthetic percentage is ever displayed.
+ * the page or file currently being embedded, and a scrollable list of every document
+ * with its state badge, download/delete actions.
  */
 export function DocumentProgressPanel({ websiteId, className }: DocumentProgressPanelProps) {
   const { data, isPending, isError, error } = useKnowledgeDocuments(websiteId);
   const retry = useRetryDocument(websiteId);
+  const deleteDoc = useDeleteDocument(websiteId);
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   if (isPending) {
     return (
@@ -212,6 +281,50 @@ export function DocumentProgressPanel({ websiteId, className }: DocumentProgress
     }
   };
 
+  const handleDelete = async (documentId: string) => {
+    setDeletingIds((ids) => new Set(ids).add(documentId));
+    try {
+      await deleteDoc.mutateAsync(documentId);
+      toast.success('Document deleted.');
+    } catch (delError) {
+      toast.error(delError instanceof Error ? delError.message : 'Failed to delete the document.');
+    } finally {
+      setDeletingIds((ids) => {
+        const next = new Set(ids);
+        next.delete(documentId);
+        return next;
+      });
+    }
+  };
+
+  const handleDownload = async (doc: KnowledgeDocument) => {
+    try {
+      const token = getAccessToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`${API_BASE_URL}/api/knowledge/documents/${doc.id}/download`, {
+        headers,
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        throw new Error('Failed to download file');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.file_name || 'download';
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch {
+      toast.error('Failed to download file.');
+    }
+  };
+
   const terminalCount = summary.completed + summary.failed;
 
   return (
@@ -230,7 +343,7 @@ export function DocumentProgressPanel({ websiteId, className }: DocumentProgress
       {summary.total > 0 ? (
         <div className="space-y-1">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Pages ({terminalCount}/{summary.total} at rest)
+            Documents ({terminalCount}/{summary.total} at rest)
           </p>
           <div className="max-h-72 overflow-y-auto rounded-md border bg-muted/20">
             <ul className="divide-y divide-border/60 px-3">
@@ -239,7 +352,10 @@ export function DocumentProgressPanel({ websiteId, className }: DocumentProgress
                   key={document.id}
                   document={document}
                   onRetry={(id) => void handleRetry(id)}
+                  onDelete={(id) => void handleDelete(id)}
+                  onDownload={(d) => void handleDownload(d)}
                   retrying={retryingIds.has(document.id)}
+                  deleting={deletingIds.has(document.id)}
                 />
               ))}
             </ul>

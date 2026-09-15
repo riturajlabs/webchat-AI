@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -166,5 +167,73 @@ describe('DocumentProgressPanel', () => {
     mockedGet.mockReturnValue(new Promise(() => {}));
     renderPanel();
     expect(screen.getByLabelText('Loading document status')).toBeInTheDocument();
+  });
+
+  it('renders uploaded file documents with file badge, formatted size, and action buttons', async () => {
+    mockedGet.mockResolvedValue({
+      website_id: 'site-1',
+      summary: { total: 1, completed: 1, processing: 0, pending: 0, failed: 0, rate_limited: 0 },
+      documents: [
+        {
+          id: 'doc-file-1',
+          website_id: 'site-1',
+          url: 'https://example.com/uploaded/guide.pdf',
+          title: 'guide.pdf',
+          status: 'completed',
+          failure_reason: null,
+          retry_count: 0,
+          last_attempt_at: '2026-09-15T00:00:00Z',
+          chunks: 5,
+          source_type: 'file',
+          file_name: 'guide.pdf',
+          file_size_bytes: 2048576,
+          mime_type: 'application/pdf',
+        },
+      ],
+    });
+    renderPanel();
+
+    expect(await screen.findByText('guide.pdf')).toBeInTheDocument();
+    expect(screen.getByText('FILE')).toBeInTheDocument();
+    expect(screen.getByText('(2.0 MB)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download guide.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete guide.pdf' })).toBeInTheDocument();
+  });
+
+  it('deletes a document and displays a toast notification', async () => {
+    mockedGet.mockResolvedValue({
+      website_id: 'site-1',
+      summary: { total: 1, completed: 1, processing: 0, pending: 0, failed: 0, rate_limited: 0 },
+      documents: [
+        {
+          id: 'doc-file-1',
+          website_id: 'site-1',
+          url: 'https://example.com/uploaded/guide.pdf',
+          title: 'guide.pdf',
+          status: 'completed',
+          failure_reason: null,
+          retry_count: 0,
+          last_attempt_at: '2026-09-15T00:00:00Z',
+          chunks: 5,
+          source_type: 'file',
+          file_name: 'guide.pdf',
+          file_size_bytes: 2048576,
+          mime_type: 'application/pdf',
+        },
+      ],
+    });
+    vi.mocked(api.delete).mockResolvedValue({
+      document_id: 'doc-file-1',
+      status: 'deleted',
+    });
+
+    renderPanel();
+    const deleteButton = await screen.findByRole('button', { name: 'Delete guide.pdf' });
+    fireEvent.click(deleteButton);
+
+    await waitFor(() =>
+      expect(api.delete).toHaveBeenCalledWith('/api/knowledge/documents/doc-file-1'),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Document deleted.'));
   });
 });

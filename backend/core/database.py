@@ -431,6 +431,13 @@ class MongoDB:
         await db["documents"].create_index("tenant_id")
         await db["documents"].create_index("website_id")
         await db["documents"].create_index("url")
+        # Knowledge file attachments GridFS metadata indexes.
+        await db["knowledge_files.files"].create_index(
+            [("metadata.tenant_id", 1), ("metadata.website_id", 1)]
+        )
+        await db["knowledge_files.files"].create_index(
+            [("metadata.tenant_id", 1), ("metadata.document_id", 1)]
+        )
         # Phase 5 knowledge processing (docs/05 §7, ADR-008).
         # The unique (tenant, website, document, chunk_index) key makes chunk
         # inserts idempotent (duplicate prevention).

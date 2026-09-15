@@ -83,6 +83,7 @@ from backend.services.conversations import ConversationService
 from backend.services.crawl import CrawlService
 from backend.services.feedback import FeedbackService
 from backend.services.knowledge import KnowledgeService
+from backend.services.storage import GridFSStorageService, StorageService
 from backend.services.website import WebsiteService
 from backend.services.widget import WidgetConfigService, WidgetService
 from backend.workers.jobs.crawl import enqueue_crawl_website
@@ -233,19 +234,39 @@ def get_crawl_service(
     )
 
 
+def get_storage_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> StorageService:
+    """Build the GridFS storage service for knowledge attachments."""
+    return GridFSStorageService(db)
+
+
 def get_knowledge_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    storage: Annotated[StorageService, Depends(get_storage_service)],
+    usage: Annotated[UsageService, Depends(get_usage_service)],
 ) -> KnowledgeService:
-    """Build the knowledge service with MongoDB-backed repositories.
+    """Build the knowledge service with repositories, storage, and quota enforcement.
 
     `enqueue` submits the per-document embedding job to the ARQ worker, so the
     manual retry action never blocks on worker execution (ADR-002).
     """
+    settings = get_settings()
+    cache: RedisCacheStore | None = None
+    if settings.redis_url:
+        cache = RedisCacheStore(
+            redis=get_redis(),
+            prefix=f"{settings.redis_prefix}:rag",
+        )
     return KnowledgeService(
         websites=MongoWebsiteRepository(db),
         documents=MongoDocumentRepository(db),
         audit=MongoAuditLogRepository(db),
         enqueue=enqueue_process_document,
+        storage=storage,
+        vector=get_vector_repository(db),
+        usage=usage,
+        cache=cache,
     )
 
 
@@ -780,6 +801,8 @@ account_delete_limiter = RateLimitDependency(limit=5, window_seconds=3600, alway
 website_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 4 ingestion abuse protection (crawl kick-off + job status polling).
 crawl_limiter = RateLimitDependency(limit=30, window_seconds=3600)
+# Direct knowledge file upload abuse protection.
+upload_limiter = RateLimitDependency(limit=30, window_seconds=3600)
 # Phase 11.2 conversation-management abuse protection (list/get/delete).
 conversations_limiter = RateLimitDependency(limit=120, window_seconds=3600)
 # Phase 11.3 analytics read abuse protection (summary/timeseries/top-websites/performance).
