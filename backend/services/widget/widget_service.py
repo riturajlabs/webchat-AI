@@ -18,6 +18,7 @@ import logging
 from datetime import datetime, timedelta
 from json import JSONDecodeError
 from typing import Protocol
+from urllib.parse import urlparse
 
 from pydantic import ValidationError
 from redis.exceptions import RedisError
@@ -197,7 +198,35 @@ class WidgetService:
 
         tenant = await self._tenants.find_by_id(widget.tenant_id)
         suspended = tenant is None or tenant.status != "active"
-        config = WidgetPublicConfig.from_widget(widget)
+
+        website = None
+        repo = self._websites
+        if not hasattr(repo, "find_by_id") and hasattr(repo, "websites"):
+            repo = repo.websites
+        if hasattr(repo, "find_by_id"):
+            try:
+                website = await repo.find_by_id(widget.tenant_id, widget.website_id)
+            except Exception:
+                website = None
+
+        website_logo = None
+        website_favicon = None
+        if website:
+            if website.preview_image:
+                website_logo = website.preview_image
+            if website.url:
+                try:
+                    parsed = urlparse(website.url)
+                    if parsed.scheme in ("http", "https") and parsed.netloc:
+                        website_favicon = f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
+                except Exception:
+                    pass
+
+        config = WidgetPublicConfig.from_widget(
+            widget,
+            website_logo_url=website_logo,
+            website_favicon_url=website_favicon,
+        )
         if suspended:
             # Suspended tenant: never answer, but do not reveal anything via a
             # 403 to an anonymous visitor (ADR-005 §suspension semantics).

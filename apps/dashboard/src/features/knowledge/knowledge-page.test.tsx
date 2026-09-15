@@ -247,9 +247,11 @@ describe('KnowledgePage', () => {
     expect(screen.getAllByText('ready').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('reveals the per-document status breakdown when opening a website', () => {
+  it('reveals the per-document status breakdown by default and allows collapsing', () => {
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
+    const toggleButton = screen.getByRole('button', { name: /Hide documents/ });
+    expect(toggleButton).toHaveAttribute('aria-expanded', 'true');
+    expect(toggleButton).toHaveAttribute('aria-controls', 'website-docs-site-1');
 
     const detail = screen.getByTestId('document-progress-panel');
     expect(within(detail).getByText('Total')).toBeInTheDocument();
@@ -261,12 +263,21 @@ describe('KnowledgePage', () => {
     expect(within(detail).getAllByText('1').length).toBeGreaterThanOrEqual(1);
     expect(within(detail).getByRole('link', { name: /Pricing/ })).toBeInTheDocument();
     expect(within(detail).getByText('EmbeddingError: provider timeout')).toBeInTheDocument();
+
+    // Collapsing hides the panel and updates the button label
+    fireEvent.click(toggleButton);
+    expect(screen.queryByTestId('document-progress-panel')).not.toBeInTheDocument();
+    const showButton = screen.getByRole('button', { name: /Show documents/ });
+    expect(showButton).toHaveAttribute('aria-expanded', 'false');
+
+    // Expanding shows it again
+    fireEvent.click(showButton);
+    expect(screen.getByTestId('document-progress-panel')).toBeInTheDocument();
   });
 
   it('names the page currently being processed instead of inventing a percentage', () => {
     mockDocuments(PROCESSING_RESPONSE);
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
 
     expect(screen.getByRole('status')).toHaveTextContent('Current processing');
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
@@ -275,7 +286,6 @@ describe('KnowledgePage', () => {
 
   it('does not show a progress bar once processing completes', () => {
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     expect(screen.queryByText(/%/)).not.toBeInTheDocument();
   });
@@ -289,7 +299,6 @@ describe('KnowledgePage', () => {
     >);
 
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith('doc-fail-1'));
@@ -304,7 +313,6 @@ describe('KnowledgePage', () => {
     >);
 
     renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Documents' }));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(mutateAsync).toHaveBeenCalled());

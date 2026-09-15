@@ -25,7 +25,10 @@ import {
   type FeedbackControl,
   type FeedbackSubmitPayload,
 } from './feedback';
-import { botGlyph, externalLinkGlyph } from './icons';
+import { externalLinkGlyph } from './icons';
+import { isSafeImageUrl, renderBrandLogo } from './branding';
+
+export { isSafeImageUrl };
 
 /** Assistant messages longer than this are collapsed behind "Show more". */
 export const LONG_MESSAGE_CHARS = 1200;
@@ -63,16 +66,6 @@ const feedbackHandlers = new WeakMap<HTMLElement, FeedbackSubmitHandler>();
 
 function isSafeSourceUrl(href: string): boolean {
   return /^(https?:\/\/|#|\/|mailto:)/i.test(href);
-}
-
-/**
- * Only http(s) images may ever be assigned to an `img.src` (audit W-22):
- * `data:`/`blob:`/`javascript:` and protocol-relative URLs are rejected so
- * tenant-provided brand images cannot become tracking pixels or mixed-content
- * hazards on HTTPS hosts.
- */
-export function isSafeImageUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url);
 }
 
 /** Heading shown above the citation cards (friendly, not "Sources"). */
@@ -653,17 +646,7 @@ export function createEmptyState(config: WidgetPublicConfig): HTMLElement {
   const avatar = document.createElement('div');
   avatar.className = 'wc-empty-avatar';
   avatar.setAttribute('aria-hidden', 'true');
-  const avatarUrl = config.avatar_url || config.logo_url;
-  if (avatarUrl && isSafeImageUrl(avatarUrl)) {
-    const img = document.createElement('img');
-    img.className = 'wc-empty-avatar-img';
-    img.src = avatarUrl;
-    img.alt = '';
-    img.referrerPolicy = 'no-referrer';
-    avatar.appendChild(img);
-  } else {
-    avatar.appendChild(botGlyph());
-  }
+  renderBrandLogo(avatar, config, 'wc-empty-avatar-img');
   root.appendChild(avatar);
 
   const bubble = createWelcomeBubble(config.welcome_message);

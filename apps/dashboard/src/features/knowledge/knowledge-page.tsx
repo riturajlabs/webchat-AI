@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Database, ExternalLink } from 'lucide-react';
+import { ChevronDown, Database, ExternalLink } from 'lucide-react';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -36,7 +36,8 @@ interface WebsiteRowProps {
 }
 
 function WebsiteRow({ website, readiness }: WebsiteRowProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
+  const panelId = `website-docs-${website.id}`;
 
   return (
     <li className="py-3">
@@ -62,17 +63,28 @@ function WebsiteRow({ website, readiness }: WebsiteRowProps) {
         <div className="flex items-center gap-3">
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
+            className="gap-1.5 text-xs font-medium"
             onClick={() => setOpen((value) => !value)}
             aria-expanded={open}
+            aria-controls={panelId}
           >
-            {open ? 'Hide documents' : 'Documents'}
+            <span>{open ? 'Hide documents' : 'Show documents'}</span>
+            <ChevronDown
+              className={`size-3.5 shrink-0 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+              aria-hidden="true"
+            />
           </Button>
         </div>
       </div>
       {open ? (
-        <div className="mt-3 rounded-lg border bg-muted/20 p-4">
+        <div
+          id={panelId}
+          role="region"
+          aria-label={`Documents for ${website.name}`}
+          className="mt-3 rounded-lg border bg-muted/20 p-4"
+        >
           <DocumentProgressPanel websiteId={website.id} />
         </div>
       ) : null}

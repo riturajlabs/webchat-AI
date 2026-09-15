@@ -24,10 +24,6 @@ vi.mock('@/features/knowledge/hooks', () => ({
   useKnowledgeReadiness: vi.fn(),
 }));
 
-vi.mock('@/features/knowledge/document-progress-panel', () => ({
-  DocumentProgressPanel: () => <div data-testid="document-progress-panel" />,
-}));
-
 vi.mock('./active-crawl-store', () => ({
   activeCrawlStore: { set: vi.fn(), remove: vi.fn() },
 }));

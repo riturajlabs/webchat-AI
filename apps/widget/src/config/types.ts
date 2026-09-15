@@ -18,6 +18,10 @@ export interface WidgetPublicConfig {
   theme_preset: string;
   logo_url: string | null;
   avatar_url: string | null;
+  /** Website-level logo / Open Graph image fallback. */
+  website_logo_url?: string | null;
+  /** Website-level favicon fallback URL. */
+  website_favicon_url?: string | null;
   welcome_message: string;
   placeholder: string;
   suggested_questions: string[];
@@ -83,6 +87,8 @@ export const DEFAULT_CONFIG: Omit<WidgetPublicConfig, 'widget_id'> = {
   theme_preset: '',
   logo_url: null,
   avatar_url: null,
+  website_logo_url: null,
+  website_favicon_url: null,
   welcome_message: "Hi 👋 I'm your AI assistant. Ask me anything about this site!",
   placeholder: 'Type your message…',
   suggested_questions: [],
@@ -214,6 +220,8 @@ export function normalizeConfig(
     font_family: validatedOrNull(config.font_family, FONT_FAMILY_PATTERN),
     logo_url: validatedImageUrl(config.logo_url),
     avatar_url: validatedImageUrl(config.avatar_url),
+    website_logo_url: validatedImageUrl(config.website_logo_url),
+    website_favicon_url: validatedImageUrl(config.website_favicon_url),
   };
 }
 

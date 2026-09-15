@@ -4,7 +4,6 @@ import { ChevronDown, ExternalLink, Pencil, Play, RefreshCw, Trash2, Loader2 } f
 import { useEffect, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { DocumentProgressPanel } from '@/features/knowledge/document-progress-panel';
 import { useKnowledgeReadiness } from '@/features/knowledge/hooks';
 import { WebsiteStatusBadge } from './status-badge';
 import { CrawlJobProgressBar, GeneratingEmbeddingsStatus } from './crawl-job-progress-bar';
@@ -176,7 +175,6 @@ export function WebsiteCard({
                 )}
               </dd>
             </dl>
-            <DocumentProgressPanel websiteId={website.id} />
           </div>
         ) : null}
       </div>

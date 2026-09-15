@@ -34,7 +34,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-muted/30">
+    <div className="fixed inset-0 flex overflow-hidden bg-muted/30">
       <aside className="hidden w-60 shrink-0 flex-col border-r bg-background md:flex">
         <Link href="/dashboard" className="flex items-center gap-2 px-5 py-5 font-semibold">
           <LogoMark alt="" className="h-7 w-7" />

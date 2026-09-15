@@ -108,6 +108,60 @@ async def test_get_public_config_misses_cache_on_second_widget() -> None:
     assert "wk:config:widget-2" in store.data
 
 
+async def test_get_public_config_falls_back_to_website_preview_image() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants, widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+    website = _seed_website(websites, tenant_id="tenant-a", website_id="web-1")
+    website.preview_image = "https://cdn.example.com/site-preview.png"
+    website.url = "https://acme.example"
+
+    config = await service.get_public_config("widget-1")
+    assert config.logo_url == "https://cdn.example.com/site-preview.png"
+    assert config.website_logo_url == "https://cdn.example.com/site-preview.png"
+    assert config.website_favicon_url == "https://acme.example/favicon.ico"
+
+
+async def test_get_public_config_derives_favicon_when_no_preview_image() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants, widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+    website = _seed_website(websites, tenant_id="tenant-a", website_id="web-1")
+    website.preview_image = None
+    website.url = "https://brand.example/subpage"
+
+    config = await service.get_public_config("widget-1")
+    assert config.logo_url == "https://brand.example/favicon.ico"
+    assert config.website_logo_url is None
+    assert config.website_favicon_url == "https://brand.example/favicon.ico"
+
+
+async def test_get_public_config_preserves_custom_logo_over_website_preview() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    widget = _seed_widget(
+        widgets, tenants, widget_id="widget-1", tenant_id="tenant-a", website_id="web-1"
+    )
+    widget.logo_url = "https://custom.example/bot-custom.png"
+    website = _seed_website(websites, tenant_id="tenant-a", website_id="web-1")
+    website.preview_image = "https://cdn.example.com/site-preview.png"
+
+    config = await service.get_public_config("widget-1")
+    assert config.logo_url == "https://custom.example/bot-custom.png"
+    assert config.website_logo_url == "https://cdn.example.com/site-preview.png"
+
+
+async def test_get_public_config_tenant_isolation_never_leaks_other_tenant_website() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants, widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+    # Website exists under tenant-b with identical website_id
+    website = _seed_website(websites, tenant_id="tenant-b", website_id="web-1")
+    website.preview_image = "https://leak.example/other-tenant-logo.png"
+
+    config = await service.get_public_config("widget-1")
+    # Under tenant isolation, tenant-a's widget must NOT see tenant-b's preview image
+    assert config.logo_url is None
+    assert config.website_logo_url is None
+    assert config.website_favicon_url is None
+
+
 async def test_get_public_config_not_found() -> None:
     _, _, _, _, service = _widget_env()
     with pytest.raises(WidgetNotFoundError):

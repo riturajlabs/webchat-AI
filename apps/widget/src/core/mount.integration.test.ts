@@ -13,6 +13,8 @@ const CONFIG = {
   font_size: 'md',
   logo_url: null,
   avatar_url: null,
+  website_logo_url: null,
+  website_favicon_url: null,
   welcome_message: 'Hi!',
   placeholder: 'Type…',
   suggested_questions: ['What is pricing?'],

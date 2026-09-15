@@ -12,12 +12,6 @@ vi.mock('@/features/knowledge/hooks', () => ({
   useKnowledgeReadiness: vi.fn(),
 }));
 
-vi.mock('@/features/knowledge/document-progress-panel', () => ({
-  DocumentProgressPanel: ({ websiteId }: { websiteId: string }) => (
-    <div data-testid="document-progress-panel" data-website-id={websiteId} />
-  ),
-}));
-
 const mockedUseKnowledgeReadiness = vi.mocked(useKnowledgeReadiness);
 
 const SITE: Website = {

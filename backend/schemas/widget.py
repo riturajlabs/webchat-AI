@@ -256,6 +256,8 @@ class WidgetPublicConfig(BaseModel):
     theme_preset: str = ""
     logo_url: str | None = None
     avatar_url: str | None = None
+    website_logo_url: str | None = None
+    website_favicon_url: str | None = None
     welcome_message: str
     placeholder: str
     suggested_questions: list[str]
@@ -276,7 +278,14 @@ class WidgetPublicConfig(BaseModel):
     launcher_size: str = "58px"
 
     @classmethod
-    def from_widget(cls, widget: Any) -> "WidgetPublicConfig":
+    def from_widget(
+        cls,
+        widget: Any,
+        *,
+        website_logo_url: str | None = None,
+        website_favicon_url: str | None = None,
+    ) -> "WidgetPublicConfig":
+        effective_logo = widget.logo_url or website_logo_url or website_favicon_url
         return cls(
             widget_id=widget.widget_id,
             enabled=widget.enabled,
@@ -286,8 +295,10 @@ class WidgetPublicConfig(BaseModel):
             accent_color=widget.accent_color,
             font_size=widget.font_size,
             theme_preset=widget.theme_preset,
-            logo_url=widget.logo_url,
+            logo_url=effective_logo,
             avatar_url=widget.avatar_url,
+            website_logo_url=website_logo_url,
+            website_favicon_url=website_favicon_url,
             welcome_message=widget.welcome_message,
             placeholder=widget.placeholder,
             suggested_questions=widget.suggested_questions,

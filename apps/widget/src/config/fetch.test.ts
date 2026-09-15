@@ -17,6 +17,8 @@ const CONFIG: WidgetPublicConfig = {
   theme_preset: '',
   logo_url: null,
   avatar_url: null,
+  website_logo_url: null,
+  website_favicon_url: null,
   welcome_message: 'Hi!',
   placeholder: 'Type…',
   suggested_questions: ['a', 'b'],

@@ -16,10 +16,10 @@
  */
 
 import type { WidgetPublicConfig } from '../config/types';
-import { isSafeImageUrl } from './bubbles';
+import { renderBrandLogo } from './branding';
 import { createComposer } from './composer';
 import type { ChatComposer } from './composer';
-import { botGlyph, closeIcon, footerLogo } from './icons';
+import { closeIcon, footerLogo } from './icons';
 import { createSuggested } from './suggested';
 
 /**
@@ -104,20 +104,7 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   brandIcon.className = 'wc-brand-icon';
   brandIcon.setAttribute('aria-hidden', 'true');
   const renderBrandIcon = (config: WidgetPublicConfig): void => {
-    brandIcon.replaceChildren();
-    const logoUrl = config.avatar_url || config.logo_url;
-    if (logoUrl && isSafeImageUrl(logoUrl)) {
-      // Audit W-22: only http(s) URLs reach img.src; anything else falls back
-      // to the built-in glyph.
-      const logo = document.createElement('img');
-      logo.className = 'wc-brand-logo';
-      logo.src = logoUrl;
-      logo.alt = '';
-      logo.referrerPolicy = 'no-referrer';
-      brandIcon.appendChild(logo);
-    } else {
-      brandIcon.appendChild(botGlyph());
-    }
+    renderBrandLogo(brandIcon, config, 'wc-brand-logo');
   };
   renderBrandIcon(options.config);
 
