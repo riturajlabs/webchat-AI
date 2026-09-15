@@ -79,9 +79,7 @@ def _extract_pdf(content: bytes) -> tuple[str, int]:
     except (DocumentPasswordProtectedError, DocumentTooLargeError, DocumentCorruptedError):
         raise
     except pypdf.errors.FileNotDecryptedError as exc:
-        raise DocumentPasswordProtectedError(
-            "PDF is password-protected or encrypted."
-        ) from exc
+        raise DocumentPasswordProtectedError("PDF is password-protected or encrypted.") from exc
     except Exception as exc:
         logger.warning("pdf_extraction_error: %s", exc)
         raise DocumentCorruptedError(f"Corrupted or invalid PDF file: {exc}") from exc

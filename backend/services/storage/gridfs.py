@@ -25,9 +25,7 @@ class GridFSStorageService:
         self._db = db
         self._bucket_name = bucket_name
         self._bucket = (
-            bucket
-            if bucket is not None
-            else AsyncIOMotorGridFSBucket(db, bucket_name=bucket_name)
+            bucket if bucket is not None else AsyncIOMotorGridFSBucket(db, bucket_name=bucket_name)
         )
 
     async def upload(

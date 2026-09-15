@@ -924,10 +924,7 @@ class FakeDocumentRepository:
             for document in self._documents.values()
             if document.tenant_id == tenant_id
             and document.website_id == website_id
-            and (
-                source_type is None
-                or getattr(document, "source_type", "website") == source_type
-            )
+            and (source_type is None or getattr(document, "source_type", "website") == source_type)
         ]
 
     async def find_by_id(self, tenant_id: str, document_id: str) -> Document | None:
@@ -959,10 +956,7 @@ class FakeDocumentRepository:
             for document in self._documents.values()
             if document.tenant_id == tenant_id
             and document.website_id == website_id
-            and (
-                source_type is None
-                or getattr(document, "source_type", "website") == source_type
-            )
+            and (source_type is None or getattr(document, "source_type", "website") == source_type)
         ]
 
     async def delete_by_ids(self, tenant_id: str, document_ids: list[str]) -> int:

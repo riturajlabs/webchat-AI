@@ -88,9 +88,7 @@ class FakeUsageService:
     def __init__(self) -> None:
         self.limit_exceeded = False
 
-    async def check_limit(
-        self, tenant_id: str, *, event_type: str, quantity: int = 1
-    ) -> None:
+    async def check_limit(self, tenant_id: str, *, event_type: str, quantity: int = 1) -> None:
         if self.limit_exceeded:
             raise LimitReachedError(
                 "Subscription document limit reached.", extra={"metric": event_type}
@@ -251,10 +249,7 @@ def test_upload_exceeds_max_files_batch_rejected(client) -> None:
     env.websites.websites[site.id] = site
 
     content = b"Content for testing batch size limit validation exceeding max count."
-    files = [
-        ("files", (f"file_{i}.txt", io.BytesIO(content), "text/plain"))
-        for i in range(6)
-    ]
+    files = [("files", (f"file_{i}.txt", io.BytesIO(content), "text/plain")) for i in range(6)]
 
     resp = test_client.post(
         f"/api/knowledge/websites/{site.id}/documents/upload",

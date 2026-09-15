@@ -30,7 +30,9 @@ Currently, WebChat AI populates a website's Knowledge Base exclusively via an au
    Forensic inspection of `backend/workers/jobs/crawl.py` lines 850–882 uncovered a critical vulnerability:
 
    ```python
-   async def _purge_removed_documents(*, documents, vector, tenant_id, website_id, crawled_urls, errored_urls):
+   async def _purge_removed_documents(
+       *, documents, vector, tenant_id, website_id, crawled_urls, errored_urls
+   ):
        ...
        stored = await documents.list_by_website(tenant_id, website_id)
        stale = [doc for doc in stored if doc.url not in keep and doc.url not in forgive]
@@ -258,9 +260,7 @@ However, the `url` field has a unique constraint:
 `backend/core/database.py` line 429:
 
 ```python
-await db["documents"].create_index(
-    [("tenant_id", 1), ("website_id", 1), ("url", 1)], unique=True
-)
+await db["documents"].create_index([("tenant_id", 1), ("website_id", 1), ("url", 1)], unique=True)
 ```
 
 If an uploaded document omits `url` or leaves it null, MongoDB will reject subsequent uploads with a duplicate key error on `null`.
@@ -281,6 +281,7 @@ To cleanly distinguish crawled web pages from uploaded files across the applicat
 SOURCE_TYPE_WEBSITE = "website"
 SOURCE_TYPE_FILE = "file"
 SOURCE_TYPES = {SOURCE_TYPE_WEBSITE, SOURCE_TYPE_FILE}
+
 
 class Document(BaseModel):
     ...
@@ -338,7 +339,9 @@ class Document(BaseModel):
 
 ```python
 class StorageService(Protocol):
-    async def put_file(self, *, tenant_id: str, file_id: str, filename: str, content: bytes, mime_type: str) -> str: ...
+    async def put_file(
+        self, *, tenant_id: str, file_id: str, filename: str, content: bytes, mime_type: str
+    ) -> str: ...
     async def get_file(self, *, tenant_id: str, storage_key: str) -> bytes: ...
     async def delete_file(self, *, tenant_id: str, storage_key: str) -> bool: ...
 ```
@@ -549,11 +552,11 @@ When `_build_chunks` builds a chunk from an uploaded file:
 ```python
 base_metadata = {
     "source_url": document.url,  # "file://upload/doc123/Pricing_Guide.pdf"
-    "title": document.title,       # "Pricing_Guide.pdf"
+    "title": document.title,  # "Pricing_Guide.pdf"
     "document_id": document.id,
     "tenant_id": document.tenant_id,
     "website_id": document.website_id,
-    "source_type": document.source_type, # "file"
+    "source_type": document.source_type,  # "file"
 }
 ```
 
@@ -665,7 +668,8 @@ In Phase 1 implementation, `_purge_removed_documents` MUST filter only website-c
 stored = await documents.list_by_website(tenant_id, website_id)
 # SAFEGUARD: Ignore manually uploaded files during crawl reconciliation
 stale = [
-    doc for doc in stored
+    doc
+    for doc in stored
     if getattr(doc, "source_type", SOURCE_TYPE_WEBSITE) == SOURCE_TYPE_WEBSITE
     and doc.url not in keep
     and doc.url not in forgive

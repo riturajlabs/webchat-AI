@@ -336,16 +336,17 @@ SOURCE_TYPE_WEBSITE = "website"
 SOURCE_TYPE_FILE = "file"
 SOURCE_TYPES = {SOURCE_TYPE_WEBSITE, SOURCE_TYPE_FILE}
 
+
 class Document(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str
     tenant_id: str
     website_id: str
-    url: str                                  # Synthetic URI for files: file://upload/{id}/{filename}
-    title: str                                # Filename for uploads
-    content: str                              # Extracted plain text
-    checksum: str                             # SHA-256 of extracted content
+    url: str  # Synthetic URI for files: file://upload/{id}/{filename}
+    title: str  # Filename for uploads
+    content: str  # Extracted plain text
+    checksum: str  # SHA-256 of extracted content
     language: str = ""
     status: str = DOCUMENT_STATUS_READY
     created_at: datetime
@@ -360,11 +361,11 @@ class Document(BaseModel):
     knowledge_failure_reason: str | None = None
 
     # --- MINIMAL ADDITIVE FIELDS ---
-    source_type: str = SOURCE_TYPE_WEBSITE     # "website" | "file"
-    file_name: str | None = None               # Original filename, e.g. "Q3_Report.pdf"
-    file_size_bytes: int | None = None         # File size in bytes
-    mime_type: str | None = None               # Detected MIME type, e.g. "application/pdf"
-    storage_key: str | None = None             # GridFS ObjectId string or S3 key
+    source_type: str = SOURCE_TYPE_WEBSITE  # "website" | "file"
+    file_name: str | None = None  # Original filename, e.g. "Q3_Report.pdf"
+    file_size_bytes: int | None = None  # File size in bytes
+    mime_type: str | None = None  # Detected MIME type, e.g. "application/pdf"
+    storage_key: str | None = None  # GridFS ObjectId string or S3 key
 ```
 
 ### Justification for Each Additive Field:

@@ -132,8 +132,7 @@ def test_extract_docx_success() -> None:
     assert "Header 1 | Header 2" in doc.text
     assert "Row 1 Val | Row 2 Val" in doc.text
     assert (
-        doc.mime_type
-        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        doc.mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
 
