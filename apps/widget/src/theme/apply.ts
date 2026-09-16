@@ -16,6 +16,7 @@
 
 import { readableText, resolveTheme } from '@webchat/themes';
 import type { WidgetPublicConfig } from '../config/types';
+import { loadWebFont } from './font';
 
 const PREFIX = '--wc';
 
@@ -67,6 +68,7 @@ export function applyTheme(host: HTMLElement, config: WidgetPublicConfig): void 
   setProp(host, `${PREFIX}-font-size`, config.font_size);
   setProp(host, `${PREFIX}-font-size-px`, FONT_SIZES[config.font_size] ?? FONT_SIZES.md);
   setProp(host, `${PREFIX}-font-family`, config.font_family);
+  loadWebFont(config.font_family, host.ownerDocument);
   setProp(host, `${PREFIX}-width`, config.width);
   setProp(host, `${PREFIX}-height`, config.height);
   setProp(host, `${PREFIX}-radius`, config.border_radius);

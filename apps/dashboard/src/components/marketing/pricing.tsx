@@ -13,7 +13,7 @@ import { PricingCard } from '@/features/billing/pricing-card';
 export function Pricing() {
   const { isAuthenticated } = useAuth();
   const labels: Record<PlanCta, string> = {
-    'start-free': 'Start Free',
+    'start-free': isAuthenticated ? 'Dashboard' : 'Sign up for free',
     'pricing-plan': isAuthenticated ? 'Manage plan' : 'Get Started',
     'contact-sales': 'Contact Sales',
   };

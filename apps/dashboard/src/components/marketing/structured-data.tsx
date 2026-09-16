@@ -3,13 +3,13 @@ import { SITE_DESCRIPTION, SITE_NAME, SITE_URL } from '@/lib/site';
 
 import { FAQ_ITEMS } from './faq-data';
 
-function OrganizationJsonLd() {
+export function OrganizationJsonLd() {
   const data = {
     '@context': 'https://schema.org',
     '@type': 'Organization',
     name: SITE_NAME,
     url: SITE_URL,
-    logo: `${SITE_URL}/opengraph-image`,
+    logo: `${SITE_URL}/logo.png`,
     description: SITE_DESCRIPTION,
   };
 
@@ -18,7 +18,21 @@ function OrganizationJsonLd() {
   );
 }
 
-function SoftwareApplicationJsonLd() {
+export function WebSiteJsonLd() {
+  const data = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: SITE_NAME,
+    url: SITE_URL,
+    description: SITE_DESCRIPTION,
+  };
+
+  return (
+    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }} />
+  );
+}
+
+export function SoftwareApplicationJsonLd() {
   const data = {
     '@context': 'https://schema.org',
     '@type': 'SoftwareApplication',
@@ -48,7 +62,7 @@ function SoftwareApplicationJsonLd() {
   );
 }
 
-function FaqJsonLd() {
+export function FaqJsonLd() {
   const data = {
     '@context': 'https://schema.org',
     '@type': 'FAQPage',
@@ -71,8 +85,8 @@ export function MarketingStructuredData() {
   return (
     <>
       <OrganizationJsonLd />
+      <WebSiteJsonLd />
       <SoftwareApplicationJsonLd />
-      <FaqJsonLd />
     </>
   );
 }

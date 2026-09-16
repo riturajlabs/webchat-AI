@@ -86,7 +86,16 @@ export const WIDGET_STYLES = `
     align-items: flex-end;
     gap: 12px;
     box-sizing: border-box;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-family: var(
+      --wc-font-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      'Segoe UI',
+      Roboto,
+      Helvetica,
+      Arial,
+      sans-serif
+    );
     font-size: var(--wc-font-size-px);
     line-height: 1.5;
     color: var(--wc-text);

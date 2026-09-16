@@ -24,7 +24,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function TestSkeleton() {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
-      <Skeleton className="h-[480px] w-full" />
+      <Skeleton className="h-[680px] w-full" />
       <div className="flex flex-col gap-4">
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-24 w-full" />
@@ -146,7 +146,7 @@ export function WidgetTestPage() {
             {previewHtml ? (
               <iframe
                 title="Widget live preview"
-                className="h-[480px] w-full rounded-md border"
+                className="h-[680px] min-h-[680px] w-full rounded-md border"
                 sandbox="allow-scripts allow-same-origin"
                 srcDoc={previewHtml}
               />

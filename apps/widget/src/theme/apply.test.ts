@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { applyTheme, effectiveDarkMode, wireSystemThemeChange } from './apply';
+import { loadWebFont, matchCuratedFont } from './font';
 import { defaultConfig } from '../config/types';
 
 describe('applyTheme', () => {
@@ -255,5 +256,55 @@ describe('wireSystemThemeChange (audit W-03)', () => {
     } finally {
       dispose();
     }
+  });
+});
+
+describe('Web font loading pipeline', () => {
+  it('does not inject link for system default font or null/undefined', () => {
+    const headCountBefore = document.head.querySelectorAll('link[data-webchat-font]').length;
+    loadWebFont('system');
+    loadWebFont(null);
+    loadWebFont(undefined);
+    const headCountAfter = document.head.querySelectorAll('link[data-webchat-font]').length;
+    expect(headCountAfter).toBe(headCountBefore);
+  });
+
+  it('injects stylesheet link for curated font into target document head', () => {
+    loadWebFont('Poppins');
+    const link = document.head.querySelector('link[data-webchat-font="poppins"]');
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute('rel')).toBe('stylesheet');
+    expect(link?.getAttribute('href')).toContain('Poppins');
+  });
+
+  it('deduplicates multiple calls for the same font', () => {
+    loadWebFont('Inter');
+    loadWebFont('Inter');
+    loadWebFont("'Inter', system-ui, sans-serif");
+    const links = document.head.querySelectorAll('link[data-webchat-font="inter"]');
+    expect(links).toHaveLength(1);
+  });
+
+  it('applyTheme applies font-family to host style and triggers font loading', () => {
+    const host = document.createElement('webchat-widget');
+    const config = {
+      ...defaultConfig('w'),
+      font_family: "'Space Grotesk', system-ui, -apple-system, sans-serif",
+    };
+    applyTheme(host, config);
+
+    expect(host.style.getPropertyValue('--wc-font-family')).toBe(
+      "'Space Grotesk', system-ui, -apple-system, sans-serif",
+    );
+    const link = document.head.querySelector('link[data-webchat-font="space-grotesk"]');
+    expect(link).not.toBeNull();
+  });
+
+  it('matches curated fonts by primary name, key, or stack and ignores system', () => {
+    expect(matchCuratedFont('Poppins')?.key).toBe('poppins');
+    expect(matchCuratedFont('space-grotesk')?.key).toBe('space-grotesk');
+    expect(matchCuratedFont("'Inter', system-ui, -apple-system, sans-serif")?.key).toBe('inter');
+    expect(matchCuratedFont('system')).toBeNull();
+    expect(matchCuratedFont('Comic Sans MS')).toBeNull();
   });
 });

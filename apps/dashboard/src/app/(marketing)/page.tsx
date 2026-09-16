@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { FaqSection } from '@/components/marketing/faq-section';
+import { FaqJsonLd } from '@/components/marketing/structured-data';
 import { FeaturesSection } from '@/components/marketing/features-section';
 import { FinalCta } from '@/components/marketing/final-cta';
 import { Hero } from '@/components/marketing/hero';
@@ -24,6 +25,7 @@ export const metadata: Metadata = seoPage({
 export default function LandingPage() {
   return (
     <>
+      <FaqJsonLd />
       <Hero />
       <SocialProof />
       <ProductShowcase />

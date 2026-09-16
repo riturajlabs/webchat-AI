@@ -62,7 +62,7 @@ function FooterColumn({
 }) {
   return (
     <div>
-      <h2 className="text-sm font-semibold">{title}</h2>
+      <p className="text-sm font-semibold">{title}</p>
       <ul className="mt-3 flex flex-col gap-2">
         {links.map(({ href, label }) => (
           <li key={label}>
@@ -96,7 +96,7 @@ export function Footer() {
               Build intelligent AI assistants trained on your website content.
             </p>
             <div className="mt-3 border-t border-border/60 pt-4">
-              <h3 className="text-sm font-semibold text-foreground">Connect with us</h3>
+              <p className="text-sm font-semibold text-foreground">Connect with us</p>
               <nav aria-label="Social media" className="mt-3 flex items-center gap-1.5">
                 {SOCIAL_LINKS.map(({ href, label, icon: Icon }) => (
                   <a
@@ -116,7 +116,7 @@ export function Footer() {
           </div>
           <FooterColumn title="Product" links={PRODUCT_LINKS} />
           <div>
-            <h2 className="text-sm font-semibold">Resources</h2>
+            <p className="text-sm font-semibold">Resources</p>
             <ul className="mt-3 flex flex-col gap-2">
               {RESOURCE_DOC_LINKS.map(({ href, label }) => (
                 <li key={label}>

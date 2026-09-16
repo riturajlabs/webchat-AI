@@ -19,6 +19,7 @@ import { EmbedCode } from './embed-code';
 import { QuestionEditor } from './question-editor';
 import { ThemeSelector } from './theme-selector';
 import { WidgetPreview } from './widget-preview';
+import { FONT_OPTIONS, fontFamilyToKey, fontKeyToStack } from '../fonts';
 import { useUpdateWidgetConfig } from '../hooks';
 import type { WidgetConfig, WidgetConfigChanges } from '../types';
 
@@ -53,29 +54,6 @@ const EDITABLE_FIELDS: (keyof WidgetConfigChanges)[] = [
 ];
 
 const UNSAVED_MESSAGE = 'You have unsaved widget changes. Leave anyway?';
-
-const FONT_OPTIONS: { key: string; label: string; stack: string | null }[] = [
-  { key: 'system', label: 'System default', stack: null },
-  { key: 'inter', label: 'Inter', stack: "'Inter', system-ui, sans-serif" },
-  { key: 'roboto', label: 'Roboto', stack: "'Roboto', system-ui, sans-serif" },
-  { key: 'open-sans', label: 'Open Sans', stack: "'Open Sans', system-ui, sans-serif" },
-  { key: 'lato', label: 'Lato', stack: "'Lato', system-ui, sans-serif" },
-  { key: 'poppins', label: 'Poppins', stack: "'Poppins', system-ui, sans-serif" },
-  { key: 'montserrat', label: 'Montserrat', stack: "'Montserrat', system-ui, sans-serif" },
-  { key: 'nunito', label: 'Nunito', stack: "'Nunito', system-ui, sans-serif" },
-  { key: 'source-sans-3', label: 'Source Sans 3', stack: "'Source Sans 3', system-ui, sans-serif" },
-  { key: 'dm-sans', label: 'DM Sans', stack: "'DM Sans', system-ui, sans-serif" },
-];
-
-function fontFamilyToKey(value: string | null): string {
-  const match = FONT_OPTIONS.find((option) => option.key !== 'system' && option.stack === value);
-  return match ? match.key : 'system';
-}
-
-function fontKeyToStack(key: string): string | null {
-  const option = FONT_OPTIONS.find((candidate) => candidate.key === key);
-  return option ? option.stack : null;
-}
 
 function GroupHeading({ children }: { children: React.ReactNode }) {
   return (

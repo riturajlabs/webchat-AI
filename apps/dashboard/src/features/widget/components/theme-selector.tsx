@@ -1,16 +1,26 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { THEME_PRESETS, defaultTokens } from '@webchat/themes';
 
 import { cn } from '@/lib/utils';
 import type { WidgetThemePreset } from '../types';
 
-/** Number of preset cards visible before "Show more" is revealed. */
-const INITIAL_VISIBLE = 6;
+export const CLASSIC: WidgetThemePreset = '';
 
-const CLASSIC: WidgetThemePreset = '';
+export type ThemeItem =
+  | { type: 'classic'; id: WidgetThemePreset }
+  | { type: 'preset'; id: string; preset: (typeof THEME_PRESETS)[number] };
+
+/** Single source of truth for all available widget themes (Classic + curated presets). */
+export const ALL_THEMES: readonly ThemeItem[] = [
+  { type: 'classic', id: CLASSIC },
+  ...THEME_PRESETS.map((p) => ({ type: 'preset' as const, id: p.id, preset: p })),
+];
+
+/** Number of theme cards visible before "Show more" is revealed. */
+export const INITIAL_VISIBLE_COUNT = 6;
 
 function ClassicCard({ selected }: { selected: boolean }) {
   // The "Classic" option maps to the fully-custom setup (`theme_preset = ''`),
@@ -107,61 +117,64 @@ function PresetCard({
 export function ThemeSelector({
   value,
   onChange,
+  themes = ALL_THEMES,
 }: {
   value: WidgetThemePreset;
   onChange: (value: WidgetThemePreset) => void;
+  themes?: readonly ThemeItem[];
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const visiblePresets = expanded ? THEME_PRESETS : THEME_PRESETS.slice(0, INITIAL_VISIBLE);
-  const hasMore = THEME_PRESETS.length > INITIAL_VISIBLE;
+  const isSelectedHidden =
+    Boolean(value) && !themes.slice(0, INITIAL_VISIBLE_COUNT).some((t) => t.id === value);
+  const [expanded, setExpanded] = useState(isSelectedHidden);
+  const visibleThemes = expanded ? themes : themes.slice(0, INITIAL_VISIBLE_COUNT);
+  const hasMore = themes.length > INITIAL_VISIBLE_COUNT && !expanded;
+  const remainingCount = themes.length - INITIAL_VISIBLE_COUNT;
 
   return (
     <div className="flex flex-col gap-3">
       <div role="radiogroup" aria-label="Theme preset" className="grid grid-cols-2 gap-3">
-        <button
-          type="button"
-          role="radio"
-          aria-checked={value === CLASSIC}
-          aria-label="Select Classic preset"
-          onClick={() => onChange(CLASSIC)}
-          className={cn(
-            'overflow-hidden rounded-lg border bg-background text-left transition-colors',
-            value === CLASSIC
-              ? 'border-primary ring-2 ring-primary/20'
-              : 'border-input hover:border-foreground/30',
-          )}
-        >
-          <ClassicCard selected={value === CLASSIC} />
-        </button>
+        {visibleThemes.map((item) => {
+          if (item.type === 'classic') {
+            return (
+              <button
+                key="classic"
+                type="button"
+                role="radio"
+                aria-checked={value === CLASSIC}
+                aria-label="Select Classic preset"
+                onClick={() => onChange(CLASSIC)}
+                className={cn(
+                  'overflow-hidden rounded-lg border bg-background text-left transition-colors',
+                  value === CLASSIC
+                    ? 'border-primary ring-2 ring-primary/20'
+                    : 'border-input hover:border-foreground/30',
+                )}
+              >
+                <ClassicCard selected={value === CLASSIC} />
+              </button>
+            );
+          }
 
-        {visiblePresets.map((preset) => (
-          <PresetCard
-            key={preset.id}
-            preset={preset}
-            selected={value === preset.id}
-            onSelect={() => onChange(preset.id)}
-          />
-        ))}
+          return (
+            <PresetCard
+              key={item.preset.id}
+              preset={item.preset}
+              selected={value === item.preset.id}
+              onSelect={() => onChange(item.preset.id)}
+            />
+          );
+        })}
       </div>
 
       {hasMore ? (
         <button
           type="button"
-          onClick={() => setExpanded((current) => !current)}
+          onClick={() => setExpanded(true)}
           aria-expanded={expanded}
           className="flex items-center justify-center gap-1.5 rounded-lg border border-input px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
         >
-          {expanded ? (
-            <>
-              <ChevronUp className="size-4" aria-hidden="true" />
-              Show less
-            </>
-          ) : (
-            <>
-              <ChevronDown className="size-4" aria-hidden="true" />
-              Show more ({THEME_PRESETS.length - INITIAL_VISIBLE} more)
-            </>
-          )}
+          <ChevronDown className="size-4" aria-hidden="true" />
+          Show more ({remainingCount} more)
         </button>
       ) : null}
     </div>

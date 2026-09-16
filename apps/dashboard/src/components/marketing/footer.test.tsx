@@ -44,4 +44,14 @@ describe('Footer', () => {
       '/terms',
     );
   });
+
+  it('renders column titles as semantic paragraph elements rather than h2/h3', () => {
+    const { container } = render(<Footer />);
+    expect(container.querySelectorAll('h2').length).toBe(0);
+    expect(container.querySelectorAll('h3').length).toBe(0);
+    expect(screen.getByText('Product')).toBeInTheDocument();
+    expect(screen.getByText('Resources')).toBeInTheDocument();
+    expect(screen.getByText('Legal')).toBeInTheDocument();
+    expect(screen.getByText('Connect with us')).toBeInTheDocument();
+  });
 });

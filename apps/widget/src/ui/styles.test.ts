@@ -40,3 +40,13 @@ describe('WIDGET_STYLES overflow containment', () => {
     expect(messages![1]).toMatch(/padding:\s*14px\s+14px\s+12px;/);
   });
 });
+
+describe('WIDGET_STYLES typography contract', () => {
+  it('binds .wc-shell font-family to var(--wc-font-family)', () => {
+    expect(WIDGET_STYLES).toMatch(/\.wc-shell\s*\{[^}]*font-family:\s*var\(\s*--wc-font-family/);
+  });
+
+  it('declares --wc-font-family in :host custom properties defaults', () => {
+    expect(WIDGET_STYLES).toMatch(/--wc-font-family:\s*-apple-system/);
+  });
+});

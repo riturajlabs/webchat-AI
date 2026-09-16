@@ -274,29 +274,22 @@ describe('WidgetEditor', () => {
     expect(screen.getByText(/override this preset/)).toBeInTheDocument();
   });
 
-  it('shows 6 preset cards initially and reveals the rest via Show more', () => {
+  it('shows 6 theme cards initially and reveals the rest via Show more', () => {
     setup();
 
-    const presetRadios = () =>
-      screen
-        .getAllByRole('radio')
-        .filter(
-          (radio) =>
-            radio.getAttribute('aria-label')?.startsWith('Select ') &&
-            radio.getAttribute('aria-label') !== 'Select Classic preset',
-        );
-    expect(presetRadios()).toHaveLength(6);
+    const allThemeRadios = () => screen.getAllByRole('radio');
+    expect(allThemeRadios()).toHaveLength(6);
 
     expect(
       screen.queryByRole('radio', { name: 'Select Purple AI preset' }),
     ).not.toBeInTheDocument();
 
-    const showMore = screen.getByRole('button', { name: /Show more/i });
+    const showMore = screen.getByRole('button', { name: /Show more \(5 more\)/i });
     fireEvent.click(showMore);
 
     expect(screen.getByRole('radio', { name: 'Select Purple AI preset' })).toBeInTheDocument();
-    expect(presetRadios()).toHaveLength(10);
-    expect(screen.getByRole('button', { name: /Show less/i })).toBeInTheDocument();
+    expect(allThemeRadios()).toHaveLength(11);
+    expect(screen.queryByRole('button', { name: /Show more/i })).not.toBeInTheDocument();
   });
 
   it('auto-registers every theme in the canonical registry (dynamic theme registration)', () => {
@@ -317,9 +310,10 @@ describe('WidgetEditor', () => {
 
     // Adding a theme to `@webchat/themes` (THEME_PRESETS) must surface it in
     // the dashboard without any per-theme wiring here.
-    expect(presetRadios()).toHaveLength(Math.min(6, THEME_PRESETS.length));
+    // The initial view displays exactly 6 cards (1 Classic + 5 presets).
+    expect(presetRadios()).toHaveLength(Math.min(5, THEME_PRESETS.length));
 
-    if (THEME_PRESETS.length > 6) {
+    if (THEME_PRESETS.length > 5) {
       fireEvent.click(screen.getByRole('button', { name: /Show more/i }));
       expect(presetRadios()).toHaveLength(THEME_PRESETS.length);
       for (const preset of THEME_PRESETS) {

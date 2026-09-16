@@ -11,7 +11,7 @@ const INTEGRATIONS = [
   {
     icon: Palette,
     name: 'Theme Presets',
-    description: '7 curated themes or bring your own colors',
+    description: '10 curated themes or bring your own colors',
   },
 ];
 

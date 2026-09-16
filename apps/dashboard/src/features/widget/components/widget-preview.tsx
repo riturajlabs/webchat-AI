@@ -2,11 +2,12 @@
 
 /* eslint-disable @next/next/no-img-element -- live SDK-style preview uses raw <img> (arbitrary user URLs) */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Send, X } from 'lucide-react';
 import { resolveTheme } from '@webchat/themes';
 
 import { DeviceId, DevicePreview } from './device-preview';
+import { loadPreviewFont } from '../fonts';
 import type { WidgetConfig } from '../types';
 
 const FONT_SIZES: Record<string, string> = {
@@ -45,6 +46,10 @@ function parseCssLength(value: string, fallback: number): number {
 export function WidgetPreview({ config }: { config: WidgetConfig }) {
   const [device, setDevice] = useState<DeviceId>('desktop');
   const [open, setOpen] = useState(true);
+
+  useEffect(() => {
+    loadPreviewFont(config.font_family);
+  }, [config.font_family]);
 
   const dark = effectiveDark(config);
   const fontPx = FONT_SIZES[config.font_size] ?? FONT_SIZES.md;

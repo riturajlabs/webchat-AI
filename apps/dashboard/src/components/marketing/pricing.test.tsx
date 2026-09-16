@@ -39,4 +39,11 @@ describe('Pricing', () => {
       screen.getByRole('heading', { name: 'Simple, transparent pricing' }),
     ).toBeInTheDocument();
   });
+
+  it('renders "Sign up for free" for the free tier when logged out', () => {
+    render(<Pricing />);
+    const freeCta = screen.getByRole('link', { name: 'Sign up for free' });
+    expect(freeCta).toBeInTheDocument();
+    expect(freeCta).toHaveAttribute('href', '/signup');
+  });
 });

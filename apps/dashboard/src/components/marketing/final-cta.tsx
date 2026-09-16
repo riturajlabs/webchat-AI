@@ -43,7 +43,7 @@ export function FinalCta() {
               className="bg-white text-blue-700 shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:bg-blue-50 hover:shadow-md focus-visible:ring-white"
             >
               <Link href={startFreeHref}>
-                {isAuthenticated ? 'Open Dashboard' : 'Start Free'}
+                {isAuthenticated ? 'Dashboard' : 'Sign up for free'}
                 <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
             </Button>

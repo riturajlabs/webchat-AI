@@ -50,7 +50,7 @@ export function Hero() {
               className="bg-blue-600 text-white shadow-sm transition-all duration-150 hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md focus-visible:ring-blue-600"
             >
               <Link href={startFreeHref}>
-                Start Free
+                {isAuthenticated ? 'Dashboard' : 'Sign up for free'}
                 <ArrowRight className="size-4" aria-hidden="true" />
               </Link>
             </Button>
