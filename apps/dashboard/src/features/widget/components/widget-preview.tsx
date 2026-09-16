@@ -107,11 +107,11 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
               }}
             >
               <div className="flex size-8 items-center justify-center overflow-hidden rounded-full bg-white/20">
-                {config.avatar_url ? (
-                  <img src={config.avatar_url} alt="" className="size-full object-cover" />
-                ) : (
-                  <span className="text-sm font-semibold">AI</span>
-                )}
+                <img
+                  src={config.avatar_url ?? config.logo_url ?? '/logo.png'}
+                  alt=""
+                  className="size-full object-cover"
+                />
               </div>
               <div className="flex flex-col">
                 <span className="text-sm font-semibold leading-tight">{botName}</span>
@@ -153,10 +153,14 @@ export function WidgetPreview({ config }: { config: WidgetConfig }) {
                 }}
               >
                 <div
-                  className="flex size-5 shrink-0 items-center justify-center rounded-full bg-white/40 text-[10px] font-semibold"
+                  className="flex size-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/40"
                   style={{ color: theme.muted }}
                 >
-                  AI
+                  <img
+                    src={config.avatar_url ?? config.logo_url ?? '/logo.png'}
+                    alt=""
+                    className="size-full object-cover"
+                  />
                 </div>
                 <span>Hi! I’m your AI assistant. Ask me anything about this site.</span>
               </div>

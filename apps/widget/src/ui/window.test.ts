@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BANNER_AUTO_DISMISS_MS, createChatWindow } from './window';
 import { defaultConfig, type WidgetPublicConfig } from '../config/types';
+import { DEFAULT_BRAND_LOGO } from './branding';
 
 function setup(configOverrides: Partial<WidgetPublicConfig> = {}) {
   const config = { ...defaultConfig('widget_1'), ...configOverrides };
@@ -459,7 +460,7 @@ describe('brand image URL safety (audit W-22)', () => {
     expect(logo?.src).toBe('https://cdn.example.com/bot.png');
   });
 
-  it('falls back to the glyph for unsafe image schemes', () => {
+  it('falls back to the official default logo for unsafe image schemes', () => {
     for (const url of [
       'javascript:alert(1)',
       'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
@@ -467,8 +468,9 @@ describe('brand image URL safety (audit W-22)', () => {
       'blob:https://example.com/x',
     ]) {
       const { windowApi } = setup({ avatar_url: url });
-      expect(windowApi.element.querySelector('img')).toBeNull();
-      expect(windowApi.element.querySelector('.wc-brand-icon svg')).toBeTruthy();
+      const logo = windowApi.element.querySelector<HTMLImageElement>('.wc-brand-logo');
+      expect(logo).not.toBeNull();
+      expect(logo?.src).toBe(DEFAULT_BRAND_LOGO);
     }
   });
 });

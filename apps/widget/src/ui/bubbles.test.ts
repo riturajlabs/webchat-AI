@@ -13,6 +13,7 @@ import {
 } from './bubbles';
 import type { ChatMessage } from '../stream/chat';
 import { defaultConfig } from '../config/types';
+import { DEFAULT_BRAND_LOGO } from './branding';
 
 function message(
   role: ChatMessage['role'],
@@ -422,7 +423,7 @@ describe('wireMessageActions', () => {
   });
 });
 
-describe('inline citation links (audit W-09)', () => {
+describe('inline citation markers removed from prose (2026-09-16)', () => {
   const SOURCES = [
     { url: 'https://docs.example.com/one', title: 'One' },
     { url: 'https://docs.example.com/two', title: 'Two' },
@@ -441,39 +442,18 @@ describe('inline citation links (audit W-09)', () => {
     return list;
   }
 
-  it('converts [n] markers into buttons that jump to the matching card', () => {
-    const list = rendered('Pricing is per seat[1], billed yearly[2] or monthly[3].');
-    const chips = list.querySelectorAll<HTMLButtonElement>('.wc-citation');
-    expect(Array.from(chips).map((chip) => chip.textContent)).toEqual(['1', '2', '3']);
-    expect(chips[0].getAttribute('aria-label')).toBe('Jump to source 1');
-    expect(chips[0].dataset.sourceIndex).toBe('1');
-
-    chips[1].click();
-    const cards = list.querySelectorAll('.wc-sources-list .wc-source-item');
-    expect(cards[1].classList.contains('wc-source-highlight')).toBe(true);
-    expect(cards[0].classList.contains('wc-source-highlight')).toBe(false);
+  it('renders clean prose with no citation chips', () => {
+    const list = rendered('Pricing is per seat [1], billed yearly [2] or monthly [3].');
+    expect(list.querySelector('.wc-citation')).toBeNull();
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toBe(
+      'Pricing is per seat, billed yearly or monthly.',
+    );
   });
 
-  it('expands a collapsed source list before jumping to a hidden card', () => {
-    const fourth = [...SOURCES, { url: 'https://docs.example.com/four', title: 'Four' }];
-    const list = createMessageList();
-    document.body.appendChild(list);
-    renderMessages(list, [message('assistant', 'See the docs[4].', { sources: fourth })]);
-    wireMessageActions(list, {
-      onCopyCode: vi.fn(),
-      onRetry: vi.fn(),
-      onToggleMore: vi.fn(),
-    });
-    // Card 4 is beyond VISIBLE_SOURCES and collapsed.
-    expect(list.querySelector('.wc-sources')?.classList.contains('wc-sources-expanded')).toBe(
-      false,
-    );
-
-    (list.querySelector('.wc-citation') as HTMLButtonElement).click();
-    const block = list.querySelector('.wc-sources') as HTMLElement;
-    expect(block.classList.contains('wc-sources-expanded')).toBe(true);
-    const cards = block.querySelectorAll('.wc-source-item');
-    expect(cards[3].classList.contains('wc-source-highlight')).toBe(true);
+  it('keeps the native source cards for the same answer', () => {
+    const list = rendered('See the docs [2].');
+    const cards = list.querySelectorAll('.wc-sources-list .wc-source-item');
+    expect(cards.length).toBe(3);
   });
 
   it('leaves out-of-range markers as literal text', () => {
@@ -482,7 +462,7 @@ describe('inline citation links (audit W-09)', () => {
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[9]');
   });
 
-  it('handles many citations in one text node without hanging (regression: infinite loop)', () => {
+  it('removes a long run of markers without hanging (regression: infinite loop)', () => {
     const sources = Array.from({ length: 12 }, (_, i) => ({
       url: `https://example.com/${i}`,
       title: `Source ${i + 1}`,
@@ -499,8 +479,8 @@ describe('inline citation links (audit W-09)', () => {
     });
     const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(1000);
-    const chips = list.querySelectorAll('.wc-citation');
-    expect(chips.length).toBe(12);
+    expect(list.querySelector('.wc-citation')).toBeNull();
+    expect(list.querySelector('.wc-bubble-content')?.textContent).not.toContain('[');
   });
 
   it('does not touch markers inside code blocks', () => {
@@ -510,23 +490,20 @@ describe('inline citation links (audit W-09)', () => {
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('matrix[2]');
   });
 
-  it('handles interleaved valid and out-of-range markers', () => {
+  it('removes valid markers and keeps out-of-range ones', () => {
     const list = rendered('See [1] and [99] and [2].');
-    const chips = list.querySelectorAll('.wc-citation');
-    expect(chips.length).toBe(2);
-    expect(chips[0].textContent).toBe('1');
-    expect(chips[1].textContent).toBe('2');
-    expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[99]');
+    expect(list.querySelector('.wc-citation')).toBeNull();
+    expect(list.querySelector('.wc-bubble-content')?.textContent).toBe('See and [99] and.');
   });
 
-  it('renders citation chips while streaming and preserves them after completion', () => {
-    const streaming = rendered('Partial claim[1]', { streaming: true });
-    expect(streaming.querySelector('.wc-citation')).toBeTruthy();
-    expect(streaming.querySelector('.wc-citation')?.textContent).toBe('1');
+  it('produces the same clean text while streaming and after completion', () => {
+    const streaming = rendered('Partial claim [1]', { streaming: true });
+    expect(streaming.querySelector('.wc-citation')).toBeNull();
+    expect(streaming.querySelector('.wc-bubble-content')?.textContent).toBe('Partial claim');
 
-    const done = rendered('Complete claim[1]');
-    expect(done.querySelector('.wc-citation')).toBeTruthy();
-    expect(done.querySelector('.wc-citation')?.textContent).toBe('1');
+    const done = rendered('Complete claim [1]');
+    expect(done.querySelector('.wc-citation')).toBeNull();
+    expect(done.querySelector('.wc-bubble-content')?.textContent).toBe('Complete claim');
   });
 });
 
@@ -601,8 +578,8 @@ describe('markdown layout safety', () => {
     expect(bubble.querySelector('.wc-bubble-content')?.textContent).toContain(
       'https://example.com/apply',
     );
-    // [1] and [2] were upgraded to clickable citation chips (sources remain).
-    expect(bubble.querySelectorAll('.wc-citation').length).toBe(2);
+    // [1] and [2] were removed from the prose; the source cards remain.
+    expect(bubble.querySelector('.wc-citation')).toBeNull();
     expect(bubble.querySelectorAll('.wc-source-item').length).toBe(2);
   });
 });
@@ -617,11 +594,12 @@ describe('empty-state avatar safety (audit W-22)', () => {
     expect(img?.src).toBe('https://cdn.example.com/bot.png');
   });
 
-  it('falls back to the glyph for unsafe avatar schemes', () => {
+  it('falls back to the official default logo for unsafe avatar schemes', () => {
     for (const url of ['javascript:alert(1)', 'data:image/png;base64,x', '//evil.example/a.png']) {
       const state = createEmptyState({ ...defaultConfig('w'), avatar_url: url });
-      expect(state.querySelector('img')).toBeNull();
-      expect(state.querySelector('svg')).toBeTruthy();
+      const img = state.querySelector<HTMLImageElement>('img');
+      expect(img).not.toBeNull();
+      expect(img?.src).toBe(DEFAULT_BRAND_LOGO);
     }
   });
 });

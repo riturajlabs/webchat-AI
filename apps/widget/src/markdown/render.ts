@@ -49,17 +49,7 @@ const ALLOWED_TAGS = [
   'span',
 ];
 
-const ALLOWED_ATTR = [
-  'href',
-  'rel',
-  'target',
-  'class',
-  'align',
-  'start',
-  'type',
-  'data-source-index',
-  'aria-label',
-];
+const ALLOWED_ATTR = ['href', 'rel', 'target', 'class', 'align', 'start', 'type', 'aria-label'];
 
 const SAFE_URL_PATTERN = /^(https?:\/\/|#|\/|[a-z0-9-]+\.)/i;
 // https://html.spec.whatwg.org/multipage/parsing.html#data-state
@@ -99,10 +89,19 @@ function renderInline(text: string, maxCitations = 0): string {
     /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(~~([^~]+)~~)|(?<!!)(\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\))|(\[(\d{1,2})\])/g;
 
   let lastIndex = 0;
+  // Set while stripping a citation marker: one separator space is materialized
+  // before the next emitted text run so removing `[n]` merges cleanly
+  // (`…seat [1].` → `…seat.`, `See [1] and` → `See and`, `[1][2]` → nothing).
+  let pendingSeparator = false;
+  let skipLeadingWs = 0;
   let match: RegExpExecArray | null;
   while ((match = inlinePattern.exec(remaining)) !== null) {
     const before = remaining.slice(lastIndex, match.index);
     if (before) {
+      if (pendingSeparator && !/^\s/.test(before)) {
+        tokens.push(' ');
+      }
+      pendingSeparator = false;
       tokens.push(escapeHtml(before));
     }
     const [
@@ -121,6 +120,19 @@ function renderInline(text: string, maxCitations = 0): string {
       citation,
       citationNum,
     ] = match;
+    // An adjacent inline token with no raw text before it (e.g. `foo [1]**bold**`)
+    // must still see the separator a dropped marker promised.
+    if (
+      pendingSeparator &&
+      (bold !== undefined ||
+        italic !== undefined ||
+        code !== undefined ||
+        strike !== undefined ||
+        link !== undefined)
+    ) {
+      tokens.push(' ');
+      pendingSeparator = false;
+    }
     if (bold !== undefined) {
       tokens.push(`<strong>${escapeHtml(boldText)}</strong>`);
     } else if (italic !== undefined) {
@@ -142,17 +154,38 @@ function renderInline(text: string, maxCitations = 0): string {
     } else if (citation !== undefined) {
       const index = Number.parseInt(citationNum, 10);
       if (maxCitations > 0 && index >= 1 && index <= maxCitations) {
-        tokens.push(
-          `<button type="button" class="wc-citation" data-source-index="${index}" aria-label="Jump to source ${index}">${index}</button>`,
-        );
+        // Inline citation markers are removed from the answer prose; the native
+        // "Learn more" source cards are the only citation surface. Whitespace
+        // around the dropped marker is normalized: no separator before
+        // punctuation (…seat [1]. → …seat.), exactly one separator between
+        // words (See [1] and → See and), and none for adjacent markers
+        // ([1][2]) or for markers that had no surrounding whitespace at all.
+        const last = tokens[tokens.length - 1];
+        const preHasWhitespace = last !== undefined && /\s$/.test(last);
+        if (last !== undefined) {
+          tokens[tokens.length - 1] = last.replace(/\s+$/, '');
+        }
+        const after = remaining.slice(match.index + match[0].length);
+        const leadingWs = (after.match(/^\s*/) ?? [''])[0];
+        const postHasWhitespace = leadingWs.length > 0;
+        const postIsPunctuation =
+          leadingWs.length === after.length || /^[.,;:!?)\]}%]/.test(after.slice(leadingWs.length));
+        pendingSeparator = !postIsPunctuation && (preHasWhitespace || postHasWhitespace);
+        skipLeadingWs = leadingWs.length;
       } else {
         tokens.push(escapeHtml(citation));
       }
     }
-    lastIndex = match.index + match[0].length;
+    lastIndex = match.index + match[0].length + skipLeadingWs;
+    skipLeadingWs = 0;
   }
   if (lastIndex < remaining.length) {
-    tokens.push(escapeHtml(remaining.slice(lastIndex)));
+    const tail = remaining.slice(lastIndex);
+    if (pendingSeparator && !/^\s/.test(tail)) {
+      tokens.push(' ');
+    }
+    pendingSeparator = false;
+    tokens.push(escapeHtml(tail));
   }
   return tokens.join('');
 }

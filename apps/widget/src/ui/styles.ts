@@ -726,56 +726,6 @@ export const WIDGET_STYLES = `
     display: block;
   }
 
-  /* Inline citation chip upgraded from a "[n]" marker (audit W-09): clicking
-     jumps to the matching "Learn more" card. */
-  .wc-citation {
-    appearance: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    vertical-align: baseline;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    margin: 0 2px;
-    border: 1px solid var(--wc-border);
-    border-radius: 999px;
-    background: var(--wc-surface-elevated);
-    color: var(--wc-muted);
-    font-size: 0.7em;
-    font-weight: 600;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .wc-citation:hover,
-  .wc-citation:focus-visible {
-    color: var(--wc-primary);
-    border-color: var(--wc-primary);
-  }
-
-  .wc-citation:focus-visible {
-    outline: 2px solid var(--wc-focus-ring, var(--wc-accent));
-    outline-offset: 2px;
-  }
-
-  /* One-shot flash on the card an inline citation navigated to. */
-  @keyframes wc-source-flash {
-    0%,
-    40% {
-      border-color: var(--wc-accent);
-      box-shadow: 0 0 0 3px color-mix(in srgb, var(--wc-accent, #f59e0b) 25%, transparent);
-    }
-    100% {
-      border-color: var(--wc-border);
-      box-shadow: none;
-    }
-  }
-
-  .wc-source-item.wc-source-highlight .wc-source-link {
-    animation: wc-source-flash 1.4s ease-out 1;
-  }
-
   .wc-source-link {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

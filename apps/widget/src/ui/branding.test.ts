@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultConfig } from '../config/types';
 import {
+  DEFAULT_BRAND_LOGO,
   getBrandLogoCandidates,
-  getHostFaviconUrl,
   isSafeImageUrl,
   renderBrandLogo,
 } from './branding';
@@ -22,19 +22,12 @@ describe('isSafeImageUrl', () => {
   });
 });
 
-describe('getBrandLogoCandidates & getHostFaviconUrl', () => {
-  it('discovers link[rel="icon"] from the document if safe', () => {
-    const link = document.createElement('link');
-    link.rel = 'icon';
-    link.href = 'https://host.example.com/favicon.png';
-    document.head.appendChild(link);
-
-    expect(getHostFaviconUrl()).toBe('https://host.example.com/favicon.png');
-
-    document.head.removeChild(link);
+describe('getBrandLogoCandidates (global dynamic logo precedence)', () => {
+  it('returns an empty list when only the official default applies', () => {
+    expect(getBrandLogoCandidates(defaultConfig('w1'))).toEqual([]);
   });
 
-  it('builds candidates in strict priority order: avatar -> logo -> website_logo -> website_favicon -> host_favicon', () => {
+  it('builds candidates in strict priority order: avatar -> custom logo', () => {
     const config = {
       ...defaultConfig('w1'),
       avatar_url: 'https://cdn.example.com/avatar.png',
@@ -43,50 +36,57 @@ describe('getBrandLogoCandidates & getHostFaviconUrl', () => {
       website_favicon_url: 'https://cdn.example.com/favicon.ico',
     };
 
-    const candidates = getBrandLogoCandidates(config);
-    expect(candidates).toEqual([
+    expect(getBrandLogoCandidates(config)).toEqual([
       'https://cdn.example.com/avatar.png',
       'https://cdn.example.com/logo.png',
-      'https://cdn.example.com/site-preview.png',
-      'https://cdn.example.com/favicon.ico',
     ]);
   });
 
-  it('deduplicates identical URLs across fallback levels', () => {
+  it('skips a logo_url that is really the backend-injected website fallback', () => {
+    const config = {
+      ...defaultConfig('w1'),
+      logo_url: 'https://cdn.example.com/site-preview.png',
+      website_logo_url: 'https://cdn.example.com/site-preview.png',
+      website_favicon_url: 'https://cdn.example.com/favicon.ico',
+    };
+
+    expect(getBrandLogoCandidates(config)).toEqual([]);
+  });
+
+  it('ignores website logo/favicon when no custom chatbot brand exists', () => {
+    const config = {
+      ...defaultConfig('w1'),
+      website_logo_url: 'https://cdn.example.com/site-preview.png',
+      website_favicon_url: 'https://cdn.example.com/favicon.ico',
+    };
+
+    expect(getBrandLogoCandidates(config)).toEqual([]);
+  });
+
+  it('deduplicates identical custom URLs across levels', () => {
     const config = {
       ...defaultConfig('w1'),
       avatar_url: 'https://cdn.example.com/shared.png',
       logo_url: 'https://cdn.example.com/shared.png',
-      website_logo_url: 'https://cdn.example.com/shared.png',
-      website_favicon_url: 'https://cdn.example.com/favicon.ico',
     };
 
-    const candidates = getBrandLogoCandidates(config);
-    expect(candidates).toEqual([
-      'https://cdn.example.com/shared.png',
-      'https://cdn.example.com/favicon.ico',
-    ]);
+    expect(getBrandLogoCandidates(config)).toEqual(['https://cdn.example.com/shared.png']);
   });
 });
 
-describe('renderBrandLogo fallback hierarchy and onerror recovery', () => {
-  it('renders botGlyph immediately when no safe image candidates exist', () => {
+describe('renderBrandLogo (official WebChat AI default)', () => {
+  it('renders the official default logo when no custom brand is configured', () => {
     const container = document.createElement('span');
-    const config = {
-      ...defaultConfig('w1'),
-      avatar_url: 'javascript:alert(1)',
-      logo_url: null,
-      website_logo_url: null,
-      website_favicon_url: null,
-    };
+    renderBrandLogo(container, defaultConfig('w1'), 'wc-brand-logo');
 
-    renderBrandLogo(container, config, 'wc-brand-logo');
-
-    expect(container.querySelector('img')).toBeNull();
-    expect(container.querySelector('svg')).not.toBeNull();
+    const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo');
+    expect(img).not.toBeNull();
+    expect(img?.src).toBe(DEFAULT_BRAND_LOGO);
+    expect(img?.alt).toBe('');
+    expect(img?.referrerPolicy).toBe('no-referrer');
   });
 
-  it('mounts the first candidate when available', () => {
+  it('mounts the highest-priority custom candidate when available', () => {
     const container = document.createElement('span');
     const config = {
       ...defaultConfig('w1'),
@@ -98,19 +98,15 @@ describe('renderBrandLogo fallback hierarchy and onerror recovery', () => {
     renderBrandLogo(container, config, 'wc-brand-logo');
 
     const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo');
-    expect(img).not.toBeNull();
     expect(img?.src).toBe('https://cdn.example.com/logo.png');
-    expect(img?.alt).toBe('');
-    expect(img?.referrerPolicy).toBe('no-referrer');
   });
 
-  it('advances to next candidate when image encounters an error', () => {
+  it('advances to the next candidate when an image errors', () => {
     const container = document.createElement('span');
     const config = {
       ...defaultConfig('w1'),
       avatar_url: 'https://cdn.example.com/broken-avatar.png',
       logo_url: 'https://cdn.example.com/valid-logo.png',
-      website_logo_url: 'https://cdn.example.com/site.png',
     };
 
     renderBrandLogo(container, config, 'wc-brand-logo');
@@ -118,84 +114,68 @@ describe('renderBrandLogo fallback hierarchy and onerror recovery', () => {
     const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo')!;
     expect(img.src).toBe('https://cdn.example.com/broken-avatar.png');
 
-    // Simulate 404/network failure on avatar_url
     img.dispatchEvent(new Event('error'));
-
-    // Should now point to logo_url
     expect(img.src).toBe('https://cdn.example.com/valid-logo.png');
   });
 
-  it('cascades through multiple failures until reaching website logo or favicon', () => {
+  it('falls back to the official default after every custom candidate fails', () => {
     const container = document.createElement('span');
     const config = {
       ...defaultConfig('w1'),
       avatar_url: 'https://cdn.example.com/broken-avatar.png',
       logo_url: 'https://cdn.example.com/broken-logo.png',
-      website_logo_url: 'https://cdn.example.com/site-preview.png',
-      website_favicon_url: 'https://cdn.example.com/favicon.ico',
     };
 
     renderBrandLogo(container, config, 'wc-brand-logo');
+
     const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo')!;
-
-    // 1st error: avatar fails -> logo
     img.dispatchEvent(new Event('error'));
-    expect(img.src).toBe('https://cdn.example.com/broken-logo.png');
-
-    // 2nd error: logo fails -> website_logo
     img.dispatchEvent(new Event('error'));
-    expect(img.src).toBe('https://cdn.example.com/site-preview.png');
 
-    // 3rd error: website_logo fails -> website_favicon
-    img.dispatchEvent(new Event('error'));
-    expect(img.src).toBe('https://cdn.example.com/favicon.ico');
+    expect(img.src).toBe(DEFAULT_BRAND_LOGO);
+    expect(container.querySelector('img')).toBe(img);
   });
 
-  it('replaces image with botGlyph when all image candidates fail (zero broken image box)', () => {
+  it('skips unsafe custom schemes and renders the official default', () => {
     const container = document.createElement('span');
     const config = {
       ...defaultConfig('w1'),
-      avatar_url: 'https://cdn.example.com/broken-avatar.png',
-      logo_url: null,
-      website_logo_url: null,
-      website_favicon_url: null,
+      avatar_url: 'javascript:alert(1)',
+      logo_url: 'data:image/png;base64,x',
     };
 
     renderBrandLogo(container, config, 'wc-brand-logo');
-    const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo')!;
-    expect(img).not.toBeNull();
 
-    // Trigger error on the only candidate
+    expect(container.querySelector<HTMLImageElement>('img.wc-brand-logo')?.src).toBe(
+      DEFAULT_BRAND_LOGO,
+    );
+  });
+
+  it('replaces even a failed default with botGlyph (defensive, zero broken-image box)', () => {
+    const container = document.createElement('span');
+    renderBrandLogo(container, defaultConfig('w1'), 'wc-brand-logo');
+
+    const img = container.querySelector<HTMLImageElement>('img.wc-brand-logo')!;
     img.dispatchEvent(new Event('error'));
 
-    // img is removed and replaced by SVG botGlyph
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('svg')).not.toBeNull();
   });
 
   it('ignores onerror if img was detached or superseded before error fired', () => {
     const container = document.createElement('span');
-    const oldConfig = {
-      ...defaultConfig('w1'),
-      avatar_url: 'https://cdn.example.com/old-broken.png',
-    };
+    const oldConfig = { ...defaultConfig('w1'), avatar_url: 'https://cdn.example.com/old.png' };
     renderBrandLogo(container, oldConfig, 'wc-brand-logo');
     const oldImg = container.querySelector<HTMLImageElement>('img')!;
 
-    // Re-render container with a new valid logo
-    const newConfig = {
-      ...defaultConfig('w1'),
-      avatar_url: 'https://cdn.example.com/new-valid.png',
-    };
+    const newConfig = { ...defaultConfig('w1'), avatar_url: 'https://cdn.example.com/new.png' };
     renderBrandLogo(container, newConfig, 'wc-brand-logo');
     const newImg = container.querySelector<HTMLImageElement>('img')!;
-    expect(newImg.src).toBe('https://cdn.example.com/new-valid.png');
+    expect(newImg.src).toBe('https://cdn.example.com/new.png');
 
-    // Late error event arrives for oldImg
     oldImg.dispatchEvent(new Event('error'));
 
-    // Container should still contain the newImg, not reverted to botGlyph
     expect(container.querySelector('img')).toBe(newImg);
-    expect(newImg.src).toBe('https://cdn.example.com/new-valid.png');
+    expect(newImg.src).toBe('https://cdn.example.com/new.png');
   });
 });

@@ -224,27 +224,62 @@ describe('renderMarkdown', () => {
     });
   });
 
-  describe('streaming-safe citations (Phase 2)', () => {
+  describe('inline citation markers stripped from prose (2026-09-16)', () => {
     const SOURCES = [
       { url: 'https://docs.example.com/one', title: 'One' },
       { url: 'https://docs.example.com/two', title: 'Two' },
     ];
 
-    it('renders [1] as citation button when valid source exists', () => {
+    it('removes a single marker, leaving the claim clean', () => {
       const html = renderMarkdown('According to research [1].', SOURCES);
-      expect(html).toContain(
-        '<button type="button" class="wc-citation" data-source-index="1" aria-label="Jump to source 1">1</button>',
-      );
+      expect(html).toBe('<p>According to research.</p>');
     });
 
-    it('renders [1][2] as two adjacent citation buttons', () => {
+    it('removes adjacent markers without leaving a gap', () => {
       const html = renderMarkdown('Multiple claims [1][2].', SOURCES);
-      expect(html).toContain(
-        '<button type="button" class="wc-citation" data-source-index="1" aria-label="Jump to source 1">1</button><button type="button" class="wc-citation" data-source-index="2" aria-label="Jump to source 2">2</button>',
+      expect(html).toBe('<p>Multiple claims.</p>');
+    });
+
+    it('removes many spaced markers without a double space before punctuation', () => {
+      const many = Array.from({ length: 7 }, (_, i) => ({
+        url: `https://docs.example.com/${i + 1}`,
+        title: `Source ${i + 1}`,
+      }));
+      const html = renderMarkdown('... course commencement [3] [4] [6] [7].', many);
+      expect(html).toBe('<p>... course commencement.</p>');
+    });
+
+    it('keeps one separator between words when a marker sits mid-sentence', () => {
+      const html = renderMarkdown('See [1] and [2] for details.', SOURCES);
+      expect(html).toBe('<p>See and for details.</p>');
+    });
+
+    it('settles split-token deltas, stripping the marker once it completes', () => {
+      const render = (content: string) => renderMarkdown(content, SOURCES);
+      expect(render('See the pricing [')).toBe('<p>See the pricing [</p>');
+      expect(render('See the pricing [2')).toBe('<p>See the pricing [2</p>');
+      expect(render('See the pricing [2]')).toBe('<p>See the pricing</p>');
+      expect(render('See the pricing [2] now.')).toBe('<p>See the pricing now.</p>');
+    });
+
+    it('ends identically to the completed answer across streamed frames', () => {
+      const final = 'See the pricing [3] and check [2].';
+      const frames = [
+        'See the pricing [',
+        'See the pricing [3',
+        'See the pricing [3]',
+        'See the pricing [3] and check [',
+        'See the pricing [3] and check [2]',
+        'See the pricing [3] and check [2].',
+      ];
+      // Once the last token streams, the surfaced frame renders exactly like
+      // the final answer: in-range [2] stripped, out-of-range [3] literal.
+      expect(renderMarkdown(frames[frames.length - 1], SOURCES)).toBe(
+        renderMarkdown(final, SOURCES),
       );
     });
 
-    it('leaves invalid [99] as literal text', () => {
+    it('leaves out-of-range markers as literal text', () => {
       const html = renderMarkdown('Out of bounds [99].', SOURCES);
       expect(html).not.toContain('wc-citation');
       expect(html).toContain('[99]');
@@ -253,19 +288,32 @@ describe('renderMarkdown', () => {
     it('leaves arr[1] in inline code as literal text', () => {
       const html = renderMarkdown('Check `arr[1]` index.', SOURCES);
       expect(html).toContain('<code>arr[1]</code>');
-      expect(html).not.toContain('wc-citation');
     });
 
     it('leaves [1] inside fenced code blocks as literal text', () => {
       const html = renderMarkdown('```\n[1]\n```', SOURCES);
       expect(html).toContain('[1]');
-      expect(html).not.toContain('wc-citation');
+    });
+
+    it('keeps markdown links intact when citation markers surround them', () => {
+      const html = renderMarkdown(
+        'See [1] and [docs](https://example.com/a) for details [2].',
+        SOURCES,
+      );
+      expect(html).toBe(
+        '<p>See and <a href="https://example.com/a" target="_blank" rel="noopener noreferrer">docs</a> for details.</p>',
+      );
     });
 
     it('sanitizes malicious script in citation brackets', () => {
       const html = renderMarkdown('Attack [<script>1</script>].', SOURCES);
       expect(html).not.toContain('<script');
       expect(html).not.toContain('wc-citation');
+    });
+
+    it('keeps markers literal when no sources are present', () => {
+      const html = renderMarkdown('As noted [1].');
+      expect(html).toBe('<p>As noted [1].</p>');
     });
   });
 
