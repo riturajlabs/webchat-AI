@@ -519,13 +519,14 @@ describe('inline citation links (audit W-09)', () => {
     expect(list.querySelector('.wc-bubble-content')?.textContent).toContain('[99]');
   });
 
-  it('keeps markers plain while streaming; converts once sources arrive on completion', () => {
+  it('renders citation chips while streaming and preserves them after completion', () => {
     const streaming = rendered('Partial claim[1]', { streaming: true });
-    expect(streaming.querySelector('.wc-citation')).toBeNull();
-    expect(streaming.querySelector('.wc-bubble-content')?.textContent).toContain('[1]');
+    expect(streaming.querySelector('.wc-citation')).toBeTruthy();
+    expect(streaming.querySelector('.wc-citation')?.textContent).toBe('1');
 
     const done = rendered('Complete claim[1]');
     expect(done.querySelector('.wc-citation')).toBeTruthy();
+    expect(done.querySelector('.wc-citation')?.textContent).toBe('1');
   });
 });
 
@@ -622,5 +623,93 @@ describe('empty-state avatar safety (audit W-22)', () => {
       expect(state.querySelector('img')).toBeNull();
       expect(state.querySelector('svg')).toBeTruthy();
     }
+  });
+});
+
+describe('streaming reconciliation & DOM stability (Phase 2)', () => {
+  it('preserves existing earlier DOM block references when streaming token-by-token', () => {
+    const list = createMessageList();
+    const asstMsg = message('assistant', 'Paragraph 1.', { id: 'a1', streaming: true });
+    renderMessages(list, [asstMsg]);
+
+    const bubble = list.querySelector<HTMLElement>('[data-message-id="a1"]');
+    const content = bubble?.querySelector<HTMLElement>('.wc-bubble-content');
+    const firstP = content?.firstChild;
+    expect(firstP).toBeTruthy();
+    expect(firstP?.textContent).toBe('Paragraph 1.');
+
+    // Stream token-by-token into a second paragraph
+    asstMsg.content = 'Paragraph 1.\n\nParagraph 2 is arriving...';
+    renderMessages(list, [asstMsg]);
+
+    // firstP must remain identical reference in the DOM (not torn down)
+    expect(content?.firstChild).toBe(firstP);
+    expect(content?.childNodes.length).toBe(2);
+    expect(content?.childNodes[1].textContent).toBe('Paragraph 2 is arriving...');
+
+    // Stream final token
+    asstMsg.content = 'Paragraph 1.\n\nParagraph 2 is arriving... done!';
+    renderMessages(list, [asstMsg]);
+
+    expect(content?.firstChild).toBe(firstP);
+    expect(content?.childNodes[1].textContent).toBe('Paragraph 2 is arriving... done!');
+  });
+
+  it('handles newline arriving as a separate delta without breaking lists', () => {
+    const list = createMessageList();
+    const asstMsg = message('assistant', '1. Item 1', { id: 'a1', streaming: true });
+    renderMessages(list, [asstMsg]);
+
+    const bubble = list.querySelector<HTMLElement>('[data-message-id="a1"]');
+    expect(bubble?.querySelector('ol')).toBeTruthy();
+
+    // Delta containing only newline arrives
+    asstMsg.content = '1. Item 1\n';
+    renderMessages(list, [asstMsg]);
+    expect(bubble?.querySelector('ol')).toBeTruthy();
+    expect(bubble?.querySelectorAll('li').length).toBe(1);
+
+    // Delta with item 2 number arrives
+    asstMsg.content = '1. Item 1\n2. ';
+    renderMessages(list, [asstMsg]);
+    expect(bubble?.querySelector('ol')).toBeTruthy();
+    expect(bubble?.querySelectorAll('li').length).toBe(2);
+
+    // Delta with item 2 text arrives
+    asstMsg.content = '1. Item 1\n2. Item 2';
+    renderMessages(list, [asstMsg]);
+    const items = bubble?.querySelectorAll('li');
+    expect(items?.length).toBe(2);
+    expect(items?.[0].textContent).toBe('Item 1');
+    expect(items?.[1].textContent).toBe('Item 2');
+  });
+
+  it('ensures no duplicate content and no lost final delta on completion', () => {
+    const list = createMessageList();
+    const asstMsg = message('assistant', 'Hello ', { id: 'a1', streaming: true });
+    renderMessages(list, [asstMsg]);
+
+    asstMsg.content = 'Hello world, final.';
+    asstMsg.streaming = false;
+    renderMessages(list, [asstMsg]);
+
+    const bubble = list.querySelector<HTMLElement>('[data-message-id="a1"]');
+    expect(bubble?.textContent).toContain('Hello world, final.');
+    const paragraphs = bubble?.querySelectorAll('p');
+    expect(paragraphs?.length).toBe(1);
+  });
+
+  it('preserves partial content on stream error', () => {
+    const list = createMessageList();
+    const asstMsg = message('assistant', 'Partial answer before drop', {
+      id: 'a1',
+      streaming: false,
+      error: true,
+    });
+    renderMessages(list, [asstMsg]);
+
+    const bubble = list.querySelector<HTMLElement>('[data-message-id="a1"]');
+    expect(bubble?.classList.contains('wc-bubble-error')).toBe(true);
+    expect(bubble?.textContent).toContain('Partial answer before drop');
   });
 });

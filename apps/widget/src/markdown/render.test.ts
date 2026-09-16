@@ -157,4 +157,190 @@ describe('renderMarkdown', () => {
     expect(html).not.toContain('<script');
     expect(html).not.toMatch(/onclick\s*=/i);
   });
+
+  describe('list streaming (Phase 2)', () => {
+    it('handles partial ordered item "1. "', () => {
+      const html = renderMarkdown('1. ');
+      expect(html).toBe('<ol><li></li></ol>');
+    });
+
+    it('handles partial ordered item continuation "1. " + "BBA"', () => {
+      const html1 = renderMarkdown('1. ');
+      expect(html1).toBe('<ol><li></li></ol>');
+      const html2 = renderMarkdown('1. BBA');
+      expect(html2).toBe('<ol><li>BBA</li></ol>');
+    });
+
+    it('handles sequential ordered list items "1. A\\n2. B\\n3. C"', () => {
+      const html = renderMarkdown('1. A\n2. B\n3. C');
+      expect(html).toBe('<ol><li>A</li><li>B</li><li>C</li></ol>');
+    });
+
+    it('preserves start=4 on ordered lists starting at 4 ("4. Four\\n5. Five")', () => {
+      const html = renderMarkdown('4. Four\n5. Five');
+      expect(html).toBe('<ol start="4"><li>Four</li><li>Five</li></ol>');
+    });
+
+    it('preserves list container across blank lines (loose lists)', () => {
+      const html = renderMarkdown('1. A\n\n2. B');
+      expect(html).toBe('<ol><li>A</li><li>B</li></ol>');
+    });
+
+    it('preserves list container across trailing newline deltas', () => {
+      const html = renderMarkdown('1. A\n');
+      expect(html).toBe('<ol><li>A</li></ol>');
+    });
+
+    it('handles partial unordered item "-"', () => {
+      const html = renderMarkdown('-');
+      expect(html).toBe('<ul><li></li></ul>');
+    });
+
+    it('handles partial unordered item "*"', () => {
+      const html = renderMarkdown('*');
+      expect(html).toBe('<ul><li></li></ul>');
+    });
+
+    it('handles partial unordered item "+"', () => {
+      const html = renderMarkdown('+');
+      expect(html).toBe('<ul><li></li></ul>');
+    });
+
+    it('supports nested lists', () => {
+      const html = renderMarkdown('- parent\n  - child\n    - grandchild');
+      expect(html).toBe(
+        '<ul><li>parent</li><ul><li>child</li><ul><li>grandchild</li></ul></ul></ul>',
+      );
+    });
+
+    it('handles switching from ul to ol cleanly', () => {
+      const html = renderMarkdown('- bullet\n1. numbered');
+      expect(html).toBe('<ul><li>bullet</li></ul><ol><li>numbered</li></ol>');
+    });
+
+    it('handles switching from ol to ul cleanly', () => {
+      const html = renderMarkdown('1. numbered\n- bullet');
+      expect(html).toBe('<ol><li>numbered</li></ol><ul><li>bullet</li></ul>');
+    });
+  });
+
+  describe('streaming-safe citations (Phase 2)', () => {
+    const SOURCES = [
+      { url: 'https://docs.example.com/one', title: 'One' },
+      { url: 'https://docs.example.com/two', title: 'Two' },
+    ];
+
+    it('renders [1] as citation button when valid source exists', () => {
+      const html = renderMarkdown('According to research [1].', SOURCES);
+      expect(html).toContain(
+        '<button type="button" class="wc-citation" data-source-index="1" aria-label="Jump to source 1">1</button>',
+      );
+    });
+
+    it('renders [1][2] as two adjacent citation buttons', () => {
+      const html = renderMarkdown('Multiple claims [1][2].', SOURCES);
+      expect(html).toContain(
+        '<button type="button" class="wc-citation" data-source-index="1" aria-label="Jump to source 1">1</button><button type="button" class="wc-citation" data-source-index="2" aria-label="Jump to source 2">2</button>',
+      );
+    });
+
+    it('leaves invalid [99] as literal text', () => {
+      const html = renderMarkdown('Out of bounds [99].', SOURCES);
+      expect(html).not.toContain('wc-citation');
+      expect(html).toContain('[99]');
+    });
+
+    it('leaves arr[1] in inline code as literal text', () => {
+      const html = renderMarkdown('Check `arr[1]` index.', SOURCES);
+      expect(html).toContain('<code>arr[1]</code>');
+      expect(html).not.toContain('wc-citation');
+    });
+
+    it('leaves [1] inside fenced code blocks as literal text', () => {
+      const html = renderMarkdown('```\n[1]\n```', SOURCES);
+      expect(html).toContain('[1]');
+      expect(html).not.toContain('wc-citation');
+    });
+
+    it('sanitizes malicious script in citation brackets', () => {
+      const html = renderMarkdown('Attack [<script>1</script>].', SOURCES);
+      expect(html).not.toContain('<script');
+      expect(html).not.toContain('wc-citation');
+    });
+  });
+
+  describe('trailing synthetic sources block suppression (Phase 2)', () => {
+    const SOURCES = [
+      { url: 'https://example.com/1', title: 'Source 1' },
+      { url: 'https://example.com/2', title: 'Source 2' },
+    ];
+
+    it('removes trailing Sources: list when native sources exist', () => {
+      const input = [
+        'Undergraduate programs:',
+        '1. BBA [1]',
+        '2. BCA [2]',
+        '',
+        'Sources:',
+        '1. [1]',
+        '2. [2]',
+      ].join('\n');
+      const html = renderMarkdown(input, SOURCES);
+      expect(html).toContain('BBA');
+      expect(html).toContain('BCA');
+      expect(html).not.toContain('Sources');
+      expect(html).not.toMatch(/1\.\s*\[1\]/);
+    });
+
+    it('removes ### Sources variant when native sources exist', () => {
+      const input = [
+        'Undergraduate programs:',
+        '1. BBA [1]',
+        '',
+        '### Sources',
+        '- [1] https://example.com/1',
+      ].join('\n');
+      const html = renderMarkdown(input, SOURCES);
+      expect(html).toContain('BBA');
+      expect(html).not.toContain('Sources');
+    });
+
+    it('preserves legitimate mid-answer "Sources" text', () => {
+      const input = 'Primary sources of energy include solar and wind power.';
+      const html = renderMarkdown(input, SOURCES);
+      expect(html).toContain('Primary sources of energy include solar and wind power.');
+    });
+
+    it('preserves original text when sources are absent or empty', () => {
+      const input = ['Programs:', '1. BBA', '', 'Sources:', '1. [1]'].join('\n');
+      const html = renderMarkdown(input, []);
+      expect(html).toContain('Sources:');
+    });
+  });
+
+  describe('streaming stability & incomplete markdown (Phase 2)', () => {
+    it('handles incomplete bold syntax during streaming', () => {
+      const html = renderMarkdown('**in-progress');
+      expect(html).toBe('<p>**in-progress</p>');
+    });
+
+    it('handles incomplete inline code during streaming', () => {
+      const html = renderMarkdown('`in-progress');
+      expect(html).toBe('<p>`in-progress</p>');
+    });
+
+    it('handles incomplete fenced code during streaming', () => {
+      const html = renderMarkdown('```js\nconst x = 1;');
+      expect(html).toContain('<pre class="wc-code">');
+      expect(html).toContain('const x = 1;');
+      expect(html).toContain('</code></pre>');
+    });
+
+    it('handles incomplete table row during streaming', () => {
+      const html = renderMarkdown('| Col 1 | Col 2 |\n| --- | --- |\n| Cell 1 |');
+      expect(html).toContain('<div class="wc-table-scroll"><table>');
+      expect(html).toContain('Cell 1');
+      expect(html).toContain('</tbody></table></div>');
+    });
+  });
 });

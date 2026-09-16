@@ -225,6 +225,62 @@ export function renderSources(sources: ChatSource[]): HTMLElement {
   return block;
 }
 
+/**
+ * Update the bubble's content container without destructively rebuilding
+ * stable earlier blocks during streaming generation.
+ */
+function updateBubbleContent(content: HTMLElement, html: string): void {
+  if (!content.firstChild) {
+    content.innerHTML = html;
+    return;
+  }
+
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const newChildren = Array.from(template.content.childNodes);
+  const existingChildren = Array.from(content.childNodes);
+  const commonLength = Math.min(existingChildren.length, newChildren.length);
+
+  let i = 0;
+  while (i < commonLength && existingChildren[i].isEqualNode(newChildren[i])) {
+    i += 1;
+  }
+
+  for (let j = i; j < commonLength; j += 1) {
+    const existing = existingChildren[j];
+    const incoming = newChildren[j];
+    if (
+      existing instanceof HTMLElement &&
+      incoming instanceof HTMLElement &&
+      existing.tagName === incoming.tagName
+    ) {
+      if (existing.innerHTML !== incoming.innerHTML) {
+        existing.innerHTML = incoming.innerHTML;
+      }
+      if (existing.getAttribute('start') !== incoming.getAttribute('start')) {
+        const start = incoming.getAttribute('start');
+        if (start) {
+          existing.setAttribute('start', start);
+        } else {
+          existing.removeAttribute('start');
+        }
+      }
+    } else {
+      content.replaceChild(incoming, existing);
+    }
+  }
+
+  if (newChildren.length > existingChildren.length) {
+    for (let k = commonLength; k < newChildren.length; k += 1) {
+      content.appendChild(newChildren[k]);
+    }
+  } else if (existingChildren.length > newChildren.length) {
+    for (let k = existingChildren.length - 1; k >= newChildren.length; k -= 1) {
+      existingChildren[k].remove();
+    }
+  }
+}
+
 export function createBubble(message: ChatMessage, list?: HTMLElement): HTMLElement {
   const bubble = document.createElement('div');
   bubble.className = `wc-bubble wc-role-${message.role}`;
@@ -241,7 +297,6 @@ export function createBubble(message: ChatMessage, list?: HTMLElement): HTMLElem
   }
 
   syncBubble(bubble, message, list);
-  renderedContent.set(bubble, message.content);
   return bubble;
 }
 
@@ -260,19 +315,22 @@ function syncBubble(bubble: HTMLElement, message: ChatMessage, list?: HTMLElemen
     const text = bubble.querySelector<HTMLElement>('.wc-bubble-text');
     if (text && renderedContent.get(bubble) !== message.content) {
       text.textContent = message.content;
+      renderedContent.set(bubble, message.content);
     }
     return;
   }
 
-  // Assistant content: re-render markdown only when the text actually changed.
-  if (renderedContent.get(bubble) !== message.content) {
+  // Assistant content: re-render markdown only when content or sources change.
+  const contentSignature = `${message.content}::${message.sources?.length ?? 0}`;
+  if (renderedContent.get(bubble) !== contentSignature) {
     let content = bubble.querySelector<HTMLElement>('.wc-bubble-content');
     if (!content) {
       content = document.createElement('div');
       content.className = 'wc-bubble-content';
       bubble.prepend(content);
     }
-    content.innerHTML = renderMarkdown(message.content);
+    updateBubbleContent(content, renderMarkdown(message.content, message.sources));
+    renderedContent.set(bubble, contentSignature);
   }
 
   // Typing indicator while streaming/thinking with no content yet.
@@ -451,7 +509,6 @@ export function syncRetry(bubble: HTMLElement, message: ChatMessage, list?: HTML
 function syncCitations(bubble: HTMLElement, message: ChatMessage): void {
   if (
     message.role !== 'assistant' ||
-    message.streaming ||
     message.thinking ||
     message.error ||
     !message.sources?.length

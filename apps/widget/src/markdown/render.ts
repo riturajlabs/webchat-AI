@@ -49,7 +49,17 @@ const ALLOWED_TAGS = [
   'span',
 ];
 
-const ALLOWED_ATTR = ['href', 'rel', 'target', 'class', 'align'];
+const ALLOWED_ATTR = [
+  'href',
+  'rel',
+  'target',
+  'class',
+  'align',
+  'start',
+  'type',
+  'data-source-index',
+  'aria-label',
+];
 
 const SAFE_URL_PATTERN = /^(https?:\/\/|#|\/|[a-z0-9-]+\.)/i;
 // https://html.spec.whatwg.org/multipage/parsing.html#data-state
@@ -75,10 +85,10 @@ function isSafeUrl(href: string): boolean {
 }
 
 /**
- * Render a line of inline markdown (bold / italic / strike / code / links) to
+ * Render a line of inline markdown (bold / italic / strike / code / links / citations) to
  * safe HTML.
  */
-function renderInline(text: string): string {
+function renderInline(text: string, maxCitations = 0): string {
   const tokens: string[] = [];
   let remaining = text;
 
@@ -86,7 +96,7 @@ function renderInline(text: string): string {
   remaining = remaining.replace(/<script[\s\S]*?<\/script>/gi, '');
 
   const inlinePattern =
-    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(~~([^~]+)~~)|(?<!!)(\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\))/g;
+    /(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(`([^`]+)`)|(~~([^~]+)~~)|(?<!!)(\[([^\]]+)\]\(([^)\s]+)(?:\s+[^)]*)?\))|(\[(\d{1,2})\])/g;
 
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -108,6 +118,8 @@ function renderInline(text: string): string {
       link,
       linkText,
       rawHref,
+      citation,
+      citationNum,
     ] = match;
     if (bold !== undefined) {
       tokens.push(`<strong>${escapeHtml(boldText)}</strong>`);
@@ -126,6 +138,15 @@ function renderInline(text: string): string {
       } else {
         // Dangerous scheme: drop the link, keep the text escaped.
         tokens.push(escapeHtml(linkText));
+      }
+    } else if (citation !== undefined) {
+      const index = Number.parseInt(citationNum, 10);
+      if (maxCitations > 0 && index >= 1 && index <= maxCitations) {
+        tokens.push(
+          `<button type="button" class="wc-citation" data-source-index="${index}" aria-label="Jump to source ${index}">${index}</button>`,
+        );
+      } else {
+        tokens.push(escapeHtml(citation));
       }
     }
     lastIndex = match.index + match[0].length;
@@ -177,6 +198,44 @@ function alignAttr(align: 'left' | 'center' | 'right' | null): string {
   return align ? ` align="${align}"` : '';
 }
 
+export interface MarkdownSourceItem {
+  citation?: string;
+  url?: string;
+  title?: string;
+}
+
+export interface RenderMarkdownOptions {
+  sources?: MarkdownSourceItem[] | null;
+}
+
+const TRAILING_SOURCES_PATTERN =
+  /\n+(?:#{1,6}\s+)?(?:\*\*)?(?:Sources|References|Citations)(?:\*\*)?:?\s*(?:\n+\s*(?:(?:[-*+]|\d+\.)\s*)?\[\d+\].*|\n+\s*https?:\/\/.*|\n+\s*(?:[-*+]|\d+\.)\s*\[?)*\s*$/i;
+
+function stripTrailingSources(text: string, hasSources: boolean): string {
+  if (!hasSources || !text) {
+    return text;
+  }
+  return text.replace(TRAILING_SOURCES_PATTERN, '');
+}
+
+function countValidSources(sources?: MarkdownSourceItem[] | null): number {
+  if (!sources || sources.length === 0) {
+    return 0;
+  }
+  const seen = new Set<string>();
+  let count = 0;
+  for (const s of sources) {
+    const url = s.url ? s.url.trim().toLowerCase() : '';
+    if (!url || !seen.has(url)) {
+      if (url) {
+        seen.add(url);
+      }
+      count += 1;
+    }
+  }
+  return count;
+}
+
 interface ListFrame {
   indent: number;
   tag: 'ul' | 'ol';
@@ -193,12 +252,24 @@ const CODE_HEADER_CLOSE = '</div>';
  * Render markdown to sanitized HTML. Returns a string safe to inject into the
  * shadow DOM.
  */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(
+  source: string,
+  sourcesOrOptions?: MarkdownSourceItem[] | RenderMarkdownOptions | null,
+): string {
   if (!source) {
     return '';
   }
 
-  const lines = source.split('\n');
+  const sources = Array.isArray(sourcesOrOptions)
+    ? sourcesOrOptions
+    : sourcesOrOptions && 'sources' in sourcesOrOptions
+      ? sourcesOrOptions.sources
+      : null;
+
+  const maxCitations = countValidSources(sources);
+  const cleaned = stripTrailingSources(source, maxCitations > 0);
+
+  const lines = cleaned.split('\n');
   const parts: string[] = [];
   const listStack: ListFrame[] = [];
 
@@ -249,7 +320,9 @@ export function renderMarkdown(source: string): string {
       tableAlign = delimiterAlign(lines[i + 1].trim());
       parts.push('<div class="wc-table-scroll"><table><thead><tr>');
       for (let c = 0; c < header.length; c += 1) {
-        parts.push(`<th${alignAttr(tableAlign[c] ?? null)}>${renderInline(header[c])}</th>`);
+        parts.push(
+          `<th${alignAttr(tableAlign[c] ?? null)}>${renderInline(header[c], maxCitations)}</th>`,
+        );
       }
       parts.push('</tr></thead><tbody>');
       inTable = true;
@@ -261,7 +334,9 @@ export function renderMarkdown(source: string): string {
         parts.push('<tr>');
         const cells = splitRow(trimmed);
         for (let c = 0; c < cells.length; c += 1) {
-          parts.push(`<td${alignAttr(tableAlign[c] ?? null)}>${renderInline(cells[c])}</td>`);
+          parts.push(
+            `<td${alignAttr(tableAlign[c] ?? null)}>${renderInline(cells[c], maxCitations)}</td>`,
+          );
         }
         parts.push('</tr>');
         continue;
@@ -272,12 +347,14 @@ export function renderMarkdown(source: string): string {
       // Fall through: the current line is a normal block.
     }
 
-    // --- Lists (indent-aware, nested ul/ol) --------------------------------
-    const listItem = trimmed.match(/^([-*+]|\d+\.)\s+(.+)$/);
-    if (listItem) {
+    // --- Lists (indent-aware, nested ul/ol, stream-tolerant) ---------------
+    const listMatch = trimmed.match(/^([-*+]|(\d+)\.)(?:\s+(.*))?$/);
+    if (listMatch) {
       const indent = leadingSpaces(line);
-      const ordered = /^\d+\./.test(listItem[1]);
+      const ordered = Boolean(listMatch[2]);
+      const startNum = ordered ? Number.parseInt(listMatch[2], 10) : 1;
       const tag = ordered ? 'ol' : 'ul';
+      const itemContent = listMatch[3] ?? '';
 
       while (listStack.length && listStack[listStack.length - 1].indent > indent) {
         parts.push(`</${listStack.pop()!.tag}>`);
@@ -285,24 +362,47 @@ export function renderMarkdown(source: string): string {
       const top = listStack[listStack.length - 1];
       if (!top) {
         listStack.push({ indent, tag });
-        parts.push(`<${tag}>`);
+        parts.push(ordered && startNum !== 1 ? `<ol start="${startNum}">` : `<${tag}>`);
       } else if (top.indent < indent) {
         listStack.push({ indent, tag });
-        parts.push(`<${tag}>`);
+        parts.push(ordered && startNum !== 1 ? `<ol start="${startNum}">` : `<${tag}>`);
       } else if (top.tag !== tag) {
         parts.push(`</${top.tag}>`);
         listStack[listStack.length - 1] = { indent, tag };
-        parts.push(`<${tag}>`);
+        parts.push(ordered && startNum !== 1 ? `<ol start="${startNum}">` : `<${tag}>`);
       }
-      parts.push(`<li>${renderInline(listItem[2])}</li>`);
+      parts.push(`<li>${renderInline(itemContent, maxCitations)}</li>`);
       continue;
     }
+
+    // --- Blank / empty lines: preserve list container for loose lists and streaming pauses ---
+    if (!trimmed) {
+      if (listStack.length > 0) {
+        let nextIdx = i + 1;
+        while (nextIdx < lines.length && !lines[nextIdx].trim()) {
+          nextIdx += 1;
+        }
+        if (nextIdx === lines.length) {
+          // Trailing blank line(s) at end of input: keep list open for subsequent streaming tokens
+          continue;
+        }
+        const nextTrimmed = lines[nextIdx].trim();
+        if (nextTrimmed.match(/^([-*+]|\d+\.)(?:\s+.*)?$/)) {
+          // Loose list continuation: don't close list container
+          continue;
+        }
+        // Next non-empty line is not a list item: close list now
+        closeAllLists();
+      }
+      continue;
+    }
+
     closeAllLists();
 
     // --- Blockquote --------------------------------------------------------
     const quote = trimmed.match(/^>\s?(.*)$/);
     if (quote) {
-      parts.push(`<blockquote>${renderInline(quote[1])}</blockquote>`);
+      parts.push(`<blockquote>${renderInline(quote[1], maxCitations)}</blockquote>`);
       continue;
     }
 
@@ -310,14 +410,11 @@ export function renderMarkdown(source: string): string {
     const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
       const level = Math.min(heading[1].length + 2, 6);
-      parts.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+      parts.push(`<h${level}>${renderInline(heading[2], maxCitations)}</h${level}>`);
       continue;
     }
 
-    if (!trimmed) {
-      continue;
-    }
-    parts.push(`<p>${renderInline(trimmed)}</p>`);
+    parts.push(`<p>${renderInline(trimmed, maxCitations)}</p>`);
   }
 
   // Close anything still open at EOF.

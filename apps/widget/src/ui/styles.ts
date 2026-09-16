@@ -1020,12 +1020,55 @@ export const WIDGET_STYLES = `
 
   .wc-bubble-content ul,
   .wc-bubble-content ol {
-    margin: 0.4em 0 0.4em;
+    margin: 0.35em 0;
     padding-left: 1.35em;
   }
 
   .wc-bubble-content li {
     margin: 0.18em 0;
+  }
+
+  .wc-bubble-content > :first-child {
+    margin-top: 0;
+  }
+
+  .wc-bubble-content > :last-child {
+    margin-bottom: 0;
+  }
+
+  /* Subtle streaming indicator (pulsing block cursor) during active generation */
+  .wc-streaming:not(.wc-stopped) .wc-bubble-content > p:last-child::after,
+  .wc-streaming:not(.wc-stopped) .wc-bubble-content > ul:last-child li:last-child::after,
+  .wc-streaming:not(.wc-stopped) .wc-bubble-content > ol:last-child li:last-child::after {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 0.85em;
+    margin-left: 4px;
+    vertical-align: -0.05em;
+    background-color: var(--wc-primary, #2563eb);
+    border-radius: 1px;
+    opacity: 0.85;
+    animation: wc-cursor-blink 0.9s ease-in-out infinite;
+  }
+
+  @keyframes wc-cursor-blink {
+    0%,
+    100% {
+      opacity: 0.85;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wc-streaming:not(.wc-stopped) .wc-bubble-content > p:last-child::after,
+    .wc-streaming:not(.wc-stopped) .wc-bubble-content > ul:last-child li:last-child::after,
+    .wc-streaming:not(.wc-stopped) .wc-bubble-content > ol:last-child li:last-child::after {
+      animation: none;
+      opacity: 0.6;
+    }
   }
 
   .wc-bubble-content blockquote {
