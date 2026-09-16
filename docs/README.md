@@ -42,11 +42,6 @@ first place to look for that area:
 - `DATABASE_BACKUP_RESTORE.md` — MongoDB backup & restore procedures
 - `OPTIMIZATION_ROADMAP.md` — forward-looking performance roadmap
 
-## Working drafts
-
-- `README_DOCUMENTATION_FORENSIC_AUDIT_2026-09-16.md` — documentation-ecosystem
-  audit (temporary working draft; superseded by the READMEs above)
-
 ## AI-development rules
 
 - [`../00-AI-Development-Rules.md`](../00-AI-Development-Rules.md) — mandatory
