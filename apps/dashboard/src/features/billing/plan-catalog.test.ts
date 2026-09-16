@@ -41,7 +41,7 @@ describe('PLAN_CATALOG ↔ backend/models/plan.py contract', () => {
         max_documents: 50,
         max_crawl_pages: 2_000,
       },
-      price_cents: 1_900,
+      price_cents: 4_900,
       billing_period_days: 30,
       currency: PAYMENT_CURRENCY,
     });
@@ -58,7 +58,7 @@ describe('PLAN_CATALOG ↔ backend/models/plan.py contract', () => {
         max_documents: 200,
         max_crawl_pages: 10_000,
       },
-      price_cents: 4_900,
+      price_cents: 9_900,
       billing_period_days: 30,
       currency: PAYMENT_CURRENCY,
     });
