@@ -74,7 +74,7 @@ backend/
 │   ├── tasks.py           Task registry: ping, send_email, crawl_website,
 │   │                      process_document, process_website_documents
 │   └── jobs/              Per-job modules (email, crawl, knowledge)
-├── migrations/            Idempotent index/schema migrations (deploy step)
+├── migrations.py          Idempotent index/schema migrations (deploy step)
 ├── prompts/               LLM prompt templates (rag.py, `RAG_PROMPT_VERSION = 1`)
 └── benchmark/             RAG accuracy + TTFT benchmark harness
 ```## API modules
@@ -86,7 +86,7 @@ All routes live under `/api` unless noted. Registered in `backend/main.py`:
 | `auth`         | Signup, login, logout, refresh, email verification, password reset, delete account |
 | `websites`     | Workspace websites: connect, re-crawl, state transitions                   |
 | `crawl_jobs`   | Crawl lifecycle + job state                                                  |
-| `knowledge`    | Knowledge-base browsing (documents/chunks per website)                      |
+| `knowledge`    | Knowledge-base browsing, document uploads, retry, download & delete       |
 | `chat`         | Authenticated RAG chat; conversation history                                 |
 | `conversations`| List/read sessions and messages                                              |
 | `widget`       | Public v1 SDK contract (`/api/widget/v1/config`, `/sessions`, `/chat`, `/feedback`) |
@@ -153,9 +153,14 @@ fails fast.
   whose identity no longer matches the configured provider. This is why a
   cross-provider (e.g. Gemini→Jina) failover never happens mid-corpus.
 
-## Website ingestion → Knowledge Base
+## Knowledge ingestion → Knowledge Base
 
-The pipeline that turns a website into a chunked, embedded knowledge base:
+A knowledge base is scoped to a `Website` record with a `source_mode`:
+`"website"` (crawl), `"files"` (upload only — no URL required,
+`website_service.py` rejects a missing URL only for `website`/`mixed`), or
+`"mixed"` (crawl + uploads). Uploaded documents are marked
+`source_type = "file"` in `models/document.py`. The pipeline that turns source
+content into a chunked, embedded knowledge base:
 
 1. **Crawl** — HTTP-first crawler (respects `robots.txt`, sitemap, `Crawler-Priority`),
    BFS over `CRAWL_MAX_PAGES` pages with `CRAWL_PRIORITY_URL_PATHS` boosted,
@@ -173,6 +178,34 @@ The pipeline that turns a website into a chunked, embedded knowledge base:
 
 Crawl progress streams to the dashboard over SSE (`backend/api/sse.py`); job
 state is observable in the admin console.
+
+### File uploads (documents)
+
+`POST /api/knowledge/websites/{website_id}/documents/upload` (owner/admin)
+accepts up to **5 files** per batch (`multipart/form-data` field `files`) — a
+batch total ≤ 10 MB and ≤ 10 MB per file, `.txt`, `.md`, `.pdf`, `.docx`
+(extension **and** magic-byte checks in `services/ingestion/file_extractor.py`);
+text is UTF-8 with a latin-1 fallback. Per-plan document quotas are enforced at
+upload time (`usage_service` → `documents` event).
+
+Files are stored as raw binaries in MongoDB **GridFS** (bucket
+`knowledge_files`, `services/storage/gridfs.py`) with tenant/website/document
+metadata; the extracted text becomes the `Document.content` and the chunk/embed
+pipeline is the **same** `KnowledgeProcessor.process_document` used by crawled
+pages — chunk metadata links back through `document_id`. Chunks are
+tenant-scoped and searchable by hybrid retrieval exactly like crawled content.
+
+Document lifecycle routes (`services/knowledge/knowledge_service.py`):
+
+- `GET /api/knowledge/websites/{website_id}/documents` — list + per-document status
+- `POST .../documents/upload` — upload batch (triggers embedding jobs)
+- `POST /api/knowledge/documents/{document_id}/retry` — re-queue a failed document
+- `GET /api/knowledge/documents/{document_id}/download` — retrieve the raw file
+- `DELETE /api/knowledge/documents/{document_id}` — cascade: vector chunks →
+  GridFS binary → document record → retrieval cache invalidation → audit log
+
+Files-only (`files` mode) chatbots seed `widget.allowed_domains = []` since
+there is no source URL.
 
 ## RAG chat pipeline
 
@@ -252,9 +285,10 @@ scripts/dev-api.sh             # uvicorn backend.main:app --reload :8000
 scripts/dev-worker.sh          # python -m backend.workers  (ARQ)
 ````
 
-Environment: copy `.env.example` → `.env` (or `cp .env.development .env` for the
-bundled development config that points at the Docker `mongo`/`redis`/`mailpit`
-services).
+Environment: copy `.env.example` → `.env` (or `cp .env.example .env.development`
+for the config that points at the Docker `mongo`/`redis`/`mailpit` services and
+is used by `scripts/docker-up.sh`). No filled/shipped env file containing
+secrets is ever committed.
 
 ### Tests
 

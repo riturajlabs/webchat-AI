@@ -1,9 +1,9 @@
 # WebChat AI — Dashboard
 
 The customer-facing web application for [WebChat AI](../../README.md): the
-Next.js dashboard where tenants connect websites, crawl them into a
-retrieval-augmented knowledge base, monitor conversations and analytics, manage
-billing and API keys, and customize the embeddable chat widget. It also hosts
+Next.js dashboard where tenants build knowledge bases from **websites,
+document uploads, or both**, configure the embeddable chat widget, monitor
+conversations and analytics, and manage billing and API keys. It also hosts
 the public marketing site, product documentation, and — for platform super
 admins — the tenant admin console.
 
@@ -71,6 +71,32 @@ code, and sign in. In development the `Rewrite` above is pointed at
 `http://localhost:8000` via `NEXT_PUBLIC_BACKEND_API_URL`, or relies on the
 default.
 
+## Knowledge sources
+
+A knowledge base is created with an explicit **source mode**
+(`apps/dashboard/src/features/websites/types.ts`), backed by the backend
+`Website.source_mode` field:
+
+| Mode      | Radio label    | URL      | Contents                                      |
+| --------- | -------------- | -------- | --------------------------------------------- |
+| `website` | Website        | required | Crawled website pages                         |
+| `files`   | Documents      | optional | Uploaded documents only (upload-only chatbot) |
+| `mixed`   | Website + Docs | required | Crawled pages + uploaded documents            |
+
+Readiness differs by mode: `files` chatbots are ready when the knowledge base
+finishes embedding with at least one chunk; `website`/`mixed` also await the
+crawl's `ready` state.
+
+Uploads accept `.txt`, `.md`, `.pdf`, `.docx` — max 10 MB per file, 5 files
+per batch — with per-plan document quotas (Free 10, Plus 50, Pro 200,
+Enterprise unlimited). Documents are stored in MongoDB GridFS and processed by
+the same chunk/embed pipeline as crawled pages. The `knowledge` feature folder
+lists uploads, per-document status, retry, and download; deletion cascade
+(chunks, raw file, record) runs in the backend.
+
+Backend implementation: [backend/README.md](../../backend/README.md)
+(`/api/knowledge/*` routes).
+
 ## Environment variables
 
 All variables are build-time inlined (`NEXT_PUBLIC_*`). Defaults suit local
@@ -129,10 +155,11 @@ src/
 │   ├── conversations/   # Chat history list/detail
 │   ├── dashboard/       # Home overview cards and system status
 │   ├── docs/            # Shared documentation content and code blocks
-│   ├── knowledge/       # Knowledge base browser
+│   ├── knowledge/       # Knowledge base: uploaded documents, status, retry
 │   ├── profile/         # Profile management
 │   ├── settings/        # Workspace settings
-│   ├── websites/        # Site connection, crawling, crawl-job tracking (SSE)
+│   ├── websites/        # Knowledge sources: website/files/mixed, crawling,
+│   │                    #   uploads, crawl-job tracking (SSE)
 │   └── widget/          # Widget appearance builder, embed snippet generation, test harness
 ├── lib/                 # API client, session storage, shared formatters, utilities, site config
 └── middleware.ts        # Route protection (cookie presence check → /login?redirect=…)

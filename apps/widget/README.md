@@ -134,7 +134,7 @@ interface WidgetController {
 | "Something went wrong on our side"        | server error                                         |
 | "That request could not be sent"          | rejected request / spam filter                       |
 | "This assistant is currently unavailable" | widget disabled                                      |
-| "This assistant is still being set up"    | website not `ready` yet                              |
+| "This assistant is still being set up"    | knowledge base not `ready` yet                       |
 
 ### Markdown rendering
 
@@ -145,7 +145,14 @@ sanitized with DOMPurify (allow-listed tags/attributes) before insertion:
 - inline code and fenced code blocks (language label + copy button)
 - GFM tables incl. column alignment — wide tables scroll horizontally inside a
   `.wc-table-scroll` wrapper so they never overflow the bubble
-- inline citation chips that expand to the source list for the message
+
+### Sources panel ("Learn more")
+
+When a message's SSE `sources` event carries retrieved sources, the bubble
+renders a **"Learn more" panel** of source cards (title + external-link glyph,
+document fallback icon) with a "View all sources" toggle. Inline `[n]`
+citation markers are **not** embedded in the answer text — sources are
+delivered only through the `sources` event and this panel.
 
 ## Theming
 
@@ -161,6 +168,23 @@ webchat-widget {
 
 Shared presets + the resolve engine live in
 [`packages/themes`](../../packages/themes/README.md).
+
+## Branding
+
+Branding comes from the widget config (`avatar_url`, `logo_url`, `bot_name`,
+`header_color`, `launcher_size`, … — full public contract in
+`src/config/types.ts`). The bot identity chain is:
+
+1. `avatar_url` (bot avatar, when set)
+2. `logo_url` **when the customer set it** (skipped when it merely equals the
+   website-level fallback)
+3. The built-in official logo (embedded data URI derived from the dashboard's
+   app icon)
+4. The launcher glyph (`botGlyph`) as last resort
+
+Website-level `website_logo_url` / `website_favicon_url` populate only the
+website-fallback slot and are **not** part of the bot identity chain. This
+behavior is covered by the widget unit tests.
 
 ## Host-page CSP
 

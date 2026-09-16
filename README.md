@@ -1,675 +1,200 @@
-# 🤖 WebChat AI
+# WebChat AI
 
-### Turn any website into a source-grounded AI assistant.
+**Multi-source AI assistants for your website, your documents, or both.**
 
-WebChat AI is a production-ready, multi-tenant AI SaaS platform that turns
-website content into an intelligent conversational knowledge base.
+WebChat AI is a production-grade, multi-tenant AI SaaS platform. You point it at
+a **website**, upload **documents**, or both; it ingests the content into a
+retrieval-augmented knowledge base and gives your visitors a streaming,
+source-grounded AI assistant — embedded on your site with a one-line script.
 
-Crawl a website, build a retrieval-augmented knowledge base, and give visitors
-accurate streaming answers with citations — all through a lightweight,
-embeddable chat widget.
-
-<p align="center">
-  <strong>🌐 Website → 🕷️ Crawl → 🧠 RAG → 💬 AI Assistant</strong>
-</p>
-
----
-
-## 🚀 Live Product
-
-**Dashboard:**
-https://webchat-ai-dashboard.vercel.app
-
-Create an account, crawl a website, configure an AI assistant, and embed it
-into your website.
+It is built for engineering rigor: tenant isolation at the data layer,
+fail-fast production configuration, hermetic tests, a source-grounded RAG
+pipeline with abstention instead of hallucination, provider fallback chains
+with circuit breakers, and a lightweight (<100 KB gzip) embeddable widget.
 
 ---
 
-## ✨ Why WebChat AI?
+## Live product
 
-Most AI chatbots require manually maintained knowledge bases.
-
-WebChat AI takes a different approach:
-
-> **Your website becomes the knowledge base.**
-
-The platform automatically crawls your website, extracts useful content,
-creates embeddings, indexes the content, and uses hybrid retrieval to ground
-AI responses in the source material.
-
-### What you get
-
-| Capability                  | Description                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| 🕷️ Smart Website Crawling   | HTTP-first crawling with targeted JavaScript rendering fallback     |
-| 🧠 Source-Grounded RAG      | Hybrid vector + keyword retrieval with RRF fusion                   |
-| 📚 Automatic Knowledge Base | Website pages are cleaned, chunked, embedded, and indexed           |
-| 💬 Streaming AI Chat        | Real-time responses using Server-Sent Events                        |
-| 🔗 Source Citations         | Answers can reference the original website content                  |
-| 🏢 Multi-Tenant SaaS        | Isolated organizations, users, knowledge bases, and usage           |
-| 🎨 Embeddable Widget        | Add the assistant to a website with a simple script                 |
-| 💳 Billing & Usage          | Plans, subscriptions, usage metering, and token budgets             |
-| 🔐 Security First           | SSRF protection, CSRF, rate limiting, tenant isolation, and more    |
-| 📊 Admin & Observability    | Metrics, structured logs, health checks, and administrative tooling |
+- **Dashboard:** <https://webchat-ai-dashboard.vercel.app> — sign up, connect a
+  knowledge source, configure and embed an assistant, monitor usage and
+  billing.
+- **Widget bundle:** served from
+  <https://webchat-ai-widget.vercel.app/webchat-widget.iife.min.js> (the embed
+  snippet the dashboard gives you references the right asset automatically).
+- **API:** FastAPI backend on Railway at
+  <https://webchat-ai-production-7e84.up.railway.app> (see the
+  [deployment runbook](docs/deployment/README.md)).
 
 ---
 
-## 🎯 Built For
+## Quick start (local Docker stack)
 
-WebChat AI can be used for:
+Prereqs: Node.js ≥ 20, pnpm ≥ 9, Python 3.13, `uv`, and Docker.
 
-- 🎓 Universities and educational institutions
-- 📚 Documentation websites
-- 💻 SaaS products
-- 🛒 E-commerce websites
-- 🏢 Business websites
-- 🛠️ Customer support portals
-- 📖 Knowledge bases
-- 🧑‍💻 Product documentation
-- 🌐 Service-based websites
+```bash
+git clone https://github.com/riturajlabs/webchat-AI.git
+cd webchat-AI
 
----
+# 1. Create the dev env file (development defaults point at the Docker
+#    MongoDB/Redis/Mailpit services) and install dependencies.
+cp .env.example .env.development
+pnpm install
+uv sync
 
-# ⚡ How It Works
-
-At a high level:
-
-```text
-┌─────────────────────┐
-│      Your Website   │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│   Smart Crawler     │
-│ HTTP-first + JS     │
-│ fallback            │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Clean + Chunk       │
-│ Website content     │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Embedding Provider  │
-│ Gemini / Jina /     │
-│ Cohere              │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ MongoDB Knowledge   │
-│ Base + Vectors      │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Hybrid RAG          │
-│ Vector + Keyword    │
-│ + RRF + Reranking   │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ LLM Generation      │
-│ Gemini / Groq /     │
-│ OpenRouter          │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Answer + Citations  │
-└─────────────────────┘
+# 2. Start the full local stack: MongoDB, Redis, Mailpit, API (:8000),
+#    Worker, Dashboard (:3000), Widget (:8080).
+scripts/docker-up.sh          # == docker compose --env-file .env.development -f docker/compose.yml up --build
 ```
 
----
+Open <http://localhost:3000>, register, and confirm your email (the code lands
+in Mailpit at <http://localhost:8025>).
 
-# 🧠 RAG Pipeline
-
-Every visitor question goes through a controlled retrieval and generation
-pipeline:
-
-```text
-Visitor Question
-       │
-       ▼
-Query Classification
-       │
-       ▼
-Conversational Rewrite
-       │
-       ▼
-Hybrid Retrieval
- ┌─────┴─────┐
- ▼           ▼
-Vector     Keyword
-Search     Search
- └─────┬─────┘
-       ▼
-    RRF Fusion
-       │
-       ▼
- Optional Reranking
-       │
-       ▼
-Context Assembly
-       │
-       ▼
-Streaming Generation
-       │
-       ▼
-Confidence + Faithfulness Checks
-       │
-   ┌───┴────┐
-   ▼        ▼
- Answer   Abstain
-   │
-   ▼
-Source Citations
-```
-
-### Retrieval features
-
-- Vector search
-- Keyword retrieval
-- Reciprocal Rank Fusion (RRF)
-- Source diversification
-- Optional reranking
-- Query classification
-- Conversational query rewriting
-- Confidence gating
-- Context budgeting
-- Duplicate prevention
-- Corpus-version-aware caching
-- Prompt-injection detection
-- Cross-tenant isolation
-- Faithfulness checks
-- Safe abstention when the knowledge base cannot support an answer
-
-The system is designed to prefer:
-
-> **"I don't have enough information to answer that."**
-
-over generating an unsupported answer.
+Host-run development (backend/worker via uv, frontends via pnpm) is documented
+in [backend/README.md](backend/README.md) and
+[apps/dashboard/README.md](apps/dashboard/README.md).
 
 ---
 
-# 🕷️ Website Crawler
+## Why WebChat AI
 
-WebChat AI uses an **HTTP-first hybrid crawler** designed to maximize useful
-website coverage while keeping crawler resource usage practical.
-
-## Crawl pipeline
-
-### 1. Discover
-
-The crawler starts from configured entry points and discovers:
-
-- Website links
-- Sitemap URLs
-- Priority paths
-- Same-origin pages
-
-Breadth-first traversal and page budgets prevent uncontrolled crawling.
-
-### 2. Guard
-
-Every destination passes SSRF and URL validation.
-
-The crawler:
-
-- Allows HTTP/HTTPS destinations
-- Enforces same-origin crawling
-- Respects `robots.txt`
-- Rejects unsafe destinations
-- Canonicalizes URLs
-- Applies crawl limits
-
-### 3. Fetch
-
-The crawler is **HTTP-first**.
-
-```text
-             ┌───────────────┐
-             │   Web Page    │
-             └───────┬───────┘
-                     │
-                     ▼
-              HTTP Fetch
-                     │
-              ┌──────┴──────┐
-              │             │
-          Useful HTML     JS Shell
-              │             │
-              ▼             ▼
-           Extract       Playwright
-                          Fallback
-```
-
-Static and server-rendered pages avoid launching Chromium.
-
-JavaScript rendering is used only when the page contains strong evidence that
-HTTP extraction is insufficient.
-
-### 4. Clean and chunk
-
-Extracted HTML is cleaned and converted into useful text.
-
-Content is then:
-
-- Normalized
-- Deduplicated
-- Chunked
-- Token-budgeted
-- Overlapped where appropriate
-- Filtered when effectively empty
-
-### 5. Embed
-
-Chunks are converted into embeddings using the configured embedding provider.
-
-The system keeps a consistent embedding space for a corpus to avoid mixing
-incompatible vector representations.
-
-### 6. Persist
-
-Tenant-scoped documents and chunks are persisted in MongoDB together with
-their embedding identity and metadata.
-
-Failed ingestion work is retried with backoff and can be quarantined after
-repeated failures.
+- **Your content becomes the knowledge base.** No hand-maintained FAQ
+  datasets. The crawler ingests your website; the uploader ingests your
+  PDFs/DOCX/Markdown/TXT; the same pipeline chunks, embeds and indexes both.
+- **Upload-only assistants.** Build a chatbot purely from document uploads
+  (`files` mode) without any website URL, or mix website + documents in one
+  knowledge base (`mixed` mode).
+- **Answers you can trust.** Retrieval first, generation second. Answers that
+  lack retrieval support abstain ("I don't have enough information to answer
+  that") instead of inventing facts, and come with a "Learn more" source panel
+  so visitors can verify.
+- **No vendor lock-in.** Generation (Gemini, Groq, OpenRouter) and embeddings
+  (Gemini, Jina, Cohere) run behind ordered fallback chains with per-provider
+  circuit breakers.
+- **A widget you can ship on any site.** Framework-independent custom element,
+  closed shadow DOM, dynamic branding, curated themes, streaming SSE, and a
+  hard <100 KB gzip budget.
 
 ---
 
-# 🧭 Future Crawler Scalability & Website Access Strategy
+## Key features
 
-> **Planned architecture.** This section is a **future roadmap** direction for
-> crawler scalability and website access. It describes what _can be used_ and
-> the planned architecture direction — **not** necessarily what is implemented
-> today. The current crawler is described in the
-> [Website Crawler](#-website-crawler) section.
+### Knowledge
 
-## Current baseline
+- **Three source modes:** `website`, `files` (upload-only), `mixed`
+  (website + documents in one knowledge base).
+- **HTTP-first smart crawler:** respects `robots.txt` and sitemaps, applies
+  SSRF guards and per-job page budgets, and falls back to Playwright/Chromium
+  rendering only for JS-heavy pages. Crawl progress streams to the dashboard
+  over SSE.
+- **Document uploads:** `.txt`, `.md`, `.pdf`, `.docx` (with magic-byte
+  checks), up to 10 MB per file, 5 files per batch, and 10 MB total per upload
+  request — stored in MongoDB GridFS and put through the same chunk/embed
+  pipeline as crawled pages. Per-document status and retry controls live in the
+  dashboard.
+- **Per-tenant document quotas:** Free 10, Plus 50, Pro 200, Enterprise
+  unlimited.
 
-WebChat AI currently uses a **cloud-based HTTP-first hybrid crawler**:
+### AI / RAG
 
-- HTTP-first fetching
-- Playwright/Chromium fallback for JavaScript-heavy pages
-- Bounded retries
-- `robots.txt` and sitemap handling
-- SSRF protection
-- Failure classification
-- Graceful handling of inaccessible websites
-- Crawling → extraction → chunking → embeddings → knowledge base → RAG
+- **Hybrid retrieval:** MongoDB `$vectorSearch` merged with keyword (BM25)
+  results by reciprocal-rank fusion, optional cross-encoder reranking, source
+  diversification, and corpus-identity locking so a corpus never mixes
+  embedding spaces.
+- **Streaming answers** over Server-Sent Events with a "Learn more" source
+  panel (the SSE `sources` event) attached to each answer.
+- **Controlled pipeline:** query classification, conversational-query
+  rewriting, context budgeting, confidence gating, and faithfulness checks;
+  unsupported questions abstain.
+- **Provider resilience:** ordered `GENERATION_PROVIDER_ORDER` /
+  `EMBEDDING_PROVIDER_ORDER` fallbacks, per-provider circuit breakers, and an
+  optional adaptive router (`AI_PROVIDER_ROUTING_MODE`).
 
-## Why some websites may not be crawlable
+### Widget
 
-Public websites can still reject a cloud crawler for **target-side or
-infrastructure reasons** such as:
+- **One-line embed** that auto-upgrades from `data-widget-id` — no `init()`
+  call required.
+- **Dynamic branding:** custom `bot_name`, `avatar_url`/`logo_url` with a
+  documented precedence chain, header/launcher styling, and curated theme
+  presets.
+- **Safe rendering:** markdown (GFM tables, fenced code) sanitized with
+  DOMPurify inside a **closed shadow root**.
+- **Accessible & responsive:** WCAG 2.2 AA targeting, keyboard operable,
+  `prefers-reduced-motion` aware, mobile-first.
+- **Resilient UX:** offline banner with message retention, typed error
+  taxonomy, retry with re-send, per-session token refresh, and per-visitor
+  rate limits.
 
-- WAF / anti-bot protection (Cloudflare, Akamai, Imperva, or custom rules)
-- Datacenter IP blocking
-- HTTP 403 responses
-- HTTP 429 rate limiting
-- CAPTCHA / human verification
-- Login / private content
-- Unstable target servers
-- JavaScript / interaction-heavy applications
-- `robots.txt` restrictions
+### Dashboard
 
-These are **crawler limitations, target-side restrictions, or infrastructure
-limitations** — they are **not** crawler software bugs. Software bugs are
-tracked and fixed separately through the normal test suite.
+- Next.js tenant console: knowledge sources and uploads, widget appearance
+  builder with live test harness, conversations, analytics, billing, and API
+  keys.
+- Super-admin console for platform operators (tenants, users, revenue, crawl
+  jobs, audit).
 
-As a general example, a target such as **Indira University** may return
-HTTP 403 to a cloud/datacenter crawler — a possible/observed target-side
-blocking scenario where the target's WAF or firewall rejects datacenter
-egress, not an indication that the crawler is broken. The exact cause is not
-claimed to be conclusively proven.
+### Platform
 
-See also:
-[`docs/CRAWL_EGRESS_HARDENING.md`](docs/CRAWL_EGRESS_HARDENING.md)
-
-## Future multi-mode crawling architecture
-
-The planned architecture routes every ingestion request through a **crawler
-gateway** that selects the most appropriate access mode:
-
-```mermaid
-flowchart TB
-
-    GATEWAY["Crawler Gateway"]
-
-    CLOUD["Cloud Crawl"]
-    AGENT["Customer Agent"]
-    IMPORT["API Import"]
-
-    KB[("Knowledge Base")]
-    RAG["RAG"]
-
-    GATEWAY --> CLOUD
-    GATEWAY --> AGENT
-    GATEWAY --> IMPORT
-
-    CLOUD --> KB
-    AGENT --> KB
-    IMPORT --> KB
-
-    KB --> RAG
-```
-
-### A. Cloud Crawler
-
-- Default for normal public websites.
-- Runs from WebChat AI infrastructure.
-- Uses the existing HTTP-first + browser fallback strategy.
-
-### B. Customer-side Crawler / Crawler Agent
-
-- For enterprise customers whose WAF/firewall blocks external cloud crawlers.
-- The customer runs a WebChat AI crawler agent inside their own
-  infrastructure/network.
-- The agent accesses the customer's website locally/internally.
-- The agent securely sends extracted/indexable content to WebChat AI through
-  an authenticated ingestion API.
-- This avoids requiring the customer's WAF to allow WebChat AI's cloud
-  crawler IP.
-- Credentials/tokens must remain server-side and must never be exposed in the
-  customer's frontend.
-
-### C. API / CMS / Direct Content Import
-
-- For customers that already have a CMS, internal API, documentation system,
-  sitemap, or content pipeline.
-- The customer can push content into WebChat AI through an authenticated
-  ingestion API.
-- WebChat AI performs chunking, embedding, indexing, and RAG processing.
-- This can be preferable to crawling when structured source content is
-  already available.
-
-## Future WAF allowlisting strategy
-
-Enterprise customers may optionally allowlist WebChat AI crawler egress IPs
-in their WAF/firewall:
-
-```text
-Customer WAF
-    |
-    +-- WebChat AI crawler IP -> ALLOW
-    |
-    +-- Unknown traffic -> normal WAF policy
-```
-
-Stable/static outbound IP infrastructure may be required for reliable
-allowlisting.
-
-> **Important:** a static IP does **not** guarantee bypassing a WAF. It only
-> provides a stable source IP that the customer can allowlist.
-
-## Railway / free-plan limitation
-
-This is an **infrastructure consideration**, not a permanent product
-limitation:
-
-- Free/shared cloud infrastructure may not provide the stable outbound IP
-  characteristics required by some enterprise WAF allowlists.
-- A future production crawler deployment can use infrastructure with
-  controlled/static egress.
-- The architecture must not be dependent on Railway Free.
-- Customer-side crawler / API ingestion remains an alternative when WAF
-  restrictions cannot be solved through allowlisting.
-
-## Recommended future decision matrix
-
-| Website / Environment           | Recommended ingestion mode                        |
-| ------------------------------- | ------------------------------------------------- |
-| Normal public website           | Cloud crawler                                     |
-| JS-heavy public website         | Cloud crawler + browser fallback                  |
-| Temporary 429/5xx               | Cloud crawler + bounded retry                     |
-| WAF blocks cloud crawler        | WAF allowlisting                                  |
-| Stable egress required          | Static/controlled crawler egress                  |
-| Strict enterprise firewall      | Customer-side crawler agent                       |
-| Private/login-only content      | Authenticated customer-controlled ingestion       |
-| Existing CMS/API                | API/CMS import                                    |
-| Sitemap available               | Sitemap-assisted crawling                         |
-| CAPTCHA/human verification      | Customer-controlled/API ingestion where permitted |
-| `robots.txt` disallows crawling | Respect restriction                               |
-
-## Future enterprise architecture
-
-Conceptually, the future ingestion modes feed one pipeline:
-
-```text
-Customer Website
-      |
-      +---------------- Cloud Crawl ----------------+
-      |                                              |
-      +------ Customer Crawler Agent ---------------+
-      |                                              |
-      +------ CMS/API Import -----------------------+
-                                                     |
-                                                     v
-                                           WebChat AI Ingestion
-                                                     |
-                                                     v
-                                              Chunking/Embedding
-                                                     |
-                                                     v
-                                             Knowledge Base
-                                                     |
-                                                     v
-                                                    RAG
-                                                     |
-                                                     v
-                                                  Chatbot
-```
-
-The goal is:
-
-> **Maximum accessible public-web coverage while providing enterprise
-> customers with controlled alternatives when their network/security policies
-> prevent cloud crawling.**
-
-## Non-goals / security principles
-
-WebChat AI should **not** rely on:
-
-- Random rotating proxies
-- Arbitrary third-party proxy services
-- Bypassing CAPTCHA / human verification
-- Bypassing customer WAF / security policies
-- Disabling TLS verification
-- Bypassing `robots.txt`
-- Weakening SSRF protections
-
-The preferred enterprise approach is: **controlled egress + customer
-allowlisting**, **customer-side crawling**, or **authenticated content/API
-ingestion**.
-
-## Future implementation phases
-
-**FUTURE roadmap** — these phases are not implemented today.
-
-- **Phase A** — controlled/static crawler egress, customer WAF allowlisting
-  documentation.
-- **Phase B** — customer-side WebChat AI crawler agent, secure crawler
-  registration/authentication, authenticated ingestion API.
-- **Phase C** — CMS/API connectors, scheduled incremental sync,
-  source-specific ingestion strategies.
-- **Phase D** — enterprise observability, per-tenant crawl policies, crawl
-  quotas, source health monitoring, incremental recrawling.
+- **Multi-tenancy** enforced at the data layer — every query is tenant-scoped,
+  never filtered only in the UI.
+- **SaaS billing:** Stripe / Razorpay / mock providers, plans, usage metering,
+  LLM token budgets, payment webhooks.
+- **Security:** SSRF protection, prompt-injection detection, PII redaction,
+  CSRF, rate limiting, login lockout, Argon2id password hashing, secret
+  scanning, container image scanning (Trivy), and fail-fast production config
+  validation.
+- **Observability:** Prometheus metrics (`/metrics`), structured JSON logs,
+  health probes, request IDs.
 
 ---
 
-# 🏗️ Architecture
-
-## Application architecture
+## How it works
 
 ```mermaid
 flowchart LR
-
-    subgraph Customer["Customer Website"]
-        WIDGET["WebChat AI Widget<br/>One-line Embed"]
+    subgraph Sources["Knowledge Sources"]
+        WEB["Website (crawl)"]
+        DOCS["Documents (uploads)"]
     end
-
     subgraph Platform["WebChat AI Platform"]
-        DASH["Dashboard<br/>Next.js"]
-        API["API<br/>FastAPI"]
-        WORKER["Worker<br/>ARQ + Crawler"]
+        ING["Ingestion: clean + chunk + embed"]
+        KB[("MongoDB: documents, vectors, embeddings")]
+        RAG["Hybrid RAG: vector + keyword + rerank"]
+        API["FastAPI: auth · widget · chat (SSE) · billing"]
+    end
+    subgraph Customer["Your Website"]
+        WIDGET["Widget: one-line embed"]
     end
 
-    subgraph Data["Data Layer"]
-        MONGO[("MongoDB<br/>Documents + Vectors")]
-        REDIS[("Redis<br/>Cache + Queue + Rate Limits")]
-    end
-
-    subgraph AI["AI Providers"]
-        GEN["Generation<br/>Gemini · Groq · OpenRouter"]
-        EMB["Embeddings<br/>Gemini · Jina · Cohere"]
-    end
-
-    WIDGET -->|"SSE / Widget API"| API
-    DASH -->|"Same-origin /api proxy"| API
-
-    API --> MONGO
-    API --> REDIS
-
-    WORKER --> MONGO
-    WORKER --> REDIS
-
-    API --> GEN
-    API --> EMB
-    WORKER --> EMB
-
-    WORKER -->|"HTTP crawl + targeted JS rendering"| Customer
+    WEB --> ING
+    DOCS --> ING
+    ING --> KB
+    KB --> RAG
+    RAG --> API
+    API -->|SSE chat / sources| WIDGET
+    API --> KB
 ```
 
----
+1. **Connect:** create a knowledge base from a website (`website`/`mixed`) or
+   from documents only (`files`). A URL is required only for `website`/`mixed`.
+2. **Ingest:** the worker crawls pages or processes uploaded files, cleans and
+   chunks the content, embeds it with the corpus's locked embedding provider,
+   and stores tenant-scoped documents + vectors.
+3. **Ask:** the widget mints an anonymous session token, streams
+   question → hybrid retrieval → grounded generation over SSE, and renders the
+   answer with a "Learn more" source panel.
+4. **Monitor:** the dashboard shows per-document status, conversations,
+   analytics, usage, and billing.
 
-# ☁️ Production Deployment
-
-WebChat AI's current production architecture is split between **Vercel** and
-**Railway**.
-
-```text
-                         Internet
-                            │
-              ┌─────────────┴─────────────┐
-              │                           │
-              ▼                           ▼
-     ┌─────────────────┐        ┌─────────────────┐
-     │     Vercel      │        │     Railway     │
-     │                 │        │                 │
-     │ Dashboard       │───────▶│ FastAPI API     │
-     │ Widget          │        │ ARQ Worker       │
-     └─────────────────┘        └────────┬────────┘
-                                         │
-                              ┌──────────┴──────────┐
-                              │                     │
-                              ▼                     ▼
-                       ┌─────────────┐       ┌─────────────┐
-                       │  MongoDB    │       │    Redis    │
-                       │   Atlas     │       │   Managed   │
-                       └─────────────┘       └─────────────┘
-```
-
-### Production services
-
-| Service       | Platform        | Responsibility                                       |
-| ------------- | --------------- | ---------------------------------------------------- |
-| Dashboard     | Vercel          | Next.js dashboard and web application                |
-| Widget        | Vercel          | Production embeddable widget bundle                  |
-| API           | Railway         | FastAPI API, authentication, RAG, billing, streaming |
-| Worker        | Railway         | ARQ jobs, website crawling, ingestion, embeddings    |
-| Database      | Managed MongoDB | Documents, chunks, vectors, tenant data              |
-| Cache / Queue | Managed Redis   | Caching, rate limits, job queue, provider health     |
-
-### Production principles
-
-- HTTPS everywhere
-- Same-origin dashboard API proxy
-- Secure authentication cookies
-- Production environment validation
-- Immutable deployment artifacts where applicable
-- Health checks
-- Structured JSON logging
-- Prometheus metrics
-- CI security gates
-- Secret scanning
-- Container security scanning
-
-See the full production runbook:
-
-[`docs/deployment/README.md`](docs/deployment/README.md)
+Read more in the [RAG pipeline](backend/README.md#rag-chat-pipeline) section of
+the backend README.
 
 ---
 
-# 🧩 Monorepo Structure
+## Widget integration
 
-```text
-webchat-AI/
-│
-├── apps/
-│   ├── dashboard/          # Next.js dashboard + tenant application
-│   └── widget/             # Framework-independent embeddable widget
-│
-├── backend/
-│   ├── api/                # FastAPI routes and dependencies
-│   ├── core/               # Configuration and application infrastructure
-│   ├── repositories/       # Data access
-│   ├── schemas/            # Pydantic schemas
-│   ├── services/           # Business logic
-│   ├── workers/            # ARQ background jobs
-│   └── ...
-│
-├── packages/
-│   └── themes/             # Shared widget themes
-│
-├── docs/                   # Architecture, ADRs, deployment and audits
-├── docker/                 # Dockerfiles and Compose configuration
-├── scripts/                # Development and operational helpers
-├── tests/                  # Automated test suites
-│
-├── package.json
-├── pnpm-workspace.yaml
-├── pyproject.toml
-└── uv.lock
-```
-
-Each major area contains its own README with deeper implementation details.
-
----
-
-# 🛠️ Tech Stack
-
-| Layer         | Technology                                        |
-| ------------- | ------------------------------------------------- |
-| Backend       | Python 3.13 · FastAPI · Pydantic v2               |
-| Database      | MongoDB / Motor                                   |
-| Cache & Queue | Redis · ARQ                                       |
-| Generation    | Google Gemini · Groq · OpenRouter                 |
-| Embeddings    | Gemini · Jina · Cohere                            |
-| Dashboard     | Next.js 15 · React 19 · Tailwind CSS v4           |
-| Widget        | TypeScript · Vite · Shadow DOM                    |
-| Sanitization  | DOMPurify                                         |
-| Markdown      | GFM-compatible rendering                          |
-| Crawling      | HTTPX · BeautifulSoup · Playwright                |
-| Containers    | Docker · Docker Compose                           |
-| CI/CD         | GitHub Actions (CI/validation) · Vercel · Railway |
-| Observability | Prometheus · Structured JSON logs                 |
-| Deployment    | Vercel + Railway                                  |
-
----
-
-# 💬 Embeddable Widget
-
-WebChat AI is designed to be embedded into an existing website with minimal
-integration work.
-
-## Basic integration
+The Dashboard → Widget page gives you a ready-to-paste snippet. The same
+contract works with your own ID:
 
 ```html
 <script
@@ -679,351 +204,195 @@ integration work.
 ></script>
 ```
 
-The widget can automatically initialize from the `data-widget-id` attribute.
+Attributes:
 
-For advanced usage, the Widget SDK also supports programmatic initialization,
-mounting, theming, CSP configuration, and other integration options.
+| Attribute           | Required | Purpose                                                                                             |
+| ------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `data-widget-id`    | yes      | Public widget identifier (Dashboard → Widget page).                                                 |
+| `data-api-base-url` | no       | Override the API origin. The SDK appends `/api/widget/v1`. Defaults to the bundle's build-time API. |
 
-See:
+Public config fields (returned by `/api/widget/v1/config/{widget_id}`) include
+`bot_name`, `welcome_message`, `suggested_questions`, `primary_color`,
+`theme`, `avatar_url`, `logo_url`, `launcher_size`, `width`, `height`, and
+more. Branding precedence: `avatar_url` → customer-set `logo_url` → built-in
+official logo → launcher glyph.
 
-[`apps/widget/README.md`](apps/widget/README.md)
-
----
-
-# 🎨 Widget Features
-
-The widget provides:
-
-- Streaming AI responses
-- Markdown rendering
-- Tables
-- Source citations
-- Citation links
-- Shadow DOM isolation
-- Curated themes
-- CSS custom-property theming
-- Offline/error handling
-- Responsive layout
-- Accessibility-focused UI
-- Safe HTML rendering
-- Automatic initialization
-- Framework-independent integration
+Extensive SDK, theming, orientation, and CSP documentation lives in
+[apps/widget/README.md](apps/widget/README.md).
 
 ---
 
-# 🔐 Security
+## Tech stack
 
-Security is treated as a core part of the platform rather than an afterthought.
-
-### Authentication
-
-- JWT authentication
-- Secure refresh cookies
-- `SameSite=Strict`
-- CSRF protection
-- Email verification
-- Password reset protections
-- Login lockout
-- Rate limiting
-- Password hashing with Argon2id
-
-### Application security
-
-- Tenant isolation
-- SSRF protection
-- Request validation
-- High-risk port blocking
-- Secure host validation
-- Production environment validation
-- Secret scanning
-- PII redaction
-- Prompt-injection detection
-- Injection tracking
-- Safe failure and abstention
-
-### Infrastructure
-
-- Read-only production containers where appropriate
-- Temporary filesystems
-- Container image scanning
-- CI security gates
-- Production configuration validation
-- Secure CORS configuration
+| Layer           | Technology                                           |
+| --------------- | ---------------------------------------------------- |
+| Backend         | Python 3.13 · FastAPI · Pydantic v2 · `uv`           |
+| Data            | MongoDB / Motor (`$vectorSearch`) · Redis            |
+| Queue / Workers | ARQ background worker (crawler, embeddings, email)   |
+| Generation      | Google Gemini · Groq · OpenRouter                    |
+| Embeddings      | Gemini · Jina · Cohere                               |
+| Dashboard       | Next.js 15 · React 19 · TypeScript · Tailwind CSS v4 |
+| Widget          | TypeScript · Vite · Shadow DOM · DOMPurify           |
+| Crawling        | HTTPX · BeautifulSoup · Playwright (JS fallback)     |
+| Billing         | Stripe · Razorpay · mock                             |
+| Containers      | Docker · Docker Compose                              |
+| CI/CD           | GitHub Actions (CI) · Vercel · Railway               |
+| Observability   | Prometheus · structured JSON logs · health probes    |
 
 ---
 
-# 🏢 Multi-Tenancy
-
-WebChat AI is designed as a multi-tenant SaaS platform.
-
-Tenant boundaries are maintained across:
+## Repository structure
 
 ```text
-User
-  │
-  ▼
-Tenant / Workspace
-  │
-  ├── Websites
-  │
-  ├── Knowledge Base
-  │     ├── Documents
-  │     └── Chunks / Vectors
-  │
-  ├── Conversations
-  │
-  ├── Usage
-  │
-  ├── API Keys
-  │
-  └── Billing
+webchat-ai/
+├── apps/
+│   ├── dashboard/            # Next.js tenant dashboard + marketing/docs site
+│   └── widget/               # Framework-independent embeddable widget SDK
+├── backend/                  # FastAPI (api, core, models, schemas, services,
+│   │                         #  repositories, workers, migrations, prompts)
+├── packages/themes/          # Shared widget theme presets + resolve engine
+├── docs/                     # Design docs, ADRs, deployment runbook, audits
+├── docker/                   # Dockerfiles, compose, nginx, Prometheus
+├── scripts/                  # Dev/ops/verification helpers (`scripts/README.md`)
+├── tests/                    # Automated test suites (`tests/README.md`)
+├── .github/workflows/        # CI + CD pipelines
+├── package.json / pnpm-workspace.yaml
+└── pyproject.toml / uv.lock
 ```
-
-Tenant-scoped access is enforced through the backend rather than relying only
-on frontend filtering.
 
 ---
 
-# 💳 Billing & Usage
+## Configuration & environment
 
-The platform includes SaaS billing infrastructure with support for:
+All backend settings live in `backend/core/config.py` (pydantic-settings) and
+every variable is documented in [`.env.example`](.env.example). Everything is
+env-driven; secrets are injected via environment, never committed.
 
-- Subscription plans
-- Usage metering
-- LLM token budgets
-- Payment provider abstraction
-- Razorpay
-- Stripe
-- Mock provider for development/testing
-- Payment webhooks
-- Idempotent subscription activation
+Production templates: `.env.production.example` (full production posture) and
+`.env.production.sandbox.example` (safe local production-style smoke test).
 
-Payment and billing logic is isolated from the core RAG pipeline.
+Config fails fast: in production, loopback hosts, weak `JWT_SECRET`, mock
+payments, unauthenticated MongoDB/Redis, and missing AI provider keys all raise
+at boot rather than start an unsafe service.
+
+Key highlights: `GENERATION_PROVIDER_ORDER`, `EMBEDDING_PROVIDER_ORDER`,
+`EMBEDDING_DIMENSIONS`, `CRAWL_MAX_PAGES`, `RATE_LIMIT_ENABLED`,
+`PAYMENT_PROVIDER`, `SUPER_ADMIN_EMAILS`.
 
 ---
 
-# 🧪 Quality & Testing
+## API surface
 
-The project maintains a comprehensive automated test suite covering:
+All routes live under `/api` unless noted:
 
-- Authentication
-- Account security
-- Authorization
-- Tenant isolation
-- RAG retrieval
-- Retrieval accuracy
-- Embeddings
-- Provider routing
-- Generation fallback
-- Website crawling
-- SSRF protection
-- Widget API
-- Widget rendering
-- Billing
-- Observability
-- Configuration
-- Infrastructure behavior
+- **REST** — `auth`, `websites`, `knowledge` (documents + uploads), `chat`,
+  `conversations`, `analytics`, `billing`, `api_keys`, `feedback`, `admin`
+  (super-admin).
+- **Public widget contract** — `/api/widget/v1/config`, `/sessions`,
+  `/chat` (SSE), `/feedback`.
+- **Streaming** — SSE for chat answers (and for crawl progress).
+- **Observability** — `GET /metrics` (Prometheus, no `/api` prefix);
+  `GET /api/health/live` (liveness) and `GET /api/health/ready`
+  (fail-closed: checks MongoDB + Redis).
 
-Latest full backend verification:
+Full router table and the RAG pipeline wiring: [backend/README.md](backend/README.md).
 
-```text
-2266+ tests passing
-```
+---
 
-Additional frontend and widget test suites are maintained separately.
+## Testing
 
-## Local verification
+The suite is hermetic (MongoDB stubbed, deterministic mock AI providers) and
+gated in CI — 2,582 backend pytest tests, 900+ frontend vitest tests
+(dashboard/widget/themes), plus Playwright widget E2E against the real stack.
 
 ```bash
-# Backend
-./scripts/check-backend.sh
-
-# Dashboard / frontend
-pnpm lint
-pnpm typecheck
-pnpm build
-pnpm test
-
-# Secret scanning
-./scripts/check-secrets.sh
+./scripts/check-backend.sh        # ruff + mypy + full pytest (backend gate)
+pnpm lint && pnpm typecheck && pnpm test   # frontends
+./scripts/check-secrets.sh        # secret scan before every commit
 ```
 
-See:
-
-[`tests/README.md`](tests/README.md)
+See [tests/README.md](tests/README.md) for the layer map and Definition of Done.
 
 ---
 
-# 🚀 Quick Start
+## Security
 
-## Prerequisites
-
-- Node.js >= 20
-- pnpm >= 9
-- Python 3.13
-- uv
-- Docker
-- Docker Compose
-
-## 1. Clone
-
-```bash
-git clone https://github.com/riturajlabs/webchat-AI.git
-cd webchat-AI
-```
-
-## 2. Configure environment
-
-```bash
-cp .env.development .env
-```
-
-The development environment is configured for the local Docker services.
-
-## 3. Start the stack
-
-```bash
-docker compose \
-  --env-file .env.development \
-  -f docker/compose.yml \
-  up --build
-```
-
-## 4. Install frontend dependencies
-
-```bash
-pnpm install
-```
-
-## 5. Start the dashboard
-
-```bash
-pnpm dev:dashboard
-```
-
-Dashboard:
-
-```text
-http://localhost:3000
-```
-
-The backend and worker can also be started using the repository's development
-scripts.
-
-See:
-
-- [`backend/README.md`](backend/README.md)
-- [`apps/dashboard/README.md`](apps/dashboard/README.md)
-- [`docker/README.md`](docker/README.md)
+- Tenant isolation at the data layer (tenant-scoped repositories/indexes).
+- SSRF-proof crawler (loopback/private IPs blocked, same-origin only).
+- JWT + HttpOnly refresh cookie (`SameSite=Strict`), CSRF protection,
+  Argon2id password hashing, login lockout, per-endpoint rate limits.
+- Prompt-injection detection, PII redaction, HTML sanitization, input
+  validation at every layer.
+- Fail-fast production config, secret scanning, Trivy container scanning,
+  read-only production containers, hardened Dockerfile/compose posture.
 
 ---
 
-# ⚙️ Configuration
+## Deployment
 
-Environment variables are documented in:
+Production runs **Dashboard** and **Widget** on Vercel, and the **API** and
+**Worker** on Railway, backed by managed MongoDB Atlas and Redis. GitHub
+Actions runs CI (lint, typecheck, tests, migrations on a real MongoDB, Docker
+build + Trivy scan, widget E2E). Docker images remain the CI/security gate and
+an optional self-hosting path.
 
-```text
-.env.example
-```
-
-Important production configuration includes:
-
-```text
-ENVIRONMENT
-DEBUG
-JWT_SECRET
-CORS_ORIGINS
-ALLOWED_HOSTS
-PUBLIC_BASE_URL
-NEXT_PUBLIC_API_URL
-NEXT_PUBLIC_BACKEND_API_URL
-VITE_WIDGET_API_BASE_URL
-GENERATION_PROVIDER_ORDER
-EMBEDDING_PROVIDER_ORDER
-EMBEDDING_DIMENSIONS
-CRAWL_HTTP_FIRST
-CRAWL_MAX_CONCURRENT
-EMBEDDING_MAX_CONCURRENT_BATCHES
-```
-
-Production configuration validation intentionally fails fast on unsafe
-configuration such as weak secrets, loopback production origins, missing
-provider credentials, or unsupported mock payment configuration.
+See the [deployment runbook](docs/deployment/README.md) for platform
+split, environment contracts, health probes, and the Docker Compose
+self-hosting alternative.
 
 ---
 
-# 📚 Documentation
+## Status & roadmap
 
-| Document                                                   | Purpose                       |
-| ---------------------------------------------------------- | ----------------------------- |
-| [`docs/README.md`](docs/README.md)                         | Documentation index           |
-| [`docs/deployment/README.md`](docs/deployment/README.md)   | Production deployment runbook |
-| [`backend/README.md`](backend/README.md)                   | Backend architecture and API  |
-| [`apps/dashboard/README.md`](apps/dashboard/README.md)     | Dashboard development         |
-| [`apps/widget/README.md`](apps/widget/README.md)           | Widget SDK                    |
-| [`packages/themes/README.md`](packages/themes/README.md)   | Widget themes                 |
-| [`docker/README.md`](docker/README.md)                     | Containers and Compose        |
-| [`tests/README.md`](tests/README.md)                       | Testing strategy              |
-| [`scripts/README.md`](scripts/README.md)                   | Development and operations    |
-| [`00-AI-Development-Rules.md`](00-AI-Development-Rules.md) | AI development rules          |
-
-The `docs/` directory also contains architecture decision records (ADRs),
-implementation documentation, deployment material, and historical audit
-reports.
+- **Status:** production architecture live (Vercel + Railway); CI/CD green.
+- **Ingestion roadmap:** the cloud crawler is today's default. Future
+  directions (documented in the repo's audits) include a customer-side crawler
+  agent for WAF-blocked sites and authenticated API/CMS content import.
+- See [docs/OPTIMIZATION_ROADMAP.md](docs/OPTIMIZATION_ROADMAP.md) for the
+  full roadmap, and [docs/README.md](docs/README.md) for the documentation
+  index.
 
 ---
 
-# 🗺️ Roadmap
+## Documentation
 
-The platform is continuously evolving.
-
-Potential future areas include:
-
-- Advanced analytics
-- Additional AI providers
-- Additional embedding providers
-- More crawling strategies
-- Improved retrieval evaluation
-- Additional integrations
-- Expanded widget customization
-- More enterprise controls
+| Document                                                 | Purpose                               |
+| -------------------------------------------------------- | ------------------------------------- |
+| [docs/README.md](docs/README.md)                         | Documentation index                   |
+| [backend/README.md](backend/README.md)                   | Backend architecture + RAG            |
+| [apps/dashboard/README.md](apps/dashboard/README.md)     | Dashboard development                 |
+| [apps/widget/README.md](apps/widget/README.md)           | Widget SDK + integration              |
+| [docs/deployment/README.md](docs/deployment/README.md)   | Production deployment runbook         |
+| [docker/README.md](docker/README.md)                     | Containers and Compose                |
+| [tests/README.md](tests/README.md)                       | Testing strategy + Definition of Done |
+| [scripts/README.md](scripts/README.md)                   | Development / ops helpers             |
+| [packages/themes/README.md](packages/themes/README.md)   | Widget theme presets                  |
+| [00-AI-Development-Rules.md](00-AI-Development-Rules.md) | Mandatory rules for AI coding agents  |
 
 ---
 
-# 🤝 Contributing
+## Contributing
 
-Contributions are welcome when they align with the project's architecture,
-security model, and Definition of Done.
-
-Before submitting changes:
+Contributions are welcome when they fit the architecture, security model, and
+Definition of Done. Before submitting:
 
 ```bash
 ./scripts/check-backend.sh
-pnpm lint
-pnpm typecheck
-pnpm build
-pnpm test
+pnpm lint && pnpm typecheck && pnpm build && pnpm test
 ./scripts/check-secrets.sh
 ```
 
-Please read the repository development rules before making architectural or
-cross-cutting changes.
-
-For security vulnerabilities, avoid opening a public issue. Use the project's
-private security reporting channel instead.
+Read [00-AI-Development-Rules.md](00-AI-Development-Rules.md) before making
+architectural or cross-cutting changes. For security vulnerabilities, use the
+project's private security channel rather than opening a public issue.
 
 ---
 
-# 📄 License
+## License
 
 **Proprietary — All Rights Reserved.**
 
-See the repository license information for usage and distribution terms.
-
 ---
 
-<p align="center">
-  <strong>WebChat AI</strong>
-  <br />
-  Turn any website into an AI-powered knowledge assistant.
-</p>
+WebChat AI — turn any website, any document set, or both into an AI-powered
+knowledge assistant.

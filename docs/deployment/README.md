@@ -129,8 +129,7 @@ Railway deploys the Docker images built from `docker/Dockerfile.api` and
 - Command: `python -m backend.workers` (no public HTTP).
 - Set the same backend environment as the API (MongoDB, Redis, AI keys,
   payments). Keep the crawler settings aligned with the production profile:
-  `CRAWL_MAX_CONCURRENT=1`, `EMBEDDING_MAX_CONCURRENT_BATCHES=1`,
-  `CRAWL_NO_SANDBOX=true`, `CRAWL_HTTP_FIRST=true`.
+  `CRAWL_MAX_CONCURRENT=1`, `CRAWL_NO_SANDBOX=true`, `CRAWL_HTTP_FIRST=true`.
 
 ### Railway environment (both API and Worker)
 

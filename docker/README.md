@@ -21,7 +21,7 @@ The stack runs MongoDB 7, Redis, Mailpit (email testing), and the four app
 services on a `webchat` bridge network:
 
 ```bash
-cp .env.development .env            # bundled dev env pointing at docker services
+cp .env.example .env.development      # dev env pointing at docker services
 docker compose --env-file .env.development -f docker/compose.yml up --build
 # or: scripts/docker-up.sh
 ```

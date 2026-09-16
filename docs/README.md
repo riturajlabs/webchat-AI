@@ -1,12 +1,11 @@
 # WebChat AI — Documentation
 
-Index of platform documentation. This repository treats **canonical (living)**
-documents separately from **historical (dated) audit & verification reports.
+Index of platform documentation. Canonical (living) documents are the source
+of truth for how the product works.
 
 > **Ground-truth ordering:** when a document disagrees with the current
 > implementation, the source code wins, then the automated tests, then
 > package/config files, then deployment configuration, then this documentation.
-> History files below are preserved as a record, not as current guidance.
 
 ## Canonical / living docs
 
@@ -37,38 +36,16 @@ first place to look for that area:
 | Tests      | [../tests/README.md](../tests/README.md)                     |
 | Scripts    | [../scripts/README.md](../scripts/README.md)                 |
 
-## Historical audit & verification reports
+## Reference docs
 
-Dated/finalized reports are retained for the record. They reflect the state of
-the code at the time of writing; treat them as history, and re-verify any claim
-against the current implementation before acting on it.
+- `CRAWL_EGRESS_HARDENING.md` — crawler egress/access strategy design
+- `DATABASE_BACKUP_RESTORE.md` — MongoDB backup & restore procedures
+- `OPTIMIZATION_ROADMAP.md` — forward-looking performance roadmap
 
-### Production readiness
+## Working drafts
 
-- `FINAL_PRODUCTION_READINESS_AUDIT.md`
-- `FINAL_ISSUE_REGISTER.md`
-- `OPTIMIZATION_ROADMAP.md`
-- `FINAL_RAG_REMAINING_ISSUES_2026-09-04.md`
-
-### RAG accuracy & latency investigations
-
-- `RAG_ACCURACY_LATENCY_AUDIT.md`
-- `RAG_MANUAL_REGRESSION_CRAWL_COVERAGE_2026-09-09.md`
-- `RAG_ACCURACY_TTFT_BENCHMARK_2026-09-07.md`
-- `RAG_ACCURACY_TTFT_DEEP_DIVE_2026-09-07.md`
-- `RAG_BASELINE_INSTRUMENTATION_2026-09-07.md`
-- `RAG_REAL_TTFT_BENCHMARK_2026-09-08.md`
-- `RAG_REAL_PRODUCTION_TTFT_2026-09-08.md`
-
-### RAG optimizations (dated)
-
-- `RAG_OPTIMIZATION_ACC03_2026-09-08.md`
-- `RAG_TTFT_EMBEDDING_OPTIMIZATION_2026-09-08.md`
-- `RAG_TTFT_PREGENERATION_OPTIMIZATION_2026-09-08.md`
-- `RAG_TTFT_PROVIDER_GENERATION_OPTIMIZATION_2026-09-09.md`
-- `RAG_TTFT_REDIS_HEALTH_OPTIMIZATION_2026-09-08.md`
-- `RAG_TTFT_RERANKER_ANALYSIS_2026-09-08.md`
-- `RAG_TTFT_STREAMING_WATERFALL_2026-09-08.md`
+- `README_DOCUMENTATION_FORENSIC_AUDIT_2026-09-16.md` — documentation-ecosystem
+  audit (temporary working draft; superseded by the READMEs above)
 
 ## AI-development rules
 
