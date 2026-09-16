@@ -642,7 +642,7 @@ async def _run_crawl_job_impl(
         # website as `crawling`, permanently blocking re-crawl.
         # Terminalize via the FIND-02 single-terminator so only the active
         # owner wins side effects, partial pages are preserved, and the
-        # state left is re-crawlable (docs/WORKER_FIND_08_INVESTIGATION_2026-09-12.md).
+        # state left is re-crawlable (see commit d024f2a "add dedicated crawl job timeout").
         # Best-effort: any failure here is logged and swallowed
         # so the pending cancellation keeps propagating.
         await _finalize_crawl_cancelled(
