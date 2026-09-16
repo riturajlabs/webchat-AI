@@ -1,7 +1,7 @@
 """Pydantic v2 request/response schemas for the websites API."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -13,7 +13,8 @@ MAX_SUGGESTED_QUESTIONS = 5
 
 class CreateWebsiteRequest(BaseModel):
     name: str = Field(min_length=MIN_WEBSITE_NAME_LENGTH, max_length=MAX_WEBSITE_NAME_LENGTH)
-    url: str = Field(min_length=4, max_length=2048)
+    url: str | None = Field(default=None, min_length=4, max_length=2048)
+    source_mode: Literal["website", "files", "mixed"] = "website"
 
 
 class UpdateWebsiteRequest(BaseModel):
@@ -21,13 +22,15 @@ class UpdateWebsiteRequest(BaseModel):
         default=None, min_length=MIN_WEBSITE_NAME_LENGTH, max_length=MAX_WEBSITE_NAME_LENGTH
     )
     url: str | None = Field(default=None, min_length=4, max_length=2048)
+    source_mode: Literal["website", "files", "mixed"] | None = None
 
 
 class WebsiteOut(BaseModel):
     id: str
     tenant_id: str
     name: str
-    url: str
+    url: str | None
+    source_mode: str = "website"
     status: str
     pages_indexed: int
     last_crawled_at: datetime | None
@@ -49,6 +52,7 @@ class WebsiteOut(BaseModel):
             tenant_id=website.tenant_id,
             name=website.name,
             url=website.url,
+            source_mode=getattr(website, "source_mode", "website"),
             status=website.status,
             pages_indexed=website.pages_indexed,
             last_crawled_at=website.last_crawled_at,

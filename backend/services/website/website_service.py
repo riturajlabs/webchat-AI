@@ -12,8 +12,10 @@ from urllib.parse import urlparse
 
 from backend.core.config import Settings, get_settings
 from backend.core.errors import (
+    AppError,
     DuplicateWebsiteError,
     WebsiteNotFoundError,
+    WebsiteUrlRequiredError,
 )
 from backend.core.security import utcnow
 from backend.models.audit_log import (
@@ -22,7 +24,14 @@ from backend.models.audit_log import (
     AUDIT_WEBSITE_UPDATED,
     AuditLog,
 )
-from backend.models.website import WEBSITE_STATUS_PENDING, Website
+from backend.models.website import (
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_MIXED,
+    SOURCE_MODE_WEBSITE,
+    SOURCE_MODES,
+    WEBSITE_STATUS_PENDING,
+    Website,
+)
 from backend.models.widget import Widget
 from backend.repositories import (
     AuditLogRepository,
@@ -106,13 +115,25 @@ class WebsiteService:
         *,
         principal: Principal,
         name: str,
-        url: str,
+        url: str | None = None,
+        source_mode: str = SOURCE_MODE_WEBSITE,
         ip_address: str | None,
         user_agent: str | None,
     ) -> CreateWebsiteResult:
-        normalized_url = normalize_url(url)
-        if await self._websites.find_by_url(principal.tenant_id, normalized_url) is not None:
-            raise DuplicateWebsiteError("A website with this URL already exists.")
+        if source_mode not in SOURCE_MODES:
+            raise AppError(f"Invalid source_mode: {source_mode}")
+        if source_mode in (SOURCE_MODE_WEBSITE, SOURCE_MODE_MIXED):
+            if not url or not url.strip():
+                raise WebsiteUrlRequiredError(
+                    "Website URL is required for website and mixed source modes."
+                )
+
+        normalized_url: str | None = None
+        if url and url.strip():
+            normalized_url = normalize_url(url.strip())
+            if await self._websites.find_by_url(principal.tenant_id, normalized_url) is not None:
+                raise DuplicateWebsiteError("A website with this URL already exists.")
+
         if self._usage is not None:
             # Phase 13 billing: reject before persisting anything.
             await self._usage.check_limit(principal.tenant_id, event_type="websites")
@@ -121,6 +142,7 @@ class WebsiteService:
             tenant_id=principal.tenant_id,
             name=name.strip(),
             url=normalized_url,
+            source_mode=source_mode,
         )
         await self._websites.create(website)
 
@@ -131,9 +153,13 @@ class WebsiteService:
         # Seed the embed-origin allowlist from the registered website host so
         # new widgets are protected-by-default against embedding elsewhere;
         # tenants extend it from the dashboard widget builder.
-        seed_domain = self._embed_domain(normalized_url)
-        if seed_domain:
-            widget.allowed_domains = [seed_domain]
+        # For upload-only chatbots without a URL, allowed_domains is initialized empty.
+        if normalized_url:
+            seed_domain = self._embed_domain(normalized_url)
+            if seed_domain:
+                widget.allowed_domains = [seed_domain]
+        else:
+            widget.allowed_domains = []
         try:
             await self._widgets.create(widget)
         except Exception:
@@ -214,6 +240,7 @@ class WebsiteService:
         website_id: str,
         name: str | None,
         url: str | None,
+        source_mode: str | None = None,
         ip_address: str | None,
         user_agent: str | None,
     ) -> Website:
@@ -223,18 +250,38 @@ class WebsiteService:
 
         if name is not None:
             website.name = name.strip()
+        if source_mode is not None:
+            if source_mode not in SOURCE_MODES:
+                raise AppError(f"Invalid source_mode: {source_mode}")
+            website.source_mode = source_mode
         if url is not None:
-            normalized_url = normalize_url(url)
-            if normalized_url != website.url:
-                existing = await self._websites.find_by_url(principal.tenant_id, normalized_url)
-                if existing is not None and existing.id != website.id:
-                    raise DuplicateWebsiteError("A website with this URL already exists.")
-                website.url = normalized_url
-                # Content changed: reset crawl state until the next index run.
-                website.status = WEBSITE_STATUS_PENDING
-                website.pages_indexed = 0
-                website.last_crawled_at = None
-                website.checksum = None
+            trimmed = url.strip()
+            if trimmed:
+                normalized_url = normalize_url(trimmed)
+                if normalized_url != website.url:
+                    existing = await self._websites.find_by_url(principal.tenant_id, normalized_url)
+                    if existing is not None and existing.id != website.id:
+                        raise DuplicateWebsiteError("A website with this URL already exists.")
+                    website.url = normalized_url
+                    # Content changed: reset crawl state until the next index run.
+                    website.status = WEBSITE_STATUS_PENDING
+                    website.pages_indexed = 0
+                    website.last_crawled_at = None
+                    website.checksum = None
+            else:
+                current_mode = getattr(website, "source_mode", SOURCE_MODE_WEBSITE)
+                if current_mode != SOURCE_MODE_FILES:
+                    raise WebsiteUrlRequiredError(
+                        "Website URL is required for website and mixed source modes."
+                    )
+                website.url = None
+
+        current_mode = getattr(website, "source_mode", SOURCE_MODE_WEBSITE)
+        if current_mode in (SOURCE_MODE_WEBSITE, SOURCE_MODE_MIXED) and not website.url:
+            raise WebsiteUrlRequiredError(
+                "Website URL is required for website and mixed source modes."
+            )
+
         website.updated_at = utcnow()
         await self._websites.update(website)
         await self._audit.create(

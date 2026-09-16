@@ -161,6 +161,42 @@ async def _ensure_crawl_job_active_index(db: AsyncIOMotorDatabase[Any]) -> None:
     )
 
 
+# Upload-only chatbot support: unique (tenant_id, url) among active websites with string URLs.
+_WEBSITE_URL_INDEX = "tenant_id_1_url_1"
+_WEBSITE_URL_PARTIAL_FILTER = {"deleted": False, "url": {"$type": "string"}}
+
+
+async def _ensure_website_url_index(db: AsyncIOMotorDatabase[Any]) -> None:
+    """Create/migrate the websites (tenant_id, url) partial unique index.
+
+    Soft-deleted websites must not block URL re-registration (`deleted: False`).
+    Upload-only chatbots do not have a website URL (`url: None`) and must not
+    collide with each other. Restricting the partial unique index to string URLs
+    allows arbitrary numbers of upload-only chatbots per tenant while preserving
+    strict URL uniqueness for website-backed chatbots.
+    """
+    collection = db["websites"]
+    info = await collection.index_information()
+    current = info.get(_WEBSITE_URL_INDEX)
+    already_desired = (
+        current is not None
+        and current.get("unique") is True
+        and current.get("partialFilterExpression") == _WEBSITE_URL_PARTIAL_FILTER
+    )
+    if already_desired:
+        return
+
+    try:
+        await collection.drop_index(_WEBSITE_URL_INDEX)
+    except OperationFailure:
+        pass
+    await collection.create_index(
+        [("tenant_id", 1), ("url", 1)],
+        unique=True,
+        partialFilterExpression=_WEBSITE_URL_PARTIAL_FILTER,
+    )
+
+
 # Heartbeat/control commands that would only ever log as noise.
 _NOISE_COMMANDS = {"ping", "hello", "ismaster", "saslStart", "saslContinue"}
 
@@ -385,15 +421,7 @@ class MongoDB:
         await db["websites"].update_many(
             {"status": WEBSITE_STATUS_DELETED}, {"$set": {"deleted": True}}
         )
-        try:
-            await db["websites"].drop_index("tenant_id_1_url_1")
-        except OperationFailure:
-            pass  # Fresh database: the legacy full-unique index never existed.
-        await db["websites"].create_index(
-            [("tenant_id", 1), ("url", 1)],
-            unique=True,
-            partialFilterExpression={"deleted": False},
-        )
+        await _ensure_website_url_index(db)
         await db["websites"].create_index("tenant_id")
         await db["websites"].create_index("url")
         await db["widgets"].create_index("widget_id", unique=True)

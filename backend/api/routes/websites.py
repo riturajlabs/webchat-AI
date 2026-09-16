@@ -55,6 +55,7 @@ async def create_website(
         principal=principal,
         name=body.name,
         url=body.url,
+        source_mode=body.source_mode,
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
@@ -117,6 +118,7 @@ async def update_website(
         website_id=website_id,
         name=body.name,
         url=body.url,
+        source_mode=body.source_mode,
         ip_address=client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )

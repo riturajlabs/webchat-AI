@@ -103,6 +103,10 @@ from backend.models.usage_record import (
 )
 from backend.models.user import User
 from backend.models.website import (
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_MIXED,
+    SOURCE_MODE_WEBSITE,
+    SOURCE_MODES,
     WEBSITE_STATUS_CRAWLING,
     WEBSITE_STATUS_FAILED,
     WEBSITE_STATUS_PENDING,
@@ -195,6 +199,10 @@ __all__ = [
     "SUBSCRIPTION_STATUS_TRIALING",
     "Tenant",
     "User",
+    "SOURCE_MODE_FILES",
+    "SOURCE_MODE_MIXED",
+    "SOURCE_MODE_WEBSITE",
+    "SOURCE_MODES",
     "WEBSITE_STATUSES",
     "WEBSITE_STATUS_CRAWLING",
     "WEBSITE_STATUS_FAILED",

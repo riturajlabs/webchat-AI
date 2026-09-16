@@ -117,6 +117,11 @@ class InvalidUrlError(AppError):
     code = "INVALID_URL"
 
 
+class WebsiteUrlRequiredError(AppError):
+    status_code = 400
+    code = "WEBSITE_URL_REQUIRED"
+
+
 class DuplicateWebsiteError(AppError):
     status_code = 409
     code = "WEBSITE_ALREADY_EXISTS"

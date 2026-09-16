@@ -5,6 +5,7 @@ from backend.core.errors import (
     CrawlConflictError,
     CrawlJobNotFoundError,
     WebsiteNotFoundError,
+    WebsiteUrlRequiredError,
 )
 from backend.models.audit_log import AUDIT_CRAWL_STARTED
 from backend.models.crawl_job import (
@@ -13,7 +14,7 @@ from backend.models.crawl_job import (
     CRAWL_STATUS_RUNNING,
     CrawlJob,
 )
-from backend.models.website import WEBSITE_STATUS_CRAWLING, Website
+from backend.models.website import SOURCE_MODE_FILES, WEBSITE_STATUS_CRAWLING, Website
 from backend.services.auth import Principal
 
 from tests.crawl_helpers import build_crawl_env
@@ -107,3 +108,17 @@ async def test_crawl_job_tenant_isolation(env) -> None:
 
     with pytest.raises(CrawlJobNotFoundError):
         await env.service.get_crawl_job("tenant-b", job.id)
+
+
+async def test_start_crawl_rejects_website_without_url(env) -> None:
+    website = Website.new(
+        tenant_id="tenant-a", name="Docs Bot", url=None, source_mode=SOURCE_MODE_FILES
+    )
+    await env.websites.create(website)
+    principal: Principal = make_principal(tenant_id="tenant-a")
+
+    with pytest.raises(WebsiteUrlRequiredError):
+        await env.service.start_crawl(
+            principal=principal, website_id=website.id, ip_address=None, user_agent=None
+        )
+    assert env.enqueued == []

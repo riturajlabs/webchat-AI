@@ -14,6 +14,7 @@ from backend.core.errors import (
     CrawlConflictError,
     CrawlJobNotFoundError,
     WebsiteNotFoundError,
+    WebsiteUrlRequiredError,
 )
 from backend.core.security import utcnow
 from backend.models.audit_log import AUDIT_CRAWL_STARTED, AuditLog
@@ -76,6 +77,8 @@ class CrawlService:
         website = await self._websites.find_by_id(principal.tenant_id, website_id)
         if website is None:
             raise WebsiteNotFoundError("Website not found.")
+        if not website.url:
+            raise WebsiteUrlRequiredError("Cannot crawl a chatbot without a website URL.")
         # Fast-path only: `find_active_for_website` is a cheap first-409, NOT the
         # correctness mechanism (FIND-02). The authoritative single-flight gate is
         # the atomic unique insert in `create`; two racing requests can both pass

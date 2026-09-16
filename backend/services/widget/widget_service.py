@@ -37,7 +37,13 @@ from backend.core.errors import (
 )
 from backend.core.security import create_widget_session_token, utcnow
 from backend.models.chat_session import ChatSession
-from backend.models.website import WEBSITE_STATUS_READY
+from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_READY
+from backend.models.website import (
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_WEBSITE,
+    WEBSITE_STATUS_FAILED,
+    WEBSITE_STATUS_READY,
+)
 from backend.repositories import TenantRepository, WebsiteRepository, WidgetRepository
 from backend.schemas.widget import WidgetPublicConfig
 from backend.utils.origin import looks_like_browser, origin_allowed, origin_hostname
@@ -343,8 +349,22 @@ class WidgetService:
         if not widget.enabled or tenant is None or tenant.status != "active":
             raise WidgetDisabledError("Widget is not available.")
         website = await self._websites.find_by_id_any(website_id)
-        if website is None or website.status != WEBSITE_STATUS_READY:
+        if website is None:
             raise WebsiteNotReadyError("This website is still being indexed.")
+        mode = getattr(website, "source_mode", SOURCE_MODE_WEBSITE)
+        if mode == SOURCE_MODE_FILES:
+            if (
+                website.status == WEBSITE_STATUS_FAILED
+                or website.knowledge_status != KNOWLEDGE_STATUS_READY
+                or website.knowledge_chunks <= 0
+            ):
+                raise WebsiteNotReadyError("This chatbot's knowledge base is still being indexed.")
+        else:
+            if (
+                website.status != WEBSITE_STATUS_READY
+                or website.knowledge_status != KNOWLEDGE_STATUS_READY
+            ):
+                raise WebsiteNotReadyError("This website is still being indexed.")
 
     async def validate_session_access(
         self,

@@ -7,9 +7,10 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { useAccessibleDialog } from '@/hooks/use-accessible-dialog';
+import { cn } from '@/lib/utils';
 
 import { useCreateWebsite, useUpdateWebsite } from './hooks';
-import type { CreateWebsiteResponse, Website } from './types';
+import type { CreateWebsiteResponse, SourceMode, Website } from './types';
 
 export function AddWebsiteDialog({
   open,
@@ -28,6 +29,7 @@ export function AddWebsiteDialog({
 
   const [name, setName] = useState(website?.name ?? '');
   const [url, setUrl] = useState(website?.url ?? '');
+  const [sourceMode, setSourceMode] = useState<SourceMode>(website?.source_mode ?? 'website');
   const [result, setResult] = useState<CreateWebsiteResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -40,6 +42,7 @@ export function AddWebsiteDialog({
     onOpenChange(false);
     setName('');
     setUrl('');
+    setSourceMode('website');
     setResult(null);
     setCopied(false);
   };
@@ -52,22 +55,38 @@ export function AddWebsiteDialog({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim() || !url.trim() || isPending) {
+    if (!name.trim() || isPending) {
+      return;
+    }
+    if (sourceMode !== 'files' && !url.trim()) {
       return;
     }
     try {
       if (isEditing && website) {
-        await updateWebsite.mutateAsync({
+        const payload: {
+          websiteId: string;
+          name: string;
+          url?: string;
+          source_mode?: SourceMode;
+        } = {
           websiteId: website.id,
           name: name.trim(),
-          url: url.trim(),
-        });
+          url: sourceMode === 'files' ? url.trim() || undefined : url.trim(),
+        };
+        if (sourceMode !== (website.source_mode ?? 'website')) {
+          payload.source_mode = sourceMode;
+        }
+        await updateWebsite.mutateAsync(payload);
         close();
         toast.success('Website updated');
       } else {
-        const created = await createWebsite.mutateAsync({ name: name.trim(), url: url.trim() });
+        const created = await createWebsite.mutateAsync({
+          name: name.trim(),
+          url: sourceMode === 'files' ? url.trim() || null : url.trim(),
+          source_mode: sourceMode,
+        });
         setResult(created);
-        toast.success('Website added');
+        toast.success(sourceMode === 'files' ? 'Chatbot created' : 'Website added');
       }
     } catch {
       toast.error('Failed to save website');
@@ -132,9 +151,13 @@ export function AddWebsiteDialog({
               role="status"
               className="rounded-md border border-green-200 bg-green-50 p-3 text-sm dark:border-green-500/30 dark:bg-green-500/10"
             >
-              <p className="font-medium text-green-900 dark:text-green-400">Website added</p>
+              <p className="font-medium text-green-900 dark:text-green-400">
+                {result.website.source_mode === 'files' ? 'Chatbot created' : 'Website added'}
+              </p>
               <p className="text-green-800 dark:text-green-300">
-                Next: crawl your site to build the knowledge base, then configure the widget.
+                {result.website.source_mode === 'files'
+                  ? 'Next: upload documents to build the knowledge base, then configure the widget.'
+                  : 'Next: crawl your site to build the knowledge base, then configure the widget.'}
               </p>
             </div>
 
@@ -173,7 +196,7 @@ export function AddWebsiteDialog({
                 }}
                 className="flex-1"
               >
-                Start Crawl
+                {result.website.source_mode === 'files' ? 'Upload Documents' : 'Start Crawl'}
                 <ExternalLink className="size-4" aria-hidden="true" />
               </Button>
               <Button
@@ -194,6 +217,63 @@ export function AddWebsiteDialog({
           <form onSubmit={(event) => void handleSubmit(event)} className="flex flex-col gap-4">
             <div>
               <label
+                id="source-mode-label"
+                className="mb-1 block text-xs font-medium text-muted-foreground"
+              >
+                Source mode
+              </label>
+              <div
+                role="radiogroup"
+                aria-labelledby="source-mode-label"
+                className="grid grid-cols-3 gap-2"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={sourceMode === 'website'}
+                  onClick={() => setSourceMode('website')}
+                  className={cn(
+                    'rounded-md border p-2 text-xs font-medium transition-colors text-center',
+                    sourceMode === 'website'
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input bg-background hover:bg-muted text-muted-foreground',
+                  )}
+                >
+                  Website
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={sourceMode === 'files'}
+                  onClick={() => setSourceMode('files')}
+                  className={cn(
+                    'rounded-md border p-2 text-xs font-medium transition-colors text-center',
+                    sourceMode === 'files'
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input bg-background hover:bg-muted text-muted-foreground',
+                  )}
+                >
+                  Documents
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={sourceMode === 'mixed'}
+                  onClick={() => setSourceMode('mixed')}
+                  className={cn(
+                    'rounded-md border p-2 text-xs font-medium transition-colors text-center',
+                    sourceMode === 'mixed'
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-input bg-background hover:bg-muted text-muted-foreground',
+                  )}
+                >
+                  Website + Docs
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label
                 htmlFor="website-name"
                 className="mb-1 block text-xs font-medium text-muted-foreground"
               >
@@ -211,23 +291,25 @@ export function AddWebsiteDialog({
               />
             </div>
 
-            <div>
-              <label
-                htmlFor="website-url"
-                className="mb-1 block text-xs font-medium text-muted-foreground"
-              >
-                Website URL
-              </label>
-              <input
-                id="website-url"
-                required
-                type="url"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://example.com"
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
-              />
-            </div>
+            {sourceMode !== 'files' ? (
+              <div>
+                <label
+                  htmlFor="website-url"
+                  className="mb-1 block text-xs font-medium text-muted-foreground"
+                >
+                  Website URL
+                </label>
+                <input
+                  id="website-url"
+                  required
+                  type="url"
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://example.com"
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            ) : null}
 
             {error ? (
               <p
@@ -243,7 +325,13 @@ export function AddWebsiteDialog({
                 Cancel
               </Button>
               <Button type="submit" disabled={isPending}>
-                {isPending ? 'Saving…' : isEditing ? 'Save changes' : 'Add website'}
+                {isPending
+                  ? 'Saving…'
+                  : isEditing
+                    ? 'Save changes'
+                    : sourceMode === 'files'
+                      ? 'Create chatbot'
+                      : 'Add website'}
               </Button>
             </div>
           </form>

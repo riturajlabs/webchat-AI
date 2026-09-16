@@ -278,3 +278,50 @@ def test_get_website_widget(client) -> None:
     assert body["widget"]["widget_id"] == created["website"]["widget_id"]
     assert created["website"]["widget_id"] in body["embed_script"]
     assert "widget_secret" not in body["widget"]
+
+
+def test_create_website_upload_only_mode_api(client) -> None:
+    test_client, _ = client
+    headers = _auth_headers(test_client)
+    response = test_client.post(
+        "/api/websites",
+        json={"name": "UploadOnlyBot", "source_mode": "files"},
+        headers=headers,
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["website"]["name"] == "UploadOnlyBot"
+    assert body["website"]["url"] is None
+    assert body["website"]["source_mode"] == "files"
+    assert body["widget"]["allowed_domains"] == []
+
+
+def test_create_website_website_mode_without_url_fails_api(client) -> None:
+    test_client, _ = client
+    headers = _auth_headers(test_client)
+    response = test_client.post(
+        "/api/websites",
+        json={"name": "NoUrlBot", "source_mode": "website"},
+        headers=headers,
+    )
+    assert response.status_code == 400
+
+
+def test_patch_website_source_mode_api(client) -> None:
+    test_client, _ = client
+    headers = _auth_headers(test_client)
+    created = test_client.post(
+        "/api/websites",
+        json={"name": "UploadOnlyBot", "source_mode": "files"},
+        headers=headers,
+    ).json()
+
+    site_id = created["website"]["id"]
+    patch_resp = test_client.patch(
+        f"/api/websites/{site_id}",
+        json={"source_mode": "mixed", "url": "https://mixed.example.com"},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["source_mode"] == "mixed"
+    assert patch_resp.json()["url"] == "https://mixed.example.com/"

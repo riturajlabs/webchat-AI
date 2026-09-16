@@ -6,11 +6,14 @@ export type WebsiteStatus = 'pending' | 'crawling' | 'processing' | 'ready' | 'f
 
 export type KnowledgeStatus = 'none' | 'processing' | 'ready' | 'failed';
 
+export type SourceMode = 'website' | 'files' | 'mixed';
+
 export interface Website {
   id: string;
   tenant_id: string;
   name: string;
-  url: string;
+  url: string | null;
+  source_mode?: SourceMode;
   status: WebsiteStatus;
   pages_indexed: number;
   last_crawled_at: string | null;
@@ -59,10 +62,17 @@ export interface WidgetResponse {
   embed_script: string;
 }
 
+export interface CreateWebsiteInput {
+  name: string;
+  url?: string | null;
+  source_mode?: SourceMode;
+}
+
 export interface UpdateWebsiteInput {
   websiteId: string;
   name?: string;
-  url?: string;
+  url?: string | null;
+  source_mode?: SourceMode;
 }
 
 export type CrawlJobStatus = 'pending' | 'running' | 'processing' | 'completed' | 'failed';
@@ -111,22 +121,40 @@ export interface CrawlProgressEvent {
 }
 
 /**
- * A website is chat-ready only when BOTH the crawl AND its knowledge-base
- * embedding have finished. `website.status` flips to 'ready' when the crawl
- * terminates (before embedding); `website.knowledge_status` reaches 'ready'
- * only after every document is embedded.
+ * A chatbot is chat-ready only when its knowledge-base embedding has finished.
+ * For 'files' mode chatbots, no website crawl is required; readiness depends on
+ * knowledge_status === 'ready' and non-zero chunks.
+ * For 'website' and 'mixed' modes, both the website crawl and knowledge-base
+ * embedding must have finished (status === 'ready' && knowledge_status === 'ready').
  */
-export function isChatReady(website: Pick<Website, 'status' | 'knowledge_status'>): boolean {
+export function isChatReady(
+  website: Pick<Website, 'status' | 'knowledge_status'> & {
+    source_mode?: SourceMode;
+    knowledge_chunks?: number;
+  },
+): boolean {
+  if (website.source_mode === 'files') {
+    return (
+      website.status !== 'failed' &&
+      website.knowledge_status === 'ready' &&
+      (website.knowledge_chunks === undefined || website.knowledge_chunks > 0)
+    );
+  }
   return website.status === 'ready' && website.knowledge_status === 'ready';
 }
 
 /**
- * True while the crawl is complete but the knowledge base is still being
- * embedded (status 'ready' + knowledge_status 'processing'). The UI must NOT
- * advertise the website as fully ready for chat in this state.
+ * True while the knowledge base is still being embedded.
+ * For 'files' mode: knowledge_status === 'processing'.
+ * For 'website' / 'mixed': crawl is complete but knowledge is embedding (status 'ready' + knowledge_status 'processing').
  */
 export function isEmbeddingInProgress(
-  website: Pick<Website, 'status' | 'knowledge_status'>,
+  website: Pick<Website, 'status' | 'knowledge_status'> & {
+    source_mode?: SourceMode;
+  },
 ): boolean {
+  if (website.source_mode === 'files') {
+    return website.status !== 'failed' && website.knowledge_status === 'processing';
+  }
   return website.status === 'ready' && website.knowledge_status === 'processing';
 }

@@ -3,16 +3,24 @@
 import pytest
 from backend.core.config import get_settings
 from backend.core.errors import (
+    AppError,
     DuplicateWebsiteError,
     InvalidUrlError,
     WebsiteNotFoundError,
+    WebsiteUrlRequiredError,
 )
 from backend.models.audit_log import (
     AUDIT_WEBSITE_CREATED,
     AUDIT_WEBSITE_DELETED,
     AUDIT_WEBSITE_UPDATED,
 )
-from backend.models.website import WEBSITE_STATUS_DELETED, WEBSITE_STATUS_PENDING
+from backend.models.website import (
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_MIXED,
+    SOURCE_MODE_WEBSITE,
+    WEBSITE_STATUS_DELETED,
+    WEBSITE_STATUS_PENDING,
+)
 from backend.utils.url_validator import normalize_url
 
 from tests.website_helpers import build_website_env, make_principal
@@ -612,3 +620,130 @@ async def test_delete_website_cascades_conversation_and_related_data() -> None:
     assert len(crawl_jobs.jobs) == 0
     assert len(usage_records.records) == 0
     assert len(widgets.widgets) == 0
+
+
+async def test_create_website_upload_only_mode() -> None:
+    env = build_website_env()
+    principal = make_principal()
+
+    result = await env.service.create_website(
+        principal=principal,
+        name="DocsBot",
+        url=None,
+        source_mode=SOURCE_MODE_FILES,
+        ip_address="1.2.3.4",
+        user_agent="pytest",
+    )
+
+    assert result.website.url is None
+    assert result.website.source_mode == SOURCE_MODE_FILES
+    assert result.website.status == WEBSITE_STATUS_PENDING
+    assert result.widget.allowed_domains == []
+    assert len(env.websites.websites) == 1
+    assert len(env.widgets.widgets) == 1
+
+
+async def test_create_website_upload_only_allows_multiple_null_urls() -> None:
+    env = build_website_env()
+    principal = make_principal()
+
+    bot1 = await env.service.create_website(
+        principal=principal,
+        name="Bot 1",
+        url=None,
+        source_mode=SOURCE_MODE_FILES,
+        ip_address=None,
+        user_agent=None,
+    )
+    bot2 = await env.service.create_website(
+        principal=principal,
+        name="Bot 2",
+        url=None,
+        source_mode=SOURCE_MODE_FILES,
+        ip_address=None,
+        user_agent=None,
+    )
+
+    assert bot1.website.id != bot2.website.id
+    assert bot1.website.url is None
+    assert bot2.website.url is None
+    assert len(env.websites.websites) == 2
+
+
+async def test_create_website_requires_url_for_website_and_mixed() -> None:
+    env = build_website_env()
+    principal = make_principal()
+
+    with pytest.raises(WebsiteUrlRequiredError):
+        await env.service.create_website(
+            principal=principal,
+            name="NoUrlSite",
+            url=None,
+            source_mode=SOURCE_MODE_WEBSITE,
+            ip_address=None,
+            user_agent=None,
+        )
+
+    with pytest.raises(WebsiteUrlRequiredError):
+        await env.service.create_website(
+            principal=principal,
+            name="NoUrlMixed",
+            url="",
+            source_mode=SOURCE_MODE_MIXED,
+            ip_address=None,
+            user_agent=None,
+        )
+
+
+async def test_create_website_invalid_source_mode_raises() -> None:
+    env = build_website_env()
+    principal = make_principal()
+
+    with pytest.raises(AppError, match="Invalid source_mode"):
+        await env.service.create_website(
+            principal=principal,
+            name="BadMode",
+            url=None,
+            source_mode="unsupported",
+            ip_address=None,
+            user_agent=None,
+        )
+
+
+async def test_update_website_source_mode_and_url_validation() -> None:
+    env = build_website_env()
+    principal = make_principal()
+
+    result = await env.service.create_website(
+        principal=principal,
+        name="FileBot",
+        url=None,
+        source_mode=SOURCE_MODE_FILES,
+        ip_address=None,
+        user_agent=None,
+    )
+
+    # Transitioning to mixed without a URL must raise WebsiteUrlRequiredError
+    with pytest.raises(WebsiteUrlRequiredError):
+        await env.service.update_website(
+            principal=principal,
+            website_id=result.website.id,
+            name=None,
+            url=None,
+            source_mode=SOURCE_MODE_MIXED,
+            ip_address=None,
+            user_agent=None,
+        )
+
+    # Transitioning to mixed with a valid URL succeeds
+    updated = await env.service.update_website(
+        principal=principal,
+        website_id=result.website.id,
+        name=None,
+        url="https://mixed.example.com",
+        source_mode=SOURCE_MODE_MIXED,
+        ip_address=None,
+        user_agent=None,
+    )
+    assert updated.source_mode == SOURCE_MODE_MIXED
+    assert updated.url == normalize_url("https://mixed.example.com")

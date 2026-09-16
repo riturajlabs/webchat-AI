@@ -10,8 +10,7 @@
  * tested independently of any component.
  */
 
-import type { Website } from '@/features/websites/types';
-import type { KnowledgeStatus } from '@/features/websites/types';
+import type { KnowledgeStatus, SourceMode, Website } from '@/features/websites/types';
 
 import type { KnowledgeDocumentSummary } from './types';
 
@@ -52,7 +51,9 @@ export interface KnowledgeReadiness {
   summary: KnowledgeDocumentSummary | null;
 }
 
-type ReadinessSource = Pick<Website, 'id' | 'status' | 'knowledge_status'>;
+type ReadinessSource = Pick<Website, 'id' | 'status' | 'knowledge_status'> & {
+  source_mode?: SourceMode;
+};
 
 export function deriveKnowledgeReadiness(
   summary: KnowledgeDocumentSummary | null,
@@ -78,10 +79,14 @@ export function deriveKnowledgeReadiness(
     // Embedding that has not produced documents yet still reads as active when
     // the backend reports `processing`.
     const fallback = website.knowledge_status;
+    const isReady =
+      website.source_mode === 'files'
+        ? fallback === 'ready' && website.status !== 'failed'
+        : website.status === 'ready' && fallback === 'ready';
     return {
       known: true,
       isEmbedding: fallback === 'processing',
-      isReady: website.status === 'ready' && fallback === 'ready',
+      isReady,
       isFailed: fallback === 'failed',
       isSettled: fallback !== 'processing',
       status: fallback,
@@ -100,10 +105,12 @@ export function deriveKnowledgeReadiness(
     };
   }
   if (summary.completed > 0) {
+    const isReady =
+      website.source_mode === 'files' ? website.status !== 'failed' : website.status === 'ready';
     return {
       known: true,
       isEmbedding: false,
-      isReady: website.status === 'ready',
+      isReady,
       isFailed: false,
       isSettled: true,
       status: 'ready',

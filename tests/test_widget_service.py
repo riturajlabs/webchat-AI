@@ -14,9 +14,20 @@ from backend.core.errors import (
     WidgetNotFoundError,
 )
 from backend.models.chat_session import ChatSession
+from backend.models.knowledge_chunk import (
+    KNOWLEDGE_STATUS_PENDING,
+    KNOWLEDGE_STATUS_PROCESSING,
+    KNOWLEDGE_STATUS_READY,
+)
 from backend.models.tenant import Tenant
 from backend.models.website import (
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_MIXED,
+    SOURCE_MODE_WEBSITE,
+    WEBSITE_STATUS_CRAWLING,
+    WEBSITE_STATUS_FAILED,
     WEBSITE_STATUS_PENDING,
+    WEBSITE_STATUS_PROCESSING,
     WEBSITE_STATUS_READY,
     Website,
 )
@@ -77,10 +88,21 @@ def _seed_website(
     tenant_id: str = "tenant-a",
     website_id: str = "web-1",
     status: str = WEBSITE_STATUS_READY,
+    source_mode: str = SOURCE_MODE_WEBSITE,
+    knowledge_status: str = KNOWLEDGE_STATUS_READY,
+    knowledge_chunks: int = 1,
+    url: str | None = "https://acme.example",
 ) -> Website:
-    website = Website.new(tenant_id=tenant_id, name="Acme", url="https://acme.example")
+    website = Website.new(
+        tenant_id=tenant_id,
+        name="Acme",
+        url=url,
+        source_mode=source_mode,
+    )
     website.id = website_id
     website.status = status
+    website.knowledge_status = knowledge_status
+    website.knowledge_chunks = knowledge_chunks
     websites.websites[website_id] = website
     return website
 
@@ -340,6 +362,121 @@ async def test_validate_chat_rejects_not_ready_website() -> None:
     widgets, tenants, websites, _, service = _widget_env()
     _seed_widget(widgets, tenants)
     _seed_website(websites, status=WEBSITE_STATUS_PENDING)
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_rejects_website_when_knowledge_not_ready() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        status=WEBSITE_STATUS_READY,
+        knowledge_status=KNOWLEDGE_STATUS_PENDING,
+    )
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_mixed_mode_rejects_when_knowledge_processing() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_MIXED,
+        status=WEBSITE_STATUS_READY,
+        knowledge_status=KNOWLEDGE_STATUS_PROCESSING,
+    )
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_mixed_mode_accepts_when_ready_and_knowledge_ready() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_MIXED,
+        status=WEBSITE_STATUS_READY,
+        knowledge_status=KNOWLEDGE_STATUS_READY,
+    )
+    await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_mixed_mode_rejects_when_crawling_or_processing() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_MIXED,
+        status=WEBSITE_STATUS_CRAWLING,
+        knowledge_status=KNOWLEDGE_STATUS_READY,
+    )
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+    # Also verify status=processing is rejected
+    websites.websites["web-1"].status = WEBSITE_STATUS_PROCESSING
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_files_mode_accepts_ready_knowledge() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_FILES,
+        status=WEBSITE_STATUS_PENDING,
+        knowledge_status=KNOWLEDGE_STATUS_READY,
+        knowledge_chunks=12,
+        url=None,
+    )
+    # Succeeds without error even though status is pending and url is None
+    await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_files_mode_rejects_when_knowledge_not_ready() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_FILES,
+        status=WEBSITE_STATUS_PENDING,
+        knowledge_status=KNOWLEDGE_STATUS_PENDING,
+        knowledge_chunks=12,
+        url=None,
+    )
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_files_mode_rejects_when_knowledge_chunks_zero() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_FILES,
+        status=WEBSITE_STATUS_PENDING,
+        knowledge_status=KNOWLEDGE_STATUS_READY,
+        knowledge_chunks=0,
+        url=None,
+    )
+    with pytest.raises(WebsiteNotReadyError):
+        await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
+
+
+async def test_validate_chat_files_mode_rejects_when_website_failed() -> None:
+    widgets, tenants, websites, _, service = _widget_env()
+    _seed_widget(widgets, tenants)
+    _seed_website(
+        websites,
+        source_mode=SOURCE_MODE_FILES,
+        status=WEBSITE_STATUS_FAILED,
+        knowledge_status=KNOWLEDGE_STATUS_READY,
+        knowledge_chunks=12,
+        url=None,
+    )
     with pytest.raises(WebsiteNotReadyError):
         await service.validate_chat(widget_id="widget-1", tenant_id="tenant-a", website_id="web-1")
 

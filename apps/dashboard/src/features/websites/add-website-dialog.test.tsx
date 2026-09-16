@@ -182,6 +182,43 @@ describe('AddWebsiteDialog', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it('creates an upload-only chatbot in documents mode without URL', async () => {
+    const mutateAsync = vi.fn().mockResolvedValue({
+      ...CREATE_RESPONSE,
+      website: { ...CREATE_RESPONSE.website, url: null, source_mode: 'files' },
+    });
+    mockedUseCreateWebsite.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useCreateWebsite>);
+
+    render(<AddWebsiteDialog open onOpenChange={vi.fn()} />);
+
+    // Switch to Documents mode
+    fireEvent.click(screen.getByRole('radio', { name: 'Documents' }));
+
+    // Website URL field should no longer be rendered
+    expect(screen.queryByLabelText('Website URL')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'DocBot' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create chatbot' }));
+
+    await waitFor(() => {
+      expect(mutateAsync).toHaveBeenCalledWith({
+        name: 'DocBot',
+        url: null,
+        source_mode: 'files',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Chatbot created')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Upload Documents' })).toBeInTheDocument();
+  });
+
   // --- Accessibility tests ---
 
   it('closes the dialog on Escape key', () => {

@@ -187,7 +187,9 @@ async def test_init_indexes_declares_website_indexes(monkeypatch) -> None:
         for (keys, unique), kwargs in indexes.items()
         if keys == (("tenant_id", 1), ("url", 1)) and unique
     ]
-    assert partial_unique == [{"unique": True, "partialFilterExpression": {"deleted": False}}]
+    assert partial_unique == [
+        {"unique": True, "partialFilterExpression": {"deleted": False, "url": {"$type": "string"}}}
+    ]
     assert ("tenant_id", False) in indexes
     assert ("url", False) in indexes
     # The `deleted` flag is backfilled from the legacy `status` marker and the

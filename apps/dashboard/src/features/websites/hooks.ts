@@ -10,6 +10,7 @@ import { API_BASE_URL, api } from '@/lib/api';
 import type {
   CrawlJob,
   CrawlProgressEvent,
+  CreateWebsiteInput,
   CreateWebsiteResponse,
   StartCrawlResponse,
   UpdateWebsiteInput,
@@ -61,7 +62,7 @@ export function useWebsite(
 export function useCreateWebsite() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; url: string }) =>
+    mutationFn: (input: CreateWebsiteInput) =>
       api.post<CreateWebsiteResponse>('/api/websites', input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: websitesKeys.all });

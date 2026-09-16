@@ -60,6 +60,17 @@ WEBSITE_STATUSES = {
     WEBSITE_STATUS_DELETED,
 }
 
+# Source modes (upload-only chatbot support).
+SOURCE_MODE_WEBSITE = "website"
+SOURCE_MODE_FILES = "files"
+SOURCE_MODE_MIXED = "mixed"
+
+SOURCE_MODES = {
+    SOURCE_MODE_WEBSITE,
+    SOURCE_MODE_FILES,
+    SOURCE_MODE_MIXED,
+}
+
 
 class Website(BaseModel):
     """A tenant-connected website awaiting/undergoing indexing."""
@@ -69,7 +80,8 @@ class Website(BaseModel):
     id: str
     tenant_id: str
     name: str
-    url: str
+    url: str | None = None
+    source_mode: str = SOURCE_MODE_WEBSITE
     status: str = WEBSITE_STATUS_PENDING
     # Soft-delete index flag: mirrors `status == WEBSITE_STATUS_DELETED` so the
     # (tenant_id, url) unique index can be *partial* (`deleted: false`).
@@ -118,13 +130,21 @@ class Website(BaseModel):
         return ingestion_embedding_identity_from_website(self)
 
     @classmethod
-    def new(cls, *, tenant_id: str, name: str, url: str) -> "Website":
+    def new(
+        cls,
+        *,
+        tenant_id: str,
+        name: str,
+        url: str | None = None,
+        source_mode: str = SOURCE_MODE_WEBSITE,
+    ) -> "Website":
         now = utcnow()
         return cls(
             id=new_id(),
             tenant_id=tenant_id,
             name=name,
             url=url,
+            source_mode=source_mode,
             created_at=now,
             updated_at=now,
         )

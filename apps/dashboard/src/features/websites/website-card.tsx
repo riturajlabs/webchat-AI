@@ -73,15 +73,19 @@ export function WebsiteCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-semibold">{website.name}</h3>
-          <a
-            href={website.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <span className="min-w-0 truncate">{website.url}</span>
-            <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
-          </a>
+          {website.url ? (
+            <a
+              href={website.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <span className="min-w-0 truncate">{website.url}</span>
+              <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
+            </a>
+          ) : (
+            <span className="mt-0.5 block text-xs text-muted-foreground">Document chatbot</span>
+          )}
         </div>
         <WebsiteStatusBadge website={website} readiness={readiness} />
       </div>
@@ -104,22 +108,28 @@ export function WebsiteCard({
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          disabled={isRunning}
-          onClick={() => onCrawl(website)}
-        >
-          {crawlPending ? (
-            <Loader2 className="animate-spin" aria-hidden="true" />
-          ) : crawlJob?.status === 'failed' ? (
-            <RefreshCw aria-hidden="true" />
-          ) : (
-            <Play aria-hidden="true" />
-          )}
-          {crawlPending ? 'Starting…' : crawlJob?.status === 'failed' ? 'Retry crawl' : 'Crawl now'}
-        </Button>
+        {website.url && website.source_mode !== 'files' ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            disabled={isRunning}
+            onClick={() => onCrawl(website)}
+          >
+            {crawlPending ? (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            ) : crawlJob?.status === 'failed' ? (
+              <RefreshCw aria-hidden="true" />
+            ) : (
+              <Play aria-hidden="true" />
+            )}
+            {crawlPending
+              ? 'Starting…'
+              : crawlJob?.status === 'failed'
+                ? 'Retry crawl'
+                : 'Crawl now'}
+          </Button>
+        ) : null}
         <Button type="button" variant="outline" size="sm" onClick={() => onEdit(website)}>
           <Pencil aria-hidden="true" />
           Edit

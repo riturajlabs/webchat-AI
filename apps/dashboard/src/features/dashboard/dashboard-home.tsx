@@ -278,7 +278,9 @@ function RecentWebsites({ readinessForSites }: { readinessForSites: SiteKnowledg
                   {website.name}
                 </Link>
                 <p className="truncate text-sm text-muted-foreground">
-                  {website.url} · last crawled {formatDate(website.last_crawled_at)}
+                  {website.url
+                    ? `${website.url} · last crawled ${formatDate(website.last_crawled_at)}`
+                    : `Document chatbot · ${website.knowledge_documents} docs`}
                 </p>
               </div>
               <WebsiteStatusBadge website={website} readiness={readiness} />

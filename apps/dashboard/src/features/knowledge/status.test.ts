@@ -8,6 +8,7 @@ import {
   knowledgePollIntervalMs,
 } from './status';
 import type { KnowledgeDocumentSummary } from './types';
+import { isChatReady, isEmbeddingInProgress } from '@/features/websites/types';
 import type { Website } from '@/features/websites/types';
 
 const SITE: Pick<Website, 'id' | 'status' | 'knowledge_status'> = {
@@ -131,6 +132,74 @@ describe('deriveKnowledgeReadiness', () => {
     );
     expect(readiness.isSettled).toBe(true);
     expect(readiness.isReady).toBe(true);
+  });
+
+  it('is ready for files source_mode when documents completed even if website.status is pending', () => {
+    const fileSite = {
+      ...SITE,
+      status: 'pending' as const,
+      source_mode: 'files' as const,
+    };
+    const readiness = deriveKnowledgeReadiness(summary({ total: 5, completed: 5 }), fileSite);
+    expect(readiness.isReady).toBe(true);
+    expect(readiness.isEmbedding).toBe(false);
+    expect(readiness.isSettled).toBe(true);
+    expect(readiness.status).toBe('ready');
+  });
+
+  it('is not ready for files source_mode if website.status is failed', () => {
+    const fileSite = {
+      ...SITE,
+      status: 'failed' as const,
+      source_mode: 'files' as const,
+    };
+    const readiness = deriveKnowledgeReadiness(summary({ total: 5, completed: 5 }), fileSite);
+    expect(readiness.isReady).toBe(false);
+  });
+});
+
+describe('isChatReady and isEmbeddingInProgress', () => {
+  it('handles standard website mode', () => {
+    expect(isChatReady({ status: 'ready', knowledge_status: 'ready' })).toBe(true);
+    expect(isChatReady({ status: 'pending', knowledge_status: 'ready' })).toBe(false);
+    expect(isEmbeddingInProgress({ status: 'ready', knowledge_status: 'processing' })).toBe(true);
+  });
+
+  it('handles files mode without requiring website status ready', () => {
+    expect(
+      isChatReady({
+        status: 'pending',
+        knowledge_status: 'ready',
+        source_mode: 'files',
+        knowledge_chunks: 5,
+      }),
+    ).toBe(true);
+
+    expect(
+      isChatReady({
+        status: 'pending',
+        knowledge_status: 'ready',
+        source_mode: 'files',
+        knowledge_chunks: 0,
+      }),
+    ).toBe(false);
+
+    expect(
+      isChatReady({
+        status: 'failed',
+        knowledge_status: 'ready',
+        source_mode: 'files',
+        knowledge_chunks: 5,
+      }),
+    ).toBe(false);
+
+    expect(
+      isEmbeddingInProgress({
+        status: 'pending',
+        knowledge_status: 'processing',
+        source_mode: 'files',
+      }),
+    ).toBe(true);
   });
 });
 

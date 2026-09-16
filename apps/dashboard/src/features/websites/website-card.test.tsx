@@ -138,3 +138,16 @@ describe('WebsiteCard knowledge phase', () => {
     expect(screen.getAllByText('Checking…').length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('WebsiteCard upload-only chatbot mode', () => {
+  it('renders "Document chatbot" label and hides crawl button when url is null', () => {
+    const uploadSite: Website = {
+      ...SITE,
+      url: null,
+      source_mode: 'files',
+    };
+    renderCard(uploadSite);
+    expect(screen.getByText('Document chatbot')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /crawl/i })).not.toBeInTheDocument();
+  });
+});

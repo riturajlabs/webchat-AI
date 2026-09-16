@@ -32,7 +32,7 @@ function KnowledgeStat({ label, value }: { label: string; value: number }) {
 }
 
 interface WebsiteRowProps {
-  website: { id: string; name: string; url: string };
+  website: { id: string; name: string; url: string | null };
   readiness: KnowledgeReadiness;
 }
 
@@ -52,15 +52,19 @@ function WebsiteRow({ website, readiness }: WebsiteRowProps) {
             </Link>
             <KnowledgeBadge status={readiness.status} embedding={readiness.isEmbedding} />
           </div>
-          <a
-            href={website.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
-          >
-            <span className="min-w-0 truncate">{website.url}</span>
-            <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
-          </a>
+          {website.url ? (
+            <a
+              href={website.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-sm text-muted-foreground hover:text-foreground"
+            >
+              <span className="min-w-0 truncate">{website.url}</span>
+              <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
+            </a>
+          ) : (
+            <span className="mt-0.5 block text-xs text-muted-foreground">Document chatbot</span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
