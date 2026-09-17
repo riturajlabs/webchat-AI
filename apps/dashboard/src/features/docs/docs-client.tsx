@@ -55,22 +55,24 @@ export function Tabs({ tabs, defaultValue }: { tabs: TabItem[]; defaultValue?: s
 interface TocItem {
   id: string;
   label: string;
+  level?: number;
 }
 
 function collectHeadings(root: HTMLElement): TocItem[] {
   const items: TocItem[] = [];
-  root.querySelectorAll('h2[id]').forEach((node) => {
+  root.querySelectorAll('h2[id], h3[id]').forEach((node) => {
     const id = node.getAttribute('id');
     const label = node.textContent?.trim();
+    const level = node.tagName.toLowerCase() === 'h3' ? 3 : 2;
     if (id && label) {
-      items.push({ id, label });
+      items.push({ id, label, level });
     }
   });
   return items;
 }
 
 /**
- * "On this page" table of contents. Reads section headings (h2 with an id)
+ * "On this page" table of contents. Reads section headings (h2 and h3 with an id)
  * from the main content, highlights the one in view, and links to the anchors.
  * Falls back to the section ids the page declares.
  */
@@ -116,8 +118,8 @@ export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
   }
 
   return (
-    <div className="sticky top-24 hidden w-56 shrink-0 flex-col gap-4 self-start xl:block">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="sticky top-24 hidden w-56 shrink-0 flex-col gap-3 self-start xl:flex">
+      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
         On this page
       </p>
       <nav aria-label="On this page" className="flex flex-col gap-1 text-sm">
@@ -126,9 +128,12 @@ export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
             key={item.id}
             href={`#${item.id}`}
             className={cn(
-              'border-l pl-3 text-muted-foreground transition-colors hover:text-foreground',
+              'border-l transition-colors hover:text-foreground',
+              item.level === 3
+                ? 'pl-5 text-xs text-muted-foreground/80'
+                : 'pl-3 text-sm text-muted-foreground',
               activeId === item.id
-                ? 'border-blue-600 font-medium text-foreground'
+                ? 'border-blue-600 font-medium text-blue-600 dark:border-blue-400 dark:text-blue-400'
                 : 'border-border',
             )}
           >
