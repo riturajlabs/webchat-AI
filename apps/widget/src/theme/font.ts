@@ -41,11 +41,37 @@ export const CURATED_FONTS: readonly CuratedFont[] = [
     stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap',
   },
   {
+    key: 'roboto',
+    label: 'Roboto',
+    stack: "'Roboto', system-ui, -apple-system, sans-serif",
+    stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
+  },
+  {
+    key: 'open-sans',
+    label: 'Open Sans',
+    stack: "'Open Sans', system-ui, -apple-system, sans-serif",
+    stylesheetUrl:
+      'https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap',
+  },
+  {
+    key: 'montserrat',
+    label: 'Montserrat',
+    stack: "'Montserrat', system-ui, -apple-system, sans-serif",
+    stylesheetUrl:
+      'https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap',
+  },
+  {
+    key: 'lato',
+    label: 'Lato',
+    stack: "'Lato', system-ui, -apple-system, sans-serif",
+    stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap',
+  },
+  {
     key: 'playfair-display',
     label: 'Playfair Display',
     stack: "'Playfair Display', Georgia, serif",
     stylesheetUrl:
-      'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&display=swap',
+      'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&display=swap',
   },
   {
     key: 'space-grotesk',
@@ -58,23 +84,55 @@ export const CURATED_FONTS: readonly CuratedFont[] = [
 
 /**
  * Match a configured font-family string against the curated registry.
- * Matches by exact stack or primary family name.
+ * Matches by exact stack, key, or primary family name.
  */
 export function matchCuratedFont(fontFamily: string | null | undefined): CuratedFont | null {
   if (!fontFamily || typeof fontFamily !== 'string') {
     return null;
   }
   const clean = fontFamily.trim().toLowerCase();
+
+  // 1. Explicit system font checks
+  const systemFont = CURATED_FONTS.find((c) => c.key === 'system');
+  if (
+    clean === 'system' ||
+    clean === 'system default' ||
+    (systemFont && clean === systemFont.stack.toLowerCase())
+  ) {
+    return null;
+  }
+
+  // 2. Exact stack match
   for (const candidate of CURATED_FONTS) {
     if (candidate.key === 'system') continue;
+    if (candidate.stack.toLowerCase() === clean) {
+      return candidate;
+    }
+  }
+
+  // 3. Exact key match
+  for (const candidate of CURATED_FONTS) {
+    if (candidate.key === 'system') continue;
+    if (candidate.key === clean) {
+      return candidate;
+    }
+  }
+
+  // 4. Primary family name match
+  for (const candidate of CURATED_FONTS) {
+    if (candidate.key === 'system') continue;
+    const labelLower = candidate.label.toLowerCase();
     if (
-      candidate.stack.toLowerCase() === clean ||
-      clean.includes(candidate.label.toLowerCase()) ||
-      clean.includes(candidate.key)
+      clean === labelLower ||
+      clean.startsWith(`'${labelLower}'`) ||
+      clean.startsWith(`"${labelLower}"`) ||
+      clean.startsWith(`${labelLower},`) ||
+      clean.startsWith(`${labelLower} `)
     ) {
       return candidate;
     }
   }
+
   return null;
 }
 

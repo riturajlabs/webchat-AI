@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { THEME_PRESETS, defaultTokens } from '@webchat/themes';
 
 import { cn } from '@/lib/utils';
@@ -123,12 +123,25 @@ export function ThemeSelector({
   onChange: (value: WidgetThemePreset) => void;
   themes?: readonly ThemeItem[];
 }) {
-  const isSelectedHidden =
+  const isSelectedOutsideInitial =
     Boolean(value) && !themes.slice(0, INITIAL_VISIBLE_COUNT).some((t) => t.id === value);
-  const [expanded, setExpanded] = useState(isSelectedHidden);
+  const [expanded, setExpanded] = useState(isSelectedOutsideInitial);
   const visibleThemes = expanded ? themes : themes.slice(0, INITIAL_VISIBLE_COUNT);
-  const hasMore = themes.length > INITIAL_VISIBLE_COUNT && !expanded;
+  const canToggle = themes.length > INITIAL_VISIBLE_COUNT;
   const remainingCount = themes.length - INITIAL_VISIBLE_COUNT;
+
+  const handleToggle = () => {
+    if (expanded) {
+      // Option A: If currently selected theme is outside the first 6 themes,
+      // keep expanded so the active theme is never hidden.
+      if (isSelectedOutsideInitial) {
+        return;
+      }
+      setExpanded(false);
+    } else {
+      setExpanded(true);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-3">
@@ -166,15 +179,24 @@ export function ThemeSelector({
         })}
       </div>
 
-      {hasMore ? (
+      {canToggle ? (
         <button
           type="button"
-          onClick={() => setExpanded(true)}
+          onClick={handleToggle}
           aria-expanded={expanded}
           className="flex items-center justify-center gap-1.5 rounded-lg border border-input px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
         >
-          <ChevronDown className="size-4" aria-hidden="true" />
-          Show more ({remainingCount} more)
+          {expanded ? (
+            <>
+              <ChevronUp className="size-4" aria-hidden="true" />
+              Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="size-4" aria-hidden="true" />
+              Show more ({remainingCount} more)
+            </>
+          )}
         </button>
       ) : null}
     </div>

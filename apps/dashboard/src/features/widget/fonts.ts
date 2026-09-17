@@ -39,11 +39,37 @@ export const CURATED_FONTS: readonly CuratedFontOption[] = [
     stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap',
   },
   {
+    key: 'roboto',
+    label: 'Roboto',
+    stack: "'Roboto', system-ui, -apple-system, sans-serif",
+    stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap',
+  },
+  {
+    key: 'open-sans',
+    label: 'Open Sans',
+    stack: "'Open Sans', system-ui, -apple-system, sans-serif",
+    stylesheetUrl:
+      'https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap',
+  },
+  {
+    key: 'montserrat',
+    label: 'Montserrat',
+    stack: "'Montserrat', system-ui, -apple-system, sans-serif",
+    stylesheetUrl:
+      'https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap',
+  },
+  {
+    key: 'lato',
+    label: 'Lato',
+    stack: "'Lato', system-ui, -apple-system, sans-serif",
+    stylesheetUrl: 'https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap',
+  },
+  {
     key: 'playfair-display',
     label: 'Playfair Display',
     stack: "'Playfair Display', Georgia, serif",
     stylesheetUrl:
-      'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&display=swap',
+      'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;700&display=swap',
   },
   {
     key: 'space-grotesk',
@@ -57,16 +83,54 @@ export const CURATED_FONTS: readonly CuratedFontOption[] = [
 export const FONT_OPTIONS = CURATED_FONTS;
 
 export function fontFamilyToKey(value: string | null | undefined): string {
-  if (!value) return 'system';
-  const clean = value.toLowerCase();
-  const match = CURATED_FONTS.find(
-    (option) =>
-      option.key !== 'system' &&
-      (option.stack?.toLowerCase() === clean ||
-        clean.includes(option.key) ||
-        clean.includes(option.label.toLowerCase())),
-  );
-  return match ? match.key : 'system';
+  if (!value || typeof value !== 'string') return 'system';
+  const clean = value.trim().toLowerCase();
+
+  // 1. Explicit system font checks (must precede matching so Roboto in system font stack doesn't match roboto)
+  const systemStack =
+    "-apple-system, blinkmacsystemfont, 'segoe ui', roboto, helvetica, arial, sans-serif";
+  if (
+    clean === 'system' ||
+    clean === 'system default' ||
+    clean === systemStack ||
+    clean.startsWith('-apple-system') ||
+    clean.startsWith('blinkmacsystemfont')
+  ) {
+    return 'system';
+  }
+
+  // 2. Exact stack match
+  for (const candidate of CURATED_FONTS) {
+    if (candidate.key === 'system' || !candidate.stack) continue;
+    if (candidate.stack.toLowerCase() === clean) {
+      return candidate.key;
+    }
+  }
+
+  // 3. Exact key match
+  for (const candidate of CURATED_FONTS) {
+    if (candidate.key === 'system') continue;
+    if (candidate.key === clean) {
+      return candidate.key;
+    }
+  }
+
+  // 4. Primary family name match
+  for (const candidate of CURATED_FONTS) {
+    if (candidate.key === 'system') continue;
+    const labelLower = candidate.label.toLowerCase();
+    if (
+      clean === labelLower ||
+      clean.startsWith(`'${labelLower}'`) ||
+      clean.startsWith(`"${labelLower}"`) ||
+      clean.startsWith(`${labelLower},`) ||
+      clean.startsWith(`${labelLower} `)
+    ) {
+      return candidate.key;
+    }
+  }
+
+  return 'system';
 }
 
 export function fontKeyToStack(key: string): string | null {

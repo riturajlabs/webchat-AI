@@ -289,7 +289,12 @@ describe('WidgetEditor', () => {
 
     expect(screen.getByRole('radio', { name: 'Select Purple AI preset' })).toBeInTheDocument();
     expect(allThemeRadios()).toHaveLength(11);
-    expect(screen.queryByRole('button', { name: /Show more/i })).not.toBeInTheDocument();
+    const showLess = screen.getByRole('button', { name: 'Show less' });
+    expect(showLess).toBeInTheDocument();
+
+    fireEvent.click(showLess);
+    expect(allThemeRadios()).toHaveLength(6);
+    expect(screen.getByRole('button', { name: /Show more \(5 more\)/i })).toBeInTheDocument();
   });
 
   it('auto-registers every theme in the canonical registry (dynamic theme registration)', () => {

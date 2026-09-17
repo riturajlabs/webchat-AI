@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { applyTheme, effectiveDarkMode, wireSystemThemeChange } from './apply';
-import { loadWebFont, matchCuratedFont } from './font';
+import { CURATED_FONTS, loadWebFont, matchCuratedFont } from './font';
 import { defaultConfig } from '../config/types';
 
 describe('applyTheme', () => {
@@ -260,21 +260,95 @@ describe('wireSystemThemeChange (audit W-03)', () => {
 });
 
 describe('Web font loading pipeline', () => {
+  it('contains exactly 10 curated fonts in the registry', () => {
+    expect(CURATED_FONTS).toHaveLength(10);
+    const keys = CURATED_FONTS.map((f) => f.key);
+    expect(new Set(keys).size).toBe(10);
+    const labels = CURATED_FONTS.map((f) => f.label);
+    expect(new Set(labels).size).toBe(10);
+  });
+
+  it('configures system default with null stylesheetUrl and valid stack', () => {
+    const system = CURATED_FONTS.find((f) => f.key === 'system');
+    expect(system).toBeDefined();
+    expect(system?.label).toBe('System default');
+    expect(system?.stylesheetUrl).toBeNull();
+    expect(system?.stack).toBeTruthy();
+  });
+
+  it('configures all 9 web fonts with valid Google Fonts URLs and correct weights', () => {
+    const expectedWeights: Record<string, string> = {
+      inter: 'wght@400;500;600',
+      poppins: 'wght@400;500;600',
+      nunito: 'wght@400;600;700',
+      roboto: 'wght@400;500;700',
+      'open-sans': 'wght@400;500;600;700',
+      montserrat: 'wght@400;500;600;700',
+      lato: 'wght@400;700',
+      'playfair-display': 'wght@500;700',
+      'space-grotesk': 'wght@500;700',
+    };
+
+    const webFonts = CURATED_FONTS.filter((f) => f.key !== 'system');
+    expect(webFonts).toHaveLength(9);
+
+    for (const font of webFonts) {
+      expect(font.stylesheetUrl).toMatch(/^https:\/\/fonts\.googleapis\.com\/css2\?family=/);
+      expect(font.stylesheetUrl).toContain('display=swap');
+      const weightPattern = expectedWeights[font.key];
+      expect(weightPattern).toBeDefined();
+      expect(font.stylesheetUrl).toContain(weightPattern);
+    }
+  });
+
+  it('matches all 9 web fonts by key, label, and full stack', () => {
+    for (const font of CURATED_FONTS) {
+      if (font.key === 'system') continue;
+      expect(matchCuratedFont(font.key)?.key).toBe(font.key);
+      expect(matchCuratedFont(font.label)?.key).toBe(font.key);
+      expect(matchCuratedFont(font.stack)?.key).toBe(font.key);
+      expect(matchCuratedFont(font.label.toLowerCase())?.key).toBe(font.key);
+    }
+  });
+
+  it('does not misidentify system font stack as Roboto', () => {
+    const systemStack =
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+    expect(matchCuratedFont(systemStack)).toBeNull();
+    expect(matchCuratedFont('system')).toBeNull();
+    expect(matchCuratedFont('system default')).toBeNull();
+  });
+
+  it('rejects untrusted strings, unknown fonts, and arbitrary URLs', () => {
+    expect(matchCuratedFont('')).toBeNull();
+    expect(matchCuratedFont(null)).toBeNull();
+    expect(matchCuratedFont(undefined)).toBeNull();
+    expect(matchCuratedFont('Comic Sans MS')).toBeNull();
+    expect(matchCuratedFont('<script>alert("xss")</script>')).toBeNull();
+    expect(matchCuratedFont('https://evil.com/font.css')).toBeNull();
+  });
+
   it('does not inject link for system default font or null/undefined', () => {
     const headCountBefore = document.head.querySelectorAll('link[data-webchat-font]').length;
     loadWebFont('system');
     loadWebFont(null);
     loadWebFont(undefined);
+    loadWebFont(
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+    );
     const headCountAfter = document.head.querySelectorAll('link[data-webchat-font]').length;
     expect(headCountAfter).toBe(headCountBefore);
   });
 
-  it('injects stylesheet link for curated font into target document head', () => {
-    loadWebFont('Poppins');
-    const link = document.head.querySelector('link[data-webchat-font="poppins"]');
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute('rel')).toBe('stylesheet');
-    expect(link?.getAttribute('href')).toContain('Poppins');
+  it('injects stylesheet link for each curated web font into target document head', () => {
+    const webFonts = CURATED_FONTS.filter((f) => f.key !== 'system');
+    for (const font of webFonts) {
+      loadWebFont(font.key);
+      const link = document.head.querySelector(`link[data-webchat-font="${font.key}"]`);
+      expect(link).not.toBeNull();
+      expect(link?.getAttribute('rel')).toBe('stylesheet');
+      expect(link?.getAttribute('href')).toBe(font.stylesheetUrl);
+    }
   });
 
   it('deduplicates multiple calls for the same font', () => {
@@ -298,13 +372,5 @@ describe('Web font loading pipeline', () => {
     );
     const link = document.head.querySelector('link[data-webchat-font="space-grotesk"]');
     expect(link).not.toBeNull();
-  });
-
-  it('matches curated fonts by primary name, key, or stack and ignores system', () => {
-    expect(matchCuratedFont('Poppins')?.key).toBe('poppins');
-    expect(matchCuratedFont('space-grotesk')?.key).toBe('space-grotesk');
-    expect(matchCuratedFont("'Inter', system-ui, -apple-system, sans-serif")?.key).toBe('inter');
-    expect(matchCuratedFont('system')).toBeNull();
-    expect(matchCuratedFont('Comic Sans MS')).toBeNull();
   });
 });
