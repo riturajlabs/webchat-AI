@@ -203,6 +203,10 @@ describe('WebsiteList', () => {
     const img = container.querySelector('img');
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute('src', 'https://cdn.example/acme.png');
+    // Explicit 16:9 intrinsic dimensions (P3 polish) never break the fallback.
+    expect(img).toHaveAttribute('width', '640');
+    expect(img).toHaveAttribute('height', '360');
+    expect(img).toHaveClass('aspect-[16/9]');
 
     fireEvent.error(img as HTMLImageElement);
     const fallback = container.querySelector('img');
@@ -217,6 +221,9 @@ describe('WebsiteList', () => {
     const img = container.querySelector('img');
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute('src', DEFAULT_WEBSITE_IMAGE);
+    expect(img).toHaveAttribute('width', '640');
+    expect(img).toHaveAttribute('height', '360');
+    expect(img).toHaveClass('aspect-[16/9]');
   });
 
   it('shows the knowledge base statistics in the advanced details section', () => {

@@ -7,6 +7,10 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 
 import { API_BASE_URL, api } from '@/lib/api';
 
+import { knowledgeKeys } from '@/features/knowledge/hooks';
+
+import { activeCrawlStore } from './active-crawl-store';
+
 import type {
   CrawlJob,
   CrawlProgressEvent,
@@ -85,7 +89,31 @@ export function useDeleteWebsite() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (websiteId: string) => api.delete<void>(`/api/websites/${websiteId}`),
-    onSuccess: () => {
+    onSuccess: (_data, websiteId) => {
+      // Stop the app-wide crawl watcher (SSE stream + crawl-job poll + targeted
+      // website poll + document poll) for the deleted website so it can never
+      // re-request documents/crawl state for a website that no longer exists.
+      const jobId = activeCrawlStore.getJobId(websiteId);
+      if (jobId !== undefined) {
+        queryClient.removeQueries({ queryKey: crawlJobKeys.detail(jobId) });
+      }
+      activeCrawlStore.remove(websiteId);
+
+      // Evict the deleted website from the shared list cache immediately, so
+      // every list-driven consumer (website grid, knowledge page) stops
+      // rendering it — and therefore stops observing its document query —
+      // before the authoritative refetch below lands.
+      queryClient.setQueryData<Website[]>(websitesKeys.all, (current) =>
+        current ? current.filter((entry) => entry.id !== websiteId) : current,
+      );
+
+      // Cancel any in-flight document fetch for the deleted website, then
+      // evict its cached documents and website detail. Scoped strictly to the
+      // deleted website: other websites' document queries are untouched.
+      void queryClient.cancelQueries({ queryKey: knowledgeKeys.documents(websiteId) });
+      queryClient.removeQueries({ queryKey: knowledgeKeys.documents(websiteId) });
+      queryClient.removeQueries({ queryKey: websiteKeys.detail(websiteId) });
+
       void queryClient.invalidateQueries({ queryKey: websitesKeys.all });
     },
   });

@@ -66,6 +66,11 @@ export function WebsiteCard({
         <img
           src={imageSrc}
           alt=""
+          // Intrinsic 16:9 hint for the browser's pre-layout estimate; the
+          // responsive `aspect-[16/9] w-full` classes still govern the final
+          // rendered size, so the source's own aspect ratio never distorts it.
+          width={640}
+          height={360}
           className="aspect-[16/9] w-full object-cover"
           onError={() => setImageSrc(DEFAULT_WEBSITE_IMAGE)}
         />

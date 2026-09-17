@@ -40,7 +40,10 @@ export function knowledgeDocumentsOptions(websiteId: string | null) {
     queryKey: knowledgeKeys.documents(websiteId ?? ''),
     queryFn: () =>
       api.get<KnowledgeDocumentsResponse>(`/api/knowledge/websites/${websiteId}/documents`),
-    enabled: websiteId !== null,
+    // The key coalesces null/undefined to the empty string, so gate the query
+    // on every value that produces that bucket as well: `undefined` and `''`
+    // would otherwise pass a `!== null` check and fetch a malformed path.
+    enabled: websiteId !== null && websiteId !== undefined && websiteId !== '',
     // While the website is being embedded, poll so per-document progress (and
     // the derived website truth) stays current. Stops once the pipeline drains.
     refetchInterval: (query: { state: { data: unknown } }) =>
