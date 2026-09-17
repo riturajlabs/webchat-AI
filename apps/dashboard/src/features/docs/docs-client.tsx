@@ -64,7 +64,7 @@ function collectHeadings(root: HTMLElement): TocItem[] {
     const id = node.getAttribute('id');
     const label = node.textContent?.trim();
     const level = node.tagName.toLowerCase() === 'h3' ? 3 : 2;
-    if (id && label) {
+    if (id && label && !items.some((item) => item.id === id)) {
       items.push({ id, label, level });
     }
   });
@@ -89,6 +89,10 @@ export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
     }
 
     if (!found.length) {
+      return;
+    }
+
+    if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
       return;
     }
 

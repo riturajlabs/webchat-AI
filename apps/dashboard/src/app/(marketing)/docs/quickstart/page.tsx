@@ -40,17 +40,17 @@ export default function QuickstartPage() {
       />
 
       {/* Visual Progression Bar */}
-      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border/70 bg-muted/40 p-3 text-xs">
+      <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap rounded-xl border border-border/70 bg-muted/40 p-3 pb-3.5 text-xs">
         {PROGRESS_STEPS.map((step, idx) => (
           <span
             key={step}
-            className="inline-flex items-center gap-1.5 font-medium text-muted-foreground"
+            className="inline-flex shrink-0 items-center gap-2 font-medium text-muted-foreground"
           >
-            <span className="rounded bg-background px-2 py-0.5 font-mono text-[11px] text-foreground shadow-2xs">
+            <span className="shrink-0 rounded bg-background px-2.5 py-1 font-mono text-[11px] text-foreground shadow-2xs">
               {step}
             </span>
             {idx < PROGRESS_STEPS.length - 1 ? (
-              <span className="text-muted-foreground/40">&rarr;</span>
+              <span className="shrink-0 text-muted-foreground/40">&rarr;</span>
             ) : null}
           </span>
         ))}

@@ -75,6 +75,7 @@ export default function KnowledgeSourcesPage() {
         src="/docs-assets/screenshots/knowledge-source.png"
         alt="WebChat AI Source Mode Selector"
         caption="Select between Website, Documents (Upload-Only), and Website + Docs when creating an assistant."
+        priority
       />
 
       {/* Comparison Table */}

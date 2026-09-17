@@ -98,6 +98,7 @@ export default function DocumentUploadPage() {
         src="/docs-assets/screenshots/knowledge-base.png"
         alt="WebChat AI Knowledge Base Document Management"
         caption="Manage uploaded documents, inspect chunk counts, review processing status, and trigger retries."
+        priority
       />
 
       {/* Limits Table */}

@@ -38,6 +38,7 @@ export default function AnalyticsDocPage() {
         src="/docs-assets/screenshots/analytics.png"
         alt="WebChat AI Analytics Dashboard showing KPIs, message trends, popular questions, and token usage"
         caption="WebChat AI Analytics dashboard overview displaying message volume trends, response times, and query metrics."
+        priority
       />
 
       <DocSection

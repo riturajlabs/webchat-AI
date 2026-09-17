@@ -147,4 +147,45 @@ describe('DocsSidebar', () => {
       '/signup',
     );
   });
+
+  it('applies indented left padding to navigation links for hierarchy', () => {
+    render(<DocsSidebar />);
+    const link = screen.getByRole('link', { name: 'Overview' });
+    expect(link).toHaveClass('pl-5', 'pr-3', 'py-1.5');
+  });
+
+  it('renders section headings with smaller uppercase styling', () => {
+    render(<DocsSidebar />);
+    const heading = screen.getByText('Getting started');
+    expect(heading).toHaveClass('px-2.5', 'text-[11px]', 'uppercase');
+  });
+});
+
+import { DocsOnThisPage } from '@/features/docs/docs-client';
+import { StepCard } from './docs-ui';
+
+describe('DocsOnThisPage', () => {
+  it('collects StepCard headings and renders on-this-page links', () => {
+    render(
+      <div id="docs-content">
+        <StepCard step="01" id="create-account" title="Create your account">
+          <p>Account setup</p>
+        </StepCard>
+        <StepCard step="02" id="choose-source" title="Choose your knowledge source">
+          <p>Source selection</p>
+        </StepCard>
+        <DocsOnThisPage />
+      </div>,
+    );
+
+    expect(screen.getByRole('navigation', { name: 'On this page' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Create your account' })).toHaveAttribute(
+      'href',
+      '#create-account',
+    );
+    expect(screen.getByRole('link', { name: 'Choose your knowledge source' })).toHaveAttribute(
+      'href',
+      '#choose-source',
+    );
+  });
 });

@@ -29,6 +29,7 @@ export default function TestingPage() {
         src="/docs-assets/screenshots/widget-test.png"
         alt="WebChat AI Dashboard Widget Test Page"
         caption="The Widget Test page runs the real WebChat AI widget SDK in an isolated dashboard test page."
+        priority
       />
 
       {/* The Dashboard Widget Test Page */}

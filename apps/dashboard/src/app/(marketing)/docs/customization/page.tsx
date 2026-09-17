@@ -90,6 +90,7 @@ export default function CustomizationPage() {
         src="/docs-assets/screenshots/widget-customization.png"
         alt="WebChat AI Widget Customization Builder"
         caption="The dashboard Widget Builder includes real-time live preview for both desktop and mobile viewports."
+        priority
       />
 
       {/* Theme Presets */}

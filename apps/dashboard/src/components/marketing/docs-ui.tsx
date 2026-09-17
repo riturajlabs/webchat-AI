@@ -137,19 +137,21 @@ export function StepCard({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      id={id}
-      className={cn(
-        'relative flex flex-col gap-3 rounded-xl border border-border/70 bg-card p-5 shadow-xs transition-colors',
-        id && 'scroll-mt-24',
-      )}
-    >
+    <div className="relative flex flex-col gap-3 rounded-xl border border-border/70 bg-card p-5 shadow-xs transition-colors">
       <div className="flex items-start gap-3">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-blue-600/10 font-mono text-xs font-bold text-blue-600 dark:bg-blue-500/15 dark:text-blue-400">
           {step}
         </span>
         <div className="flex flex-col gap-0.5">
-          <h2 className="text-base font-semibold tracking-tight text-foreground">{title}</h2>
+          <h2
+            id={id}
+            className={cn(
+              'text-base font-semibold tracking-tight text-foreground',
+              id && 'scroll-mt-24',
+            )}
+          >
+            {title}
+          </h2>
           {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
         </div>
       </div>
@@ -162,24 +164,35 @@ export function ScreenshotFrame({
   src,
   alt,
   caption,
-  width = 1200,
-  height = 700,
+  width = 1870,
+  height = 900,
+  priority = false,
+  className,
 }: {
   src: string;
   alt: string;
   caption?: string;
   width?: number;
   height?: number;
+  priority?: boolean;
+  className?: string;
 }) {
   return (
     <figure className="my-2 flex flex-col gap-2">
-      <div className="overflow-hidden rounded-xl border border-border/80 bg-muted/30 p-1.5 shadow-sm">
+      <div
+        className={cn(
+          'overflow-hidden rounded-xl border border-border/80 bg-muted/30 p-1.5 shadow-sm',
+          className,
+        )}
+      >
         <Image
           src={src}
           alt={alt}
           width={width}
           height={height}
-          className="h-auto w-full rounded-lg object-cover"
+          priority={priority}
+          loading={priority ? 'eager' : 'lazy'}
+          className="h-auto w-full rounded-lg object-cover aspect-[1870/900]"
         />
       </div>
       {caption ? (

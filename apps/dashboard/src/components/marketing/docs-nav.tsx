@@ -31,7 +31,7 @@ function ActiveLink({
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'block rounded-md px-3 py-2 text-sm font-medium transition-colors',
+        'block rounded-md pl-5 pr-3 py-1.5 text-sm font-medium transition-colors',
         active
           ? 'bg-blue-600/10 text-blue-700 font-semibold dark:bg-blue-500/15 dark:text-blue-400'
           : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -82,7 +82,7 @@ function SidebarNav({ pathname }: { pathname: string }) {
       <nav aria-label="Documentation" className="flex flex-col gap-5">
         {groups.map((group) => (
           <div key={group.title} className="flex flex-col gap-1">
-            <p className="px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground/80">
+            <p className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
               {group.title}
             </p>
             {group.items.map((item) => (
@@ -200,7 +200,7 @@ export function DocsMobileNav() {
           >
             {filteredGroups.map((group) => (
               <div key={group.title} className="flex flex-col gap-1">
-                <p className="px-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground/80">
+                <p className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                   {group.title}
                 </p>
                 {group.items.map((item) => (

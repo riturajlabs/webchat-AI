@@ -284,7 +284,8 @@ export default function DocsOverviewPage() {
         <div className="overflow-hidden rounded-xl border border-border/80 bg-black/5 shadow-md dark:bg-black/30">
           <video
             controls
-            preload="metadata"
+            preload="none"
+            poster="/docs-assets/screenshots/landing-page.png"
             className="w-full aspect-video rounded-lg"
             src="/docs-assets/demo/app-demo.mp4"
           >
