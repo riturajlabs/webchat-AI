@@ -448,25 +448,14 @@ async def _run_crawl_job_impl(
                     failure_reason,
                 )
             return {"status": "failed", "pages": 0}
-        # Audit R-02: incremental crawls only upsert discovered pages, so
-        # documents whose URL vanished from the site must be reconciled away
-        # (including their embedded chunks). Best-effort: a reconciliation
-        # failure must not fail an otherwise successful crawl.
-        await _purge_removed_documents(
-            documents=documents,
-            vector=vector,
-            tenant_id=job.tenant_id,
-            website_id=job.website_id,
-            crawled_urls=session.stored_urls,
-            errored_urls=[error.url for error in session.errors],
-        )
         job.errors = session.errors
         job.pages_completed = stored
         job.pages_total = max(job.pages_total, stored)
         # FIND-02 single-terminator: only the attempt that wins the terminal
-        # transition may run the side effects below (website write, audit,
-        # usage rollup, knowledge handoff, cache invalidation). A stale or
-        # already-terminal duplicate returns early with no side effects.
+        # transition may run the side effects below (stale-document purge,
+        # website write, audit, usage rollup, knowledge handoff, cache
+        # invalidation). A stale or already-terminal duplicate returns early
+        # with no side effects.
         completed_at = utcnow()
         won = await crawl_jobs.finish_if_active(
             job.id,
@@ -492,6 +481,20 @@ async def _run_crawl_job_impl(
         job.completed_at = completed_at
         job.error_message = None
         job.updated_at = completed_at
+        # Audit R-02: incremental crawls only upsert discovered pages, so
+        # documents whose URL vanished from the site must be reconciled away
+        # (including their embedded chunks). Best-effort: a reconciliation
+        # failure must not fail an otherwise successful crawl. WK-01 (FIND-02):
+        # runs only after the terminal transition is won, so a losing duplicate
+        # never executes the purge.
+        await _purge_removed_documents(
+            documents=documents,
+            vector=vector,
+            tenant_id=job.tenant_id,
+            website_id=job.website_id,
+            crawled_urls=session.stored_urls,
+            errored_urls=[error.url for error in session.errors],
+        )
         await crawl_events.publish_completed(
             job.id, pages_completed=stored, pages_total=job.pages_total, chunks=0
         )

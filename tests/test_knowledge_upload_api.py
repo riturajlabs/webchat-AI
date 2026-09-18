@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import pytest
 from backend.api.deps import get_auth_service, get_knowledge_service
 from backend.core.config import get_settings
-from backend.core.errors import LimitReachedError, StorageFileNotFoundError
+from backend.core.errors import LimitReachedError
 from backend.main import create_app
 from backend.models.audit_log import AUDIT_KNOWLEDGE_DELETED, AUDIT_KNOWLEDGE_UPLOADED
 from backend.models.document import SOURCE_TYPE_FILE, SOURCE_TYPE_WEBSITE, Document
@@ -18,6 +18,7 @@ from tests.auth_helpers import build_auth_env
 from tests.fakes import (
     FakeAuditLogRepository,
     FakeDocumentRepository,
+    FakeStorageService,
     FakeWebsiteRepository,
 )
 from tests.http_helpers import register_verified_account
@@ -31,48 +32,6 @@ class RecordingEnqueue:
 
     async def __call__(self, document_id: str) -> None:
         self.document_ids.append(document_id)
-
-
-class FakeStorageService:
-    def __init__(self) -> None:
-        self.files: dict[tuple[str, str], bytes] = {}
-        self._seq = 0
-
-    async def upload(
-        self,
-        *,
-        tenant_id: str,
-        website_id: str,
-        document_id: str,
-        filename: str,
-        content: bytes,
-        mime_type: str,
-    ) -> str:
-        self._seq += 1
-        storage_key = f"fake-key-{self._seq}"
-        self.files[(tenant_id, storage_key)] = content
-        return storage_key
-
-    async def download(
-        self,
-        *,
-        tenant_id: str,
-        storage_key: str,
-    ) -> bytes:
-        if (tenant_id, storage_key) not in self.files:
-            raise StorageFileNotFoundError("File not found.")
-        return self.files[(tenant_id, storage_key)]
-
-    async def delete(
-        self,
-        *,
-        tenant_id: str,
-        storage_key: str,
-    ) -> bool:
-        if (tenant_id, storage_key) in self.files:
-            del self.files[(tenant_id, storage_key)]
-            return True
-        return False
 
 
 class FakeVectorRepository:

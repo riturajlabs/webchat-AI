@@ -131,18 +131,28 @@ def get_auth_service(
     )
 
 
+def get_storage_service(
+    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+) -> StorageService:
+    """Build the GridFS storage service for knowledge attachments."""
+    return GridFSStorageService(db)
+
+
 def get_account_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
+    storage: Annotated[StorageService, Depends(get_storage_service)],
 ) -> AccountService:
     """Build the account service with MongoDB-backed repositories.
 
     Self-service account deletion orchestrates an application-level cascade
     purge across every tenant-scoped collection (MongoDB has no FK CASCADE).
+    The GridFS storage service is injected so the purge also removes the
+    tenant's uploaded file binaries (FU-01) before their records are purged.
     """
     return AccountService(
         users=MongoUserRepository(db),
         audit=MongoAuditLogRepository(db),
-        purge=MongoTenantPurgeRepository(db),
+        purge=MongoTenantPurgeRepository(db, storage=storage),
     )
 
 
@@ -198,8 +208,13 @@ def get_subscription_service(
 def get_website_service(
     db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
     usage: Annotated[UsageService, Depends(get_usage_service)],
+    storage: Annotated[StorageService, Depends(get_storage_service)],
 ) -> WebsiteService:
-    """Build the website service with MongoDB-backed repositories."""
+    """Build the website service with MongoDB-backed repositories.
+
+    The GridFS storage service is injected so website deletion cascades to the
+    website's uploaded file binaries (FU-01) before their records are removed.
+    """
     return WebsiteService(
         websites=MongoWebsiteRepository(db),
         widgets=MongoWidgetRepository(db),
@@ -212,6 +227,7 @@ def get_website_service(
         feedback=MongoFeedbackRepository(db),
         crawl_jobs=MongoCrawlJobRepository(db),
         usage_records=MongoUsageRecordRepository(db),
+        storage=storage,
     )
 
 
@@ -232,13 +248,6 @@ def get_crawl_service(
         enqueue=enqueue_crawl_website,
         usage=usage,
     )
-
-
-def get_storage_service(
-    db: Annotated[AsyncIOMotorDatabase[Any], Depends(get_db)],
-) -> StorageService:
-    """Build the GridFS storage service for knowledge attachments."""
-    return GridFSStorageService(db)
 
 
 def get_knowledge_service(

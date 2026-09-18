@@ -14,6 +14,7 @@ from backend.core.config import Settings, get_settings
 from backend.core.errors import (
     AppError,
     DuplicateWebsiteError,
+    StorageError,
     WebsiteNotFoundError,
     WebsiteUrlRequiredError,
 )
@@ -49,6 +50,7 @@ from backend.repositories import (
 from backend.repositories.vector.base import VectorRepository
 from backend.services.auth import Principal
 from backend.services.billing import UsageService
+from backend.services.storage.base import StorageService
 from backend.utils.url_validator import normalize_url
 
 
@@ -87,6 +89,7 @@ class WebsiteService:
         feedback: FeedbackRepository | None = None,
         crawl_jobs: CrawlJobRepository | None = None,
         usage_records: UsageRecordRepository | None = None,
+        storage: StorageService | None = None,
     ) -> None:
         self._websites = websites
         self._widgets = widgets
@@ -107,6 +110,11 @@ class WebsiteService:
         self._feedback = feedback
         self._crawl_jobs = crawl_jobs
         self._usage_records = usage_records
+        # FU-01 (freeze remediation): uploaded file binaries live in GridFS
+        # outside the tenant-scoped collections, so they must be deleted through
+        # the StorageService when the owning website goes away. Optional so
+        # pre-existing call sites/tests keep working without storage.
+        self._storage = storage
 
     # ------------------------------------------------------------------ flows
 
@@ -311,6 +319,15 @@ class WebsiteService:
         # embedded chunks outlive the website indefinitely (storage growth and
         # retention exposure).
         if self._documents is not None:
+            # FU-01: uploaded-file binaries are GridFS orphans unless removed
+            # before their document records (and the storage_key they carry)
+            # disappear. Only `source_type == "file"` rows trigger storage
+            # deletion; website/crawl documents never touch GridFS. A storage
+            # failure aborts the cascade before the documents are deleted so
+            # the database never reports a completed purge while retaining the
+            # files that back the removed records.
+            if self._storage is not None:
+                await self._purge_file_storage(principal.tenant_id, website_id)
             await self._documents.delete_by_website(principal.tenant_id, website_id)
         if self._vector is not None:
             await self._vector.delete_by_website(principal.tenant_id, website_id)
@@ -338,6 +355,37 @@ class WebsiteService:
         )
 
     # ------------------------------------------------------------- internals
+
+    async def _purge_file_storage(self, tenant_id: str, website_id: str) -> None:
+        """Delete every stored file binary owned by a website (FU-01).
+
+        Only uploaded documents (`source_type == "file"`) have GridFS binaries.
+        Each deletion is tenant-scoped and attributable: the storage key is the
+        GridFS id whose metadata already carries `tenant_id`, `website_id` and
+        `document_id`, and `StorageService.delete` validates tenant ownership
+        before deleting. A deletion that reports failure is surfaced as a
+        `StorageError` instead of being swallowed, so a website is never marked
+        deleted while its file binaries are still retained.
+        """
+        documents_repo = self._documents
+        if documents_repo is None or self._storage is None:
+            return
+        documents = await documents_repo.list_by_website(tenant_id, website_id, source_type="file")
+        pending: list[tuple[str, str]] = [
+            (doc.id, doc.storage_key) for doc in documents if doc.storage_key
+        ]
+        if not pending:
+            return
+        failed: list[str] = []
+        for _doc_id, storage_key in pending:
+            deleted = await self._storage.delete(
+                tenant_id=tenant_id,
+                storage_key=storage_key,
+            )
+            if not deleted:
+                failed.append(storage_key)
+        if failed:
+            raise StorageError(f"Failed to delete stored files for website {website_id}: {failed}")
 
     @staticmethod
     def _embed_domain(url: str) -> str | None:

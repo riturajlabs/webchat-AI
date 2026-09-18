@@ -385,6 +385,199 @@ async def test_delete_website_purges_documents_and_vectors() -> None:
     assert await documents.find_by_id("tenant-b", other_doc.id) is not None
 
 
+async def test_delete_website_purges_uploaded_file_storage_and_preserves_cross_tenant() -> None:
+    """FU-01 (TEST A & TEST C): Website deletion cascades to GridFS storage for uploaded files only.
+
+    - Website documents do NOT trigger GridFS deletion.
+    - Uploaded file documents have their GridFS storage removed.
+    - Other tenant's GridFS objects remain completely untouched.
+    """
+    from backend.models.document import SOURCE_TYPE_FILE, SOURCE_TYPE_WEBSITE, Document
+    from backend.services.website import WebsiteService
+
+    from tests.fakes import (
+        FakeAuditLogRepository,
+        FakeDocumentRepository,
+        FakeStorageService,
+        FakeVectorRepository,
+        FakeWebsiteRepository,
+        FakeWidgetRepository,
+    )
+
+    websites = FakeWebsiteRepository()
+    widgets = FakeWidgetRepository()
+    audit = FakeAuditLogRepository()
+    documents = FakeDocumentRepository()
+    vector = FakeVectorRepository()
+    storage = FakeStorageService()
+    service = WebsiteService(
+        websites=websites,
+        widgets=widgets,
+        audit=audit,
+        documents=documents,
+        vector=vector,
+        storage=storage,
+    )
+    principal_a = make_principal(tenant_id="tenant-a")
+    created_a = await service.create_website(
+        principal=principal_a, name="A", url="https://a.example", ip_address=None, user_agent=None
+    )
+    site_a_id = created_a.website.id
+
+    # 1. Website document for site A (no storage binary)
+    web_doc = Document.new(
+        tenant_id=principal_a.tenant_id,
+        website_id=site_a_id,
+        url="https://a.example/page",
+        title="Page",
+        content="web page content",
+        checksum="c" * 64,
+        source_type=SOURCE_TYPE_WEBSITE,
+    )
+    await documents.upsert(web_doc)
+
+    # 2. Uploaded file document for site A with GridFS storage
+    storage_key_a = await storage.upload(
+        tenant_id=principal_a.tenant_id,
+        website_id=site_a_id,
+        document_id="doc-file-a",
+        filename="report.pdf",
+        content=b"%PDF-report-a",
+        mime_type="application/pdf",
+    )
+    file_doc_a = Document.new(
+        tenant_id=principal_a.tenant_id,
+        website_id=site_a_id,
+        url="file://upload/doc-file-a/report.pdf",
+        title="report.pdf",
+        content="pdf report content",
+        checksum="f" * 64,
+        source_type=SOURCE_TYPE_FILE,
+        file_name="report.pdf",
+        file_size_bytes=13,
+        mime_type="application/pdf",
+        storage_key=storage_key_a,
+    )
+    file_doc_a.id = "doc-file-a"
+    await documents.upsert(file_doc_a)
+
+    # 3. Tenant B has an uploaded file document on site B (TEST C: cross-tenant isolation)
+    principal_b = make_principal(tenant_id="tenant-b")
+    created_b = await service.create_website(
+        principal=principal_b, name="B", url="https://b.example", ip_address=None, user_agent=None
+    )
+    site_b_id = created_b.website.id
+    storage_key_b = await storage.upload(
+        tenant_id=principal_b.tenant_id,
+        website_id=site_b_id,
+        document_id="doc-file-b",
+        filename="other.pdf",
+        content=b"%PDF-other-b",
+        mime_type="application/pdf",
+    )
+    file_doc_b = Document.new(
+        tenant_id=principal_b.tenant_id,
+        website_id=site_b_id,
+        url="file://upload/doc-file-b/other.pdf",
+        title="other.pdf",
+        content="pdf other content",
+        checksum="g" * 64,
+        source_type=SOURCE_TYPE_FILE,
+        file_name="other.pdf",
+        file_size_bytes=12,
+        mime_type="application/pdf",
+        storage_key=storage_key_b,
+    )
+    file_doc_b.id = "doc-file-b"
+    await documents.upsert(file_doc_b)
+
+    # Pre-conditions
+    assert (principal_a.tenant_id, storage_key_a) in storage.files
+    assert (principal_b.tenant_id, storage_key_b) in storage.files
+
+    # Execute deletion of Site A by Tenant A
+    await service.delete_website(
+        principal=principal_a, website_id=site_a_id, ip_address=None, user_agent=None
+    )
+
+    # Assertions for TEST A:
+    # - website deletion behavior unchanged (website is soft-deleted)
+    site_a = websites.websites[site_a_id]
+    assert site_a is not None and site_a.deleted is True
+    assert site_a.status == WEBSITE_STATUS_DELETED
+    # - website document removed
+    assert await documents.find_by_id(principal_a.tenant_id, web_doc.id) is None
+    # - file document removed
+    assert await documents.find_by_id(principal_a.tenant_id, file_doc_a.id) is None
+    # - uploaded file storage deleted
+    assert (principal_a.tenant_id, storage_key_a) not in storage.files
+
+    # Assertions for TEST C (Cross-tenant safety):
+    # - Tenant B's storage remains completely untouched
+    assert (principal_b.tenant_id, storage_key_b) in storage.files
+    assert (
+        await storage.download(tenant_id="tenant-b", storage_key=storage_key_b) == b"%PDF-other-b"
+    )
+    # - Tenant B's document remains untouched
+    assert await documents.find_by_id(principal_b.tenant_id, file_doc_b.id) is not None
+
+
+async def test_delete_website_aborts_on_storage_deletion_failure() -> None:
+    """FU-01 failure semantics: If storage deletion fails, document records are not deleted."""
+    from backend.core.errors import StorageError
+    from backend.models.document import SOURCE_TYPE_FILE, Document
+    from backend.services.website import WebsiteService
+
+    from tests.fakes import (
+        FakeAuditLogRepository,
+        FakeDocumentRepository,
+        FakeStorageService,
+        FakeVectorRepository,
+        FakeWebsiteRepository,
+        FakeWidgetRepository,
+    )
+
+    websites = FakeWebsiteRepository()
+    widgets = FakeWidgetRepository()
+    audit = FakeAuditLogRepository()
+    documents = FakeDocumentRepository()
+    vector = FakeVectorRepository()
+    storage = FakeStorageService()
+    service = WebsiteService(
+        websites=websites,
+        widgets=widgets,
+        audit=audit,
+        documents=documents,
+        vector=vector,
+        storage=storage,
+    )
+    principal = make_principal(tenant_id="tenant-a")
+    created = await service.create_website(
+        principal=principal, name="A", url="https://a.example", ip_address=None, user_agent=None
+    )
+    # File record exists in documents, but has a missing storage_key -> storage.delete returns False
+    file_doc = Document.new(
+        tenant_id=principal.tenant_id,
+        website_id=created.website.id,
+        url="file://upload/missing/file.pdf",
+        title="file.pdf",
+        content="content",
+        checksum="m" * 64,
+        source_type=SOURCE_TYPE_FILE,
+        storage_key="missing-storage-key",
+    )
+    await documents.upsert(file_doc)
+
+    with pytest.raises(StorageError) as exc_info:
+        await service.delete_website(
+            principal=principal, website_id=created.website.id, ip_address=None, user_agent=None
+        )
+
+    assert "Failed to delete stored files for website" in str(exc_info.value)
+    # Documents were NOT deleted because storage deletion failed first
+    assert await documents.find_by_id(principal.tenant_id, file_doc.id) is not None
+
+
 async def test_delete_website_hides_it_from_list_and_get() -> None:
     env = build_website_env()
     principal = make_principal()

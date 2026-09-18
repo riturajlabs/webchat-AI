@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 from backend.ai.gemini import GenerationUsage
-from backend.core.errors import CrawlConflictError
+from backend.core.errors import CrawlConflictError, StorageFileNotFoundError
 from backend.core.security import new_id, utcnow
 from backend.models.admin_audit_log import AdminAuditLog
 from backend.models.api_key import API_KEY_STATUS_ACTIVE, API_KEY_STATUS_REVOKED, ApiKey
@@ -361,6 +361,50 @@ class FakeTenantPurgeRepository:
 
     async def purge_user_sessions(self, user_id: str) -> None:
         self.purged_user_sessions.append(user_id)
+
+
+class FakeStorageService:
+    """In-memory StorageService honoring the protocol's tenant-scoped semantics."""
+
+    def __init__(self) -> None:
+        self.files: dict[tuple[str, str], bytes] = {}
+        self._seq = 0
+
+    async def upload(
+        self,
+        *,
+        tenant_id: str,
+        website_id: str,
+        document_id: str,
+        filename: str,
+        content: bytes,
+        mime_type: str,
+    ) -> str:
+        self._seq += 1
+        storage_key = f"fake-key-{self._seq}"
+        self.files[(tenant_id, storage_key)] = content
+        return storage_key
+
+    async def download(
+        self,
+        *,
+        tenant_id: str,
+        storage_key: str,
+    ) -> bytes:
+        if (tenant_id, storage_key) not in self.files:
+            raise StorageFileNotFoundError("File not found.")
+        return self.files[(tenant_id, storage_key)]
+
+    async def delete(
+        self,
+        *,
+        tenant_id: str,
+        storage_key: str,
+    ) -> bool:
+        if (tenant_id, storage_key) in self.files:
+            del self.files[(tenant_id, storage_key)]
+            return True
+        return False
 
 
 class FakeAdminAuditLogRepository:
