@@ -156,15 +156,29 @@ describe('DocsSidebar', () => {
 
   it('renders section headings with smaller uppercase styling', () => {
     render(<DocsSidebar />);
-    const heading = screen.getByText('Getting started');
-    expect(heading).toHaveClass('px-2.5', 'text-[11px]', 'uppercase');
+    const toggle = screen.getByRole('button', { name: 'Getting started' });
+    expect(toggle).toHaveClass('px-2.5', 'text-[11px]', 'uppercase');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('link', { name: 'Overview' })).not.toBeInTheDocument();
   });
 });
 
-import { DocsOnThisPage } from '@/features/docs/docs-client';
+import { collectHeadings, DocsOnThisPage } from '@/features/docs/docs-client';
 import { StepCard } from './docs-ui';
 
 describe('DocsOnThisPage', () => {
+  it('assigns deterministic unique ids to repeated heading text', () => {
+    const root = document.createElement('main');
+    root.innerHTML = '<h2>Install</h2><h2>Install</h2><h2 id="install">Install</h2>';
+
+    const headings = collectHeadings(root);
+
+    expect(headings.map((heading) => heading.id)).toEqual(['install', 'install-1', 'install-2']);
+    expect(new Set(headings.map((heading) => heading.id)).size).toBe(3);
+  });
+
   it('collects StepCard headings and renders on-this-page links', () => {
     render(
       <div id="docs-content">

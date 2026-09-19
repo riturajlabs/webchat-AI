@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronDown, Menu, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Menu, Search, X } from 'lucide-react';
+import { useEffect, useId, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/features/auth/auth-context';
@@ -40,6 +40,59 @@ function ActiveLink({
     >
       {label}
     </Link>
+  );
+}
+
+function DocsNavGroup({
+  group,
+  pathname,
+  forceExpanded,
+  onItemClick,
+}: {
+  group: (typeof DOCS_NAV_GROUPS)[number];
+  pathname: string;
+  forceExpanded?: boolean;
+  onItemClick?: () => void;
+}) {
+  const groupId = useId();
+  const hasActiveItem = group.items.some((item) => isDocsActive(pathname, item.href));
+  const [expanded, setExpanded] = useState(true);
+  const isExpanded = forceExpanded || expanded;
+
+  useEffect(() => {
+    if (hasActiveItem) {
+      setExpanded(true);
+    }
+  }, [hasActiveItem]);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        className="flex items-center gap-1.5 rounded-md px-2.5 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-expanded={isExpanded}
+        aria-controls={groupId}
+        onClick={() => setExpanded((previous) => !previous)}
+      >
+        {isExpanded ? (
+          <ChevronDown className="size-3.5" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="size-3.5" aria-hidden="true" />
+        )}
+        <span>{group.title}</span>
+      </button>
+      <div id={groupId} hidden={!isExpanded} className="flex flex-col gap-1">
+        {group.items.map((item) => (
+          <ActiveLink
+            key={item.href}
+            href={item.href}
+            label={item.label}
+            pathname={pathname}
+            onClick={onItemClick}
+          />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -81,14 +134,12 @@ function SidebarNav({ pathname }: { pathname: string }) {
       </div>
       <nav aria-label="Documentation" className="flex flex-col gap-5">
         {groups.map((group) => (
-          <div key={group.title} className="flex flex-col gap-1">
-            <p className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-              {group.title}
-            </p>
-            {group.items.map((item) => (
-              <ActiveLink key={item.href} href={item.href} label={item.label} pathname={pathname} />
-            ))}
-          </div>
+          <DocsNavGroup
+            key={group.title}
+            group={group}
+            pathname={pathname}
+            forceExpanded={Boolean(query)}
+          />
         ))}
       </nav>
     </>
@@ -199,20 +250,13 @@ export function DocsMobileNav() {
             className="flex max-h-[60vh] flex-col gap-4 overflow-y-auto pr-1"
           >
             {filteredGroups.map((group) => (
-              <div key={group.title} className="flex flex-col gap-1">
-                <p className="px-2.5 pt-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  {group.title}
-                </p>
-                {group.items.map((item) => (
-                  <ActiveLink
-                    key={item.href}
-                    href={item.href}
-                    label={item.label}
-                    pathname={pathname}
-                    onClick={() => setIsOpen(false)}
-                  />
-                ))}
-              </div>
+              <DocsNavGroup
+                key={group.title}
+                group={group}
+                pathname={pathname}
+                forceExpanded={Boolean(mobileQuery)}
+                onItemClick={() => setIsOpen(false)}
+              />
             ))}
           </nav>
         </div>

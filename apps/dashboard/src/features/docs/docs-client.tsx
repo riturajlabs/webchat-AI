@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 import { cn } from '@/lib/utils';
 
@@ -58,56 +59,156 @@ interface TocItem {
   level?: number;
 }
 
-function collectHeadings(root: HTMLElement): TocItem[] {
+function slugify(text: string): string {
+  return (
+    text
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '')
+      .trim()
+      .replace(/\s+/g, '-') || 'section'
+  );
+}
+
+export function collectHeadings(root: HTMLElement): TocItem[] {
   const items: TocItem[] = [];
-  root.querySelectorAll('h2[id], h3[id]').forEach((node) => {
-    const id = node.getAttribute('id');
+  const usedIds = new Set<string>();
+  const slugCounts = new Map<string, number>();
+
+  const headingNodes = root.querySelectorAll<HTMLElement>('h2, h3');
+  headingNodes.forEach((node) => {
+    // Exclude headings in hidden containers or breadcrumbs/headers
+    if (node.closest('[hidden]') || node.closest('[aria-hidden="true"]')) {
+      return;
+    }
+
     const label = node.textContent?.trim();
+    if (!label) {
+      return;
+    }
+
+    const existingId = node.getAttribute('id');
+    let id = existingId;
+    if (!id || usedIds.has(id)) {
+      // Check if parent section has an id
+      const sectionId = node.closest('section[id]')?.getAttribute('id');
+      if (sectionId && !usedIds.has(sectionId)) {
+        id = sectionId;
+      } else {
+        const baseSlug = slugify(label);
+        const count = slugCounts.get(baseSlug) ?? 0;
+        id = count === 0 ? baseSlug : `${baseSlug}-${count}`;
+        while (usedIds.has(id)) {
+          const nextCount = (slugCounts.get(baseSlug) ?? count) + 1;
+          slugCounts.set(baseSlug, nextCount);
+          id = `${baseSlug}-${nextCount}`;
+        }
+        slugCounts.set(baseSlug, (slugCounts.get(baseSlug) ?? count) + 1);
+      }
+      node.setAttribute('id', id);
+    }
+    usedIds.add(id);
+
+    // Ensure scroll margin so sticky header does not obscure heading
+    if (!node.classList.contains('scroll-mt-24')) {
+      node.classList.add('scroll-mt-24');
+    }
+
     const level = node.tagName.toLowerCase() === 'h3' ? 3 : 2;
-    if (id && label && !items.some((item) => item.id === id)) {
+    if (!items.some((item) => item.id === id)) {
       items.push({ id, label, level });
     }
   });
+
   return items;
 }
 
 /**
- * "On this page" table of contents. Reads section headings (h2 and h3 with an id)
+ * "On this page" table of contents. Reads section headings (h2 and h3)
  * from the main content, highlights the one in view, and links to the anchors.
  * Falls back to the section ids the page declares.
  */
-export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
+const DEFAULT_SECTIONS: TocItem[] = [];
+
+export function DocsOnThisPage({ sections = DEFAULT_SECTIONS }: { sections?: TocItem[] }) {
+  const pathname = usePathname();
   const [items, setItems] = useState<TocItem[]>(() => (sections.length ? sections : []));
   const [activeId, setActiveId] = useState<string | null>(sections.length ? sections[0]!.id : null);
 
   useEffect(() => {
-    const root = document.getElementById('docs-content');
-    const found = root ? collectHeadings(root) : [];
-    if (found.length) {
-      setItems(found);
-      setActiveId(found[0]?.id ?? null);
-    }
+    let unmounted = false;
 
-    if (!found.length) {
-      return;
-    }
+    const syncHeadings = () => {
+      const root = document.getElementById('docs-content');
+      const found = root ? collectHeadings(root) : [];
+      if (unmounted) return;
 
+      if (found.length) {
+        setItems(found);
+
+        // Check if there is an initial hash in the URL
+        const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '';
+        if (hash && found.some((item) => item.id === hash)) {
+          setActiveId(hash);
+          const target = document.getElementById(hash);
+          if (target) {
+            const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            target.scrollIntoView({
+              behavior: prefersReduced ? 'auto' : 'smooth',
+              block: 'start',
+            });
+          }
+        } else {
+          setActiveId(found[0]?.id ?? null);
+        }
+      } else if (sections.length) {
+        setItems(sections);
+        setActiveId(sections[0]?.id ?? null);
+      } else {
+        setItems([]);
+        setActiveId(null);
+      }
+    };
+
+    // Sync immediately and schedule a frame for route transitions
+    syncHeadings();
+    const timer = setTimeout(syncHeadings, 50);
+
+    return () => {
+      unmounted = true;
+      clearTimeout(timer);
+    };
+  }, [pathname, sections]);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || typeof IntersectionObserver === 'undefined') {
       return;
     }
+    if (!items.length) {
+      return;
+    }
+
+    const visibleHeadings = new Set<string>();
 
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            setActiveId(entry.target.id);
+            visibleHeadings.add(entry.target.id);
+          } else {
+            visibleHeadings.delete(entry.target.id);
           }
         }
+
+        // Active heading is the first visible heading from top to bottom
+        const firstVisible = items.find((item) => visibleHeadings.has(item.id));
+        if (firstVisible) {
+          setActiveId(firstVisible.id);
+        }
       },
-      { rootMargin: '-96px 0px -60% 0px', threshold: 0 },
+      { rootMargin: '-96px 0px -60% 0px', threshold: [0, 1] },
     );
 
-    for (const item of found) {
+    for (const item of items) {
       const node = document.getElementById(item.id);
       if (node) {
         observer.observe(node);
@@ -115,7 +216,24 @@ export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
     }
 
     return () => observer.disconnect();
-  }, []);
+  }, [items]);
+
+  const handleLinkClick = (e: React.MouseEvent<HTMLAnchorElement>, id: string) => {
+    e.preventDefault();
+    const target = document.getElementById(id);
+    if (target) {
+      const prefersReduced =
+        typeof window !== 'undefined' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({
+        behavior: prefersReduced ? 'auto' : 'smooth',
+        block: 'start',
+      });
+      window.history.pushState(null, '', `#${id}`);
+      setActiveId(id);
+      target.focus({ preventScroll: true });
+    }
+  };
 
   if (items.length === 0) {
     return null;
@@ -131,6 +249,7 @@ export function DocsOnThisPage({ sections = [] }: { sections?: TocItem[] }) {
           <a
             key={item.id}
             href={`#${item.id}`}
+            onClick={(e) => handleLinkClick(e, item.id)}
             className={cn(
               'border-l transition-colors hover:text-foreground',
               item.level === 3

@@ -1383,6 +1383,12 @@ export const WIDGET_STYLES = `
     color: var(--wc-primary);
   }
 
+  .wc-footer-link:focus-visible {
+    outline: 2px solid var(--wc-primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
   /* ---- Reduced motion ------------------------------------------------------- */
 
   @media (prefers-reduced-motion: reduce) {

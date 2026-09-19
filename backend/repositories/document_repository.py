@@ -31,7 +31,7 @@ class DocumentRepository(Protocol):
 
     # Phase 13 billing: tenant-wide document count for the `max_documents`
     # plan limit (live count, not event tally).
-    async def count_by_tenant(self, tenant_id: str) -> int: ...
+    async def count_by_tenant(self, tenant_id: str, *, source_type: str | None = None) -> int: ...
 
     async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int: ...
 
@@ -107,8 +107,11 @@ class MongoDocumentRepository:
             query.update(self._build_source_filter(source_type))
         return await self._collection.count_documents(query)
 
-    async def count_by_tenant(self, tenant_id: str) -> int:
-        return await self._collection.count_documents({"tenant_id": tenant_id})
+    async def count_by_tenant(self, tenant_id: str, *, source_type: str | None = None) -> int:
+        query: dict[str, Any] = {"tenant_id": tenant_id}
+        if source_type is not None:
+            query.update(self._build_source_filter(source_type))
+        return await self._collection.count_documents(query)
 
     async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int:
         return await self._collection.count_documents(

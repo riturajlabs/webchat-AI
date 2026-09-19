@@ -153,6 +153,7 @@ async def test_get_current_usage_reports_totals_and_live_counts(env) -> None:
             title="Page",
             content="Hello",
             checksum="c1",
+            source_type="file",
         )
     )
 

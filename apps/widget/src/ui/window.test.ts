@@ -80,17 +80,19 @@ describe('createChatWindow', () => {
     const close = windowApi.element.querySelector<HTMLButtonElement>(
       '.wc-close',
     ) as HTMLButtonElement;
-    const textarea = windowApi.composer.input;
+    const footerLink = windowApi.element.querySelector<HTMLAnchorElement>(
+      '.wc-footer-link',
+    ) as HTMLAnchorElement;
 
-    // Tab on the last enabled focusable (composer) wraps to the first (close).
-    textarea.focus();
-    pressKey(textarea, 'Tab');
+    // Tab on the last enabled focusable (footer link) wraps to the first (close).
+    footerLink.focus();
+    pressKey(footerLink, 'Tab');
     expect(document.activeElement).toBe(close);
 
-    // Shift+Tab on the first wraps to the last.
+    // Shift+Tab on the first wraps to the last (footer link).
     close.focus();
     pressKey(close, 'Tab', { shift: true });
-    expect(document.activeElement).toBe(textarea);
+    expect(document.activeElement).toBe(footerLink);
     windowApi.releaseFocus();
   });
 
@@ -359,6 +361,13 @@ describe('createChatWindow', () => {
     expect(footer).toBeTruthy();
     expect(footer?.hidden).toBe(false);
     expect(footer?.textContent).toContain('Powered by WebChat AI');
+    const footerLink = footer?.querySelector<HTMLAnchorElement>('a.wc-footer-link');
+    expect(footerLink).toBeTruthy();
+    expect(footerLink?.href).toBe('https://webchatai.com/');
+    expect(footerLink?.target).toBe('_blank');
+    expect(footerLink?.rel).toBe('noopener noreferrer');
+    expect(footerLink?.getAttribute('aria-label')).toBe('Visit WebChat AI website');
+    expect(footerLink?.textContent).toBe('WebChat AI');
   });
 
   it('hides the brand footer when branding is disabled', () => {

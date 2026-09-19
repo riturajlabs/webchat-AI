@@ -23,6 +23,7 @@ from datetime import datetime
 
 from backend.core.errors import LimitReachedError, TenantNotFoundError
 from backend.core.security import utcnow
+from backend.models.document import SOURCE_TYPE_FILE
 from backend.models.plan import Plan, get_plan
 from backend.models.usage_event import (
     USAGE_EVENT_CRAWL_PAGES,
@@ -129,7 +130,7 @@ class UsageService:
         plan = await self.get_plan(tenant_id)
         totals = await self._events.totals_by_type_since(tenant_id, since=_month_start(self._now()))
         websites = await self._websites.count_by_tenant(tenant_id)
-        documents = await self._documents.count_by_tenant(tenant_id)
+        documents = await self._documents.count_by_tenant(tenant_id, source_type=SOURCE_TYPE_FILE)
 
         def metric(name: str, used: int) -> UsageMetric:
             limit = self._limit_for(plan, name)
@@ -225,7 +226,7 @@ class UsageService:
         if metric == "websites":
             return await self._websites.count_by_tenant(tenant_id)
         if metric == "documents":
-            return await self._documents.count_by_tenant(tenant_id)
+            return await self._documents.count_by_tenant(tenant_id, source_type=SOURCE_TYPE_FILE)
         totals = await self._events.totals_by_type_since(tenant_id, since=_month_start(self._now()))
         return totals.total(metric)
 

@@ -918,9 +918,17 @@ class FakeDocumentRepository:
             ]
         )
 
-    async def count_by_tenant(self, tenant_id: str) -> int:
+    async def count_by_tenant(self, tenant_id: str, *, source_type: str | None = None) -> int:
         return len(
-            [document for document in self._documents.values() if document.tenant_id == tenant_id]
+            [
+                document
+                for document in self._documents.values()
+                if document.tenant_id == tenant_id
+                and (
+                    source_type is None
+                    or getattr(document, "source_type", "website") == source_type
+                )
+            ]
         )
 
     async def count_failed_by_website(self, tenant_id: str, website_id: str) -> int:

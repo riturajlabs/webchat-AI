@@ -108,7 +108,10 @@ export default function DocsOverviewPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Choose your path
           </p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+          <h2
+            id="choose-path-heading"
+            className="scroll-mt-24 mt-1 text-2xl font-bold tracking-tight text-foreground"
+          >
             Start with the right guide for your role
           </h2>
         </div>
@@ -156,7 +159,10 @@ export default function DocsOverviewPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Explore Documentation
           </p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-foreground">
+          <h2
+            id="documentation-topics-heading"
+            className="scroll-mt-24 mt-1 text-2xl font-bold tracking-tight text-foreground"
+          >
             Comprehensive platform documentation
           </h2>
         </div>
@@ -274,7 +280,10 @@ export default function DocsOverviewPage() {
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Watch Walkthrough
           </p>
-          <h2 className="mt-1 text-xl font-bold tracking-tight text-foreground">
+          <h2
+            id="demo-video-heading"
+            className="scroll-mt-24 mt-1 text-xl font-bold tracking-tight text-foreground"
+          >
             WebChat AI in action
           </h2>
           <p className="text-sm text-muted-foreground">

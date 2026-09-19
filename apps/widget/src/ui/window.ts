@@ -84,6 +84,11 @@ const FOCUSABLE_SELECTOR =
  */
 export const BANNER_AUTO_DISMISS_MS = 15_000;
 
+const CANONICAL_SITE_URL = (import.meta.env.VITE_SITE_URL ?? 'https://webchatai.com').replace(
+  /\/$/,
+  '',
+);
+
 export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   const root = document.createElement('section');
   root.className = 'wc-window';
@@ -147,7 +152,15 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
   footer.setAttribute('role', 'contentinfo');
   footer.hidden = !options.config.branding;
   const footerText = document.createElement('span');
-  footerText.textContent = 'Powered by WebChat AI';
+  footerText.appendChild(document.createTextNode('Powered by '));
+  const footerLink = document.createElement('a');
+  footerLink.className = 'wc-footer-link';
+  footerLink.href = CANONICAL_SITE_URL;
+  footerLink.target = '_blank';
+  footerLink.rel = 'noopener noreferrer';
+  footerLink.textContent = 'WebChat AI';
+  footerLink.setAttribute('aria-label', 'Visit WebChat AI website');
+  footerText.appendChild(footerLink);
   footer.appendChild(footerLogo());
   footer.appendChild(footerText);
 
@@ -272,7 +285,9 @@ export function createChatWindow(options: ChatWindowOptions): ChatWindow {
 
   function getFocusables(): HTMLElement[] {
     const nodes = root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-    return Array.from(nodes).filter((node) => !node.hidden);
+    return Array.from(nodes).filter(
+      (node) => !node.hidden && (!footer.hidden || !footer.contains(node)),
+    );
   }
 
   let trapped = false;
