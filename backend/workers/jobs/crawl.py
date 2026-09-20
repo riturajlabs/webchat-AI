@@ -33,12 +33,14 @@ from backend.models.crawl_job import (
     CRAWL_STATUS_PROCESSING,
     CRAWL_STATUS_RUNNING,
 )
+from backend.models.usage_event import USAGE_EVENT_CRAWL_PAGES, UsageEvent
 from backend.models.usage_record import USAGE_COUNTER_CRAWL_PAGES, usage_date_key
 from backend.models.website import WEBSITE_STATUS_FAILED, WEBSITE_STATUS_READY
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoCrawlJobRepository,
     MongoDocumentRepository,
+    MongoUsageEventRepository,
     MongoUsageRecordRepository,
     MongoVectorRepository,
     MongoWebsiteRepository,
@@ -142,6 +144,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         websites=MongoWebsiteRepository(db),
         audit=MongoAuditLogRepository(db),
         usage=MongoUsageRecordRepository(db),
+        events=MongoUsageEventRepository(db),
         enqueue_knowledge=enqueue_process_website_documents,
         cache=cache,
     )
@@ -156,6 +159,7 @@ async def _run_crawl_job(
     websites: Any,
     audit: Any,
     usage: Any = None,
+    events: Any = None,
     enqueue_knowledge: Any = None,
     cache: CacheStore | None = None,
     vector: Any = None,
@@ -180,6 +184,7 @@ async def _run_crawl_job(
             websites=websites,
             audit=audit,
             usage=usage,
+            events=events,
             enqueue_knowledge=enqueue_knowledge,
             cache=cache,
             vector=vector,
@@ -198,6 +203,7 @@ async def _run_crawl_job_impl(
     websites: Any,
     audit: Any,
     usage: Any = None,
+    events: Any = None,
     enqueue_knowledge: Any = None,
     cache: CacheStore | None = None,
     vector: Any = None,
@@ -525,6 +531,17 @@ async def _run_crawl_job_impl(
         # Best-effort: usage-tracking outages must not fail the crawl job.
         await _record_crawl_pages(
             usage=usage,
+            tenant_id=job.tenant_id,
+            website_id=job.website_id,
+            count=stored,
+        )
+        # Phase 13 billing: `check_limit("crawl_pages")` and the usage snapshot
+        # read the monthly `usage_events` ledger, so the same winning run must
+        # append one crawl_pages event per stored page (plan `max_crawl_pages`).
+        # Best-effort, and winner-gated with the rollup above: a losing or stale
+        # duplicate returns before this branch, so nothing can double-record.
+        await _record_crawl_pages_usage_event(
+            events=events,
             tenant_id=job.tenant_id,
             website_id=job.website_id,
             count=stored,
@@ -940,5 +957,42 @@ async def _record_crawl_pages(
     except Exception as exc:  # noqa: BLE001 - best-effort usage tracking
         logger.warning(
             "usage rollup increment failed (counter=crawl_pages): %s",
+            exc,
+        )
+
+
+async def _record_crawl_pages_usage_event(
+    *,
+    events: Any,
+    tenant_id: str,
+    website_id: str,
+    count: int,
+) -> None:
+    """Append one monthly `crawl_pages` usage event for billing enforcement.
+
+    Phase 13 billing (`UsageService.check_limit` / `get_current_usage`) reads
+    `crawl_pages` from the `usage_events` ledger (plan `max_crawl_pages`, tied
+    to "crawl_pages usage_events per calendar month" in `backend/models/plan.py`),
+    so every page stored by the winning completed crawl must be appended here.
+    Best-effort: an accounting outage must never fail the crawl job (mirrors
+    `_record_crawl_pages`). Runs only inside the `finish_if_active` winner
+    branch of the completed path, so a losing or stale duplicate can never
+    double-record.
+    """
+    if events is None or count <= 0:
+        return
+    try:
+        await events.record(
+            UsageEvent.new(
+                tenant_id=tenant_id,
+                user_id=None,
+                website_id=website_id,
+                event_type=USAGE_EVENT_CRAWL_PAGES,
+                quantity=count,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - best-effort usage tracking
+        logger.warning(
+            "usage event record failed (event=crawl_pages): %s",
             exc,
         )
