@@ -90,9 +90,7 @@ def _child_enqueue_deferred(ctx: dict[str, Any]) -> Any:
     queue = resolve_child_queue(ctx)
     tenant_id = resolve_child_tenant(ctx)
 
-    async def enqueue(
-        document_id: str, delay_seconds: float, run_id: str | None = None
-    ) -> None:
+    async def enqueue(document_id: str, delay_seconds: float, run_id: str | None = None) -> None:
         await queue.enqueue(
             "process_document",
             payload={"document_id": document_id, "run_id": run_id},
@@ -246,9 +244,7 @@ async def _run_process_website(
 ) -> dict[str, Any]:
     # Phase 17B: children follow the parent's backend. Under ARQ this is the
     # identical `enqueue_process_document` call production makes today.
-    return await processor.process_website_documents(
-        website_id, enqueue=_child_enqueue(ctx)
-    )
+    return await processor.process_website_documents(website_id, enqueue=_child_enqueue(ctx))
 
 
 __all__ = [

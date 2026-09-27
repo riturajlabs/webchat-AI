@@ -62,8 +62,7 @@ def poll_ops_idle(run: float = ARQ_DEFAULT_POLL_DELAY_SECONDS) -> dict[str, int]
 
 
 INDEX_MAINTENANCE_CLAIM = (
-    "I. index maintenance is server-side (WiredTiger B-tree applies per write); "
-    "no app commands."
+    "I. index maintenance is server-side (WiredTiger B-tree applies per write); no app commands."
 )
 
 

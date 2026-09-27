@@ -27,8 +27,11 @@ def _key(**overrides: object) -> str:
     fields: dict[str, object] = {"to": "a@b.c", "subject": "S", "text": "T", "html": "<p>H</p>"}
     fields.update(overrides)
     return build_idempotency_key(
-        "tenant-a", to=str(fields["to"]), subject=str(fields["subject"]),
-        text=str(fields["text"]), html=str(fields["html"]),
+        "tenant-a",
+        to=str(fields["to"]),
+        subject=str(fields["subject"]),
+        text=str(fields["text"]),
+        html=str(fields["html"]),
     )
 
 
@@ -93,12 +96,15 @@ def test_key_carries_no_secret_or_timestamp() -> None:
 
 
 def test_extra_is_folded_in_deterministically() -> None:
-    a = build_idempotency_key("t", to="a@b.c", subject="S", text="T", html="H",
-                              extra={"template": "welcome"})
-    b = build_idempotency_key("t", to="a@b.c", subject="S", text="T", html="H",
-                              extra={"template": "welcome"})
-    c = build_idempotency_key("t", to="a@b.c", subject="S", text="T", html="H",
-                              extra={"template": "receipt"})
+    a = build_idempotency_key(
+        "t", to="a@b.c", subject="S", text="T", html="H", extra={"template": "welcome"}
+    )
+    b = build_idempotency_key(
+        "t", to="a@b.c", subject="S", text="T", html="H", extra={"template": "welcome"}
+    )
+    c = build_idempotency_key(
+        "t", to="a@b.c", subject="S", text="T", html="H", extra={"template": "receipt"}
+    )
     assert a == b != c
 
 
@@ -109,8 +115,11 @@ def test_extra_is_folded_in_deterministically() -> None:
 
 def test_key_for_payload_matches_the_canonical_fields() -> None:
     assert key_for_payload("tenant-a", _PAYLOAD) == build_idempotency_key(
-        "tenant-a", to=_PAYLOAD["to"], subject=_PAYLOAD["subject"],
-        text=_PAYLOAD["text"], html=_PAYLOAD["html"],
+        "tenant-a",
+        to=_PAYLOAD["to"],
+        subject=_PAYLOAD["subject"],
+        text=_PAYLOAD["text"],
+        html=_PAYLOAD["html"],
     )
 
 

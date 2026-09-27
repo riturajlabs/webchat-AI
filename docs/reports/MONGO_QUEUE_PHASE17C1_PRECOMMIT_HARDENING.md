@@ -227,7 +227,8 @@ Phase 17C's retention TTL was:
 ```python
 if RETENTION_INDEX_NAME not in existing:
     await self._queue.collection.create_index(
-        "finished_at", expireAfterSeconds=int(self._retention_days * 86_400),
+        "finished_at",
+        expireAfterSeconds=int(self._retention_days * 86_400),
         name=RETENTION_INDEX_NAME,
     )
 ```

@@ -55,17 +55,16 @@ async def test_crawl_stale_worker_cannot_corrupt_terminal_state(queue: MongoQueu
     assert crawl_a is not None
     await fence.crawl_side_effect("cj-1", "home")  # A does partial work
     # A crashes (no completion). Lease expires at base+120.
-    crawl_b = await queue.claim(
-        "crawl-b", now=base + timedelta(seconds=queue.lease_seconds + 1)
-    )
+    crawl_b = await queue.claim("crawl-b", now=base + timedelta(seconds=queue.lease_seconds + 1))
     assert crawl_b is not None
     result_b = await crawl_handler(
         {"crawl_job_id": "cj-1"}, _ctx(crawl_b, "crawl-b", "tenant-a"), fence=fence
     )
     assert result_b["winner"] is True
-    assert await queue.complete_job(
-        job_id, "crawl-b", execution_version=crawl_b.execution_version
-    ) is True
+    assert (
+        await queue.complete_job(job_id, "crawl-b", execution_version=crawl_b.execution_version)
+        is True
+    )
 
     # A later tries to complete with its stale (already reclaimed) execution.
     assert (
@@ -135,10 +134,7 @@ async def test_document_checksum_idempotency_under_redelivery(queue: MongoQueue)
     )
     assert result_b["skipped"] is True
     assert (
-        await queue.complete_job(
-            job_id, "worker-b", execution_version=b.execution_version
-        )
-        is True
+        await queue.complete_job(job_id, "worker-b", execution_version=b.execution_version) is True
     )
     # Exactly one embed side effect happened.
     assert len([e for e in store.events if e == "embedded:d1"]) == 1
@@ -175,10 +171,7 @@ async def test_email_duplicate_delivery_without_idempotency(queue: MongoQueue) -
     )
     assert outcome["duplicated"] is False
     assert (
-        await queue.complete_job(
-            job_id, "worker-b", execution_version=b.execution_version
-        )
-        is True
+        await queue.complete_job(job_id, "worker-b", execution_version=b.execution_version) is True
     )
     # DUPLICATE DELIVERY: the same logical job produced two emails.
     assert provider.sent_count == 2
@@ -211,10 +204,7 @@ async def test_email_provider_idempotency_prevents_duplicate(queue: MongoQueue) 
     assert second["duplicated"] is True
     assert second["message_id"] == first["message_id"]
     assert (
-        await queue.complete_job(
-            job_id, "worker-b", execution_version=b.execution_version
-        )
-        is True
+        await queue.complete_job(job_id, "worker-b", execution_version=b.execution_version) is True
     )
     # Exactly ONE physical email despite two executions.
     assert provider.sent_count == 1

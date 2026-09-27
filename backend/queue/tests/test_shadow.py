@@ -24,9 +24,7 @@ _EMAIL = {"to": "a@b.c", "subject": "S", "text": "T", "html": "<p>H</p>"}
 
 
 def _pair() -> tuple[ArqQueueAdapter, MongoQueueAdapter]:
-    return ArqQueueAdapter("redis://127.0.0.1:1"), MongoQueueAdapter.__new__(
-        MongoQueueAdapter
-    )
+    return ArqQueueAdapter("redis://127.0.0.1:1"), MongoQueueAdapter.__new__(MongoQueueAdapter)
 
 
 def test_shadow_plan_covers_every_registered_function() -> None:
@@ -34,8 +32,7 @@ def test_shadow_plan_covers_every_registered_function() -> None:
 
 
 def test_describe_uses_the_shared_registry() -> None:
-    record = describe("arq", "process_document", tenant_id="t1", dedup_key="k",
-                      payload=_PAYLOAD)
+    record = describe("arq", "process_document", tenant_id="t1", dedup_key="k", payload=_PAYLOAD)
     assert record.function == "process_document"
     assert record.tenant_id == "t1"
     assert record.dedup_key == "k"
@@ -63,8 +60,7 @@ def test_describe_does_not_store_payload_values() -> None:
 
 def test_both_backends_agree_on_a_valid_submission() -> None:
     arq, mongo = _pair()
-    diff = compare(arq, mongo, "process_document", tenant_id="t1", dedup_key="k",
-                   payload=_PAYLOAD)
+    diff = compare(arq, mongo, "process_document", tenant_id="t1", dedup_key="k", payload=_PAYLOAD)
     assert diff.agrees is True
     assert diff.differences == ()
     assert len(diff.records) == 2

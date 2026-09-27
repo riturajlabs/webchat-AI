@@ -2675,8 +2675,7 @@ class FakeEmailDeliveryRepository:
             # The stored key is part of the row's identity, exactly as the
             # Mongo filter requires. A payload that disagrees is refused rather
             # than allowed to re-point the row at a different send.
-            existing.provider_key != provider_key
-            or not _claimable(existing, now, stale_after)
+            existing.provider_key != provider_key or not _claimable(existing, now, stale_after)
         ):
             return EmailDeliveryClaim(
                 record=existing,

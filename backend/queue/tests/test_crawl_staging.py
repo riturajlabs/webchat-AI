@@ -136,9 +136,7 @@ class CrawlStaging:
     def usage_events(self) -> int:
         """Total `crawl_pages` in the ledger: events carry `quantity=count`."""
         return sum(
-            event.quantity
-            for event in self.events.events
-            if event.event_type == "crawl_pages"
+            event.quantity for event in self.events.events if event.event_type == "crawl_pages"
         )
 
     def usage_event_count(self) -> int:
@@ -946,9 +944,7 @@ async def test_find03_accounting_is_exactly_once_under_a_reclaim(
 
 
 @pytest.mark.parametrize("kind", ["completed", "failed"])
-async def test_find03_a_failed_crawl_is_also_monotonic(
-    staging: CrawlStaging, kind: str
-) -> None:
+async def test_find03_a_failed_crawl_is_also_monotonic(staging: CrawlStaging, kind: str) -> None:
     """§14: protect every real terminal status, not just `completed`.
 
     `failed` is the other terminal status in the model. A crawl that fails is
@@ -977,9 +973,7 @@ async def test_find03_a_failed_crawl_is_also_monotonic(
     assert after is not None
     assert after.status == kind, f"a terminal '{kind}' crawl was resurrected"
     assert after.active is False
-    assert not await staging.jobs.finish_if_active(
-        staging.job.id, TENANT, terminal_status=kind
-    )
+    assert not await staging.jobs.finish_if_active(staging.job.id, TENANT, terminal_status=kind)
 
 
 async def test_find03_a_rejected_write_stops_the_duplicate_before_it_crawls(

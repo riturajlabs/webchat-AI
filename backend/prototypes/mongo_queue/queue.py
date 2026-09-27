@@ -386,9 +386,7 @@ class MongoQueue:
         Mirrors the repository rule "every query is scoped by tenant_id".
         """
         self._op()
-        doc = await self._collection.find_one(
-            {"_id": job_id, "tenant_id": tenant_id}
-        )
+        doc = await self._collection.find_one({"_id": job_id, "tenant_id": tenant_id})
         return Job.from_doc(doc)
 
     async def list_jobs(self, status: str | None = None, limit: int = 50) -> list[Job]:

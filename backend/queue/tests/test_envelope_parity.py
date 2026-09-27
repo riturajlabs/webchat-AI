@@ -144,9 +144,7 @@ async def test_comparator_detects_a_wrong_timeout_on_the_mongo_side(
     assert parity.arq.timeout_seconds == 3600, "crawl must keep the production 3600s timeout"
     assert parity.mongo.timeout_seconds == 3600
 
-    corrupted = compare_envelopes(
-        parity.arq, _corrupt(parity.mongo, "timeout_seconds", 600)
-    )
+    corrupted = compare_envelopes(parity.arq, _corrupt(parity.mongo, "timeout_seconds", 600))
     assert not corrupted.matches
     assert [d.field for d in corrupted.unexplained] == ["timeout_seconds"]
     reason = corrupted.unexplained[0]
@@ -313,7 +311,10 @@ async def test_a_plain_dedup_key_diverges_by_namespace_and_is_explained(
     payload = {"crawl_job_id": "shadow-crawl-job-0002"}
     arq = await from_arq("crawl_website", payload=payload, dedup_key="manual-1")
     mongo = await from_mongo(
-        shadow_queue, "crawl_website", payload=payload, tenant_id="tenant-parity",
+        shadow_queue,
+        "crawl_website",
+        payload=payload,
+        tenant_id="tenant-parity",
         dedup_key="manual-1",
     )
     assert arq.logical_job_id == "crawl_website:manual-1"
@@ -394,9 +395,7 @@ async def test_crawl_timeout_is_declared_on_the_arq_function_object() -> None:
     entries = cast("list[ArqRegistryEntry]", list(WorkerSettings.functions))
     timeouts = {arq_func(entry).name: arq_func(entry).timeout_s for entry in entries}
     assert timeouts["crawl_website"] == 3600
-    assert all(
-        value in (None, 600) for name, value in timeouts.items() if name != "crawl_website"
-    )
+    assert all(value in (None, 600) for name, value in timeouts.items() if name != "crawl_website")
 
 
 # ----------------------------------------------------------------------

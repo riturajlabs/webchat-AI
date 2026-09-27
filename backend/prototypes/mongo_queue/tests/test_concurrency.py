@@ -96,9 +96,7 @@ async def test_lease_expired_running_job_is_reclaimable(queue: MongoQueue) -> No
     # Still owned: not claimable while lease is live.
     assert await queue.claim("worker-b", now=base + timedelta(seconds=30)) is None
     # Lease expired: reclaimable.
-    reclaimed = await queue.claim(
-        "worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1)
-    )
+    reclaimed = await queue.claim("worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1))
     assert reclaimed is not None
     assert reclaimed.attempts == 2
     assert reclaimed.execution_version == 2
@@ -123,9 +121,7 @@ async def test_execution_version_fencing_demonstration(queue: MongoQueue) -> Non
     v1 = await queue.claim("worker-a", now=base)
     assert v1 is not None and v1.execution_version == 1
     # worker-a dies; lease expires; worker-b claims -> version 2.
-    v2 = await queue.claim(
-        "worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1)
-    )
+    v2 = await queue.claim("worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1))
     assert v2 is not None and v2.execution_version == 2
     # worker-a tries to fail the execution it *thinks* it still owns.
     outcome = await queue.fail_job(
@@ -134,8 +130,7 @@ async def test_execution_version_fencing_demonstration(queue: MongoQueue) -> Non
     assert outcome == "not_owned"
     # worker-b finishes cleanly.
     assert (
-        await queue.complete_job(job_id, "worker-b", execution_version=v2.execution_version)
-        is True
+        await queue.complete_job(job_id, "worker-b", execution_version=v2.execution_version) is True
     )
 
 
@@ -159,9 +154,7 @@ async def test_dual_execution_residual_risk_highlighted(queue: MongoQueue) -> No
     assert v_a is not None
     await fence.crawl_side_effect("c1", "home")  # worker-a partial work
 
-    v_b = await queue.claim(
-        "worker-b", now=base + timedelta(seconds=queue.lease_seconds + 10)
-    )
+    v_b = await queue.claim("worker-b", now=base + timedelta(seconds=queue.lease_seconds + 10))
     assert v_b is not None
     result_b = await crawl_handler({"crawl_job_id": "c1"}, _ctx(v_b, "worker-b", "t"), fence=fence)
     # worker-a resumes and ALSO runs the handler (dual execution, real risk).

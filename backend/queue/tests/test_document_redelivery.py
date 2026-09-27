@@ -300,9 +300,7 @@ async def test_a_stale_failure_record_cannot_overwrite_a_completed_embed(
 
 
 @pytest.mark.parametrize("iteration", range(100))
-async def test_interleaved_dual_execution_never_rewinds_state(
-    env: _Env, iteration: int
-) -> None:
+async def test_interleaved_dual_execution_never_rewinds_state(env: _Env, iteration: int) -> None:
     """100 deterministic interleavings of two executions on one document.
 
     A and B both read the same document and both try to record knowledge state.
@@ -321,9 +319,7 @@ async def test_interleaved_dual_execution_never_rewinds_state(
     snapshot_b.knowledge_status = KNOWLEDGE_STATUS_READY
     snapshot_b.knowledge_checksum = "X"
     snapshot_b.knowledge_chunks = 3
-    applied_b = await env.documents.update_knowledge_if_current(
-        snapshot_b, expected_checksum="X"
-    )
+    applied_b = await env.documents.update_knowledge_if_current(snapshot_b, expected_checksum="X")
     assert applied_b is True
 
     # A attempts a non-ready state afterwards: always refused.
@@ -331,9 +327,7 @@ async def test_interleaved_dual_execution_never_rewinds_state(
         KNOWLEDGE_STATUS_FAILED if iteration % 2 else KNOWLEDGE_STATUS_PROCESSING
     )
     snapshot_a.knowledge_chunks = iteration
-    applied_a = await env.documents.update_knowledge_if_current(
-        snapshot_a, expected_checksum="X"
-    )
+    applied_a = await env.documents.update_knowledge_if_current(snapshot_a, expected_checksum="X")
     assert applied_a is False
 
     after = await env.documents.find_by_id_any(env.document.id)
@@ -344,12 +338,8 @@ async def test_interleaved_dual_execution_never_rewinds_state(
 
     # Convergence is stable: re-attempting the losing state keeps losing, and
     # re-recording the winning state stays allowed (idempotent repair).
-    assert not await env.documents.update_knowledge_if_current(
-        snapshot_a, expected_checksum="X"
-    )
-    assert await env.documents.update_knowledge_if_current(
-        snapshot_b, expected_checksum="X"
-    )
+    assert not await env.documents.update_knowledge_if_current(snapshot_a, expected_checksum="X")
+    assert await env.documents.update_knowledge_if_current(snapshot_b, expected_checksum="X")
     settled = await env.documents.find_by_id_any(env.document.id)
     assert settled is not None
     assert settled.knowledge_status == KNOWLEDGE_STATUS_READY
@@ -378,9 +368,7 @@ async def test_a_knowledge_write_is_refused_after_the_source_changes(env: _Env) 
     recrawled.checksum = "Y"
     await env.documents.upsert(recrawled)
 
-    applied = await env.documents.update_knowledge_if_current(
-        stale, expected_checksum="X"
-    )
+    applied = await env.documents.update_knowledge_if_current(stale, expected_checksum="X")
     assert applied is False, "a write for the old source was applied to new source"
 
     after = await env.documents.find_by_id_any(env.document.id)
@@ -409,9 +397,7 @@ async def test_a_knowledge_write_never_crosses_tenants(env: _Env) -> None:
     a_snapshot.knowledge_status = KNOWLEDGE_STATUS_READY
     a_snapshot.knowledge_checksum = "X"
     a_snapshot.knowledge_chunks = 7
-    assert await env.documents.update_knowledge_if_current(
-        a_snapshot, expected_checksum="X"
-    )
+    assert await env.documents.update_knowledge_if_current(a_snapshot, expected_checksum="X")
 
     a_after = await env.documents.find_by_id_any(env.document.id)
     assert a_after is not None

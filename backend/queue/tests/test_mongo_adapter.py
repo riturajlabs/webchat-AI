@@ -516,8 +516,7 @@ async def test_complete_succeeds_for_the_owner(adapter: MongoQueueAdapter) -> No
     job = await adapter.claim("worker-1")
     assert job is not None
     assert (
-        await adapter.complete(job.id, "worker-1", execution_version=job.execution_version)
-        is True
+        await adapter.complete(job.id, "worker-1", execution_version=job.execution_version) is True
     )
     stored = await adapter.get(job_id)
     assert stored is not None
@@ -530,8 +529,7 @@ async def test_complete_is_refused_for_another_worker(adapter: MongoQueueAdapter
     job = await adapter.claim("worker-1")
     assert job is not None
     assert (
-        await adapter.complete(job.id, "worker-2", execution_version=job.execution_version)
-        is False
+        await adapter.complete(job.id, "worker-2", execution_version=job.execution_version) is False
     )
 
 
@@ -563,11 +561,11 @@ async def test_complete_cannot_resurrect_a_dead_job(adapter: MongoQueueAdapter) 
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    await adapter.fail(job.id, "worker-1", execution_version=job.execution_version,
-                       error="boom", retry=False)
+    await adapter.fail(
+        job.id, "worker-1", execution_version=job.execution_version, error="boom", retry=False
+    )
     assert (
-        await adapter.complete(job_id, "worker-1", execution_version=job.execution_version)
-        is False
+        await adapter.complete(job_id, "worker-1", execution_version=job.execution_version) is False
     )
 
 
@@ -582,8 +580,9 @@ async def test_status_policy_drops_the_result_body(adapter: MongoQueueAdapter) -
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    await adapter.complete(job.id, "worker-1", execution_version=job.execution_version,
-                          result={"big": "body"})
+    await adapter.complete(
+        job.id, "worker-1", execution_version=job.execution_version, result={"big": "body"}
+    )
     stored = await adapter.get(job_id)
     assert stored is not None
     assert stored.result is None
@@ -592,14 +591,16 @@ async def test_status_policy_drops_the_result_body(adapter: MongoQueueAdapter) -
 async def test_full_policy_stores_the_result(
     queue_db: AsyncIOMotorDatabase[dict[str, Any]],
 ) -> None:
-    adapter = MongoQueueAdapter(queue_db, collection_name="worker_jobs_full",
-                               result_policy=RESULT_POLICY_FULL)
+    adapter = MongoQueueAdapter(
+        queue_db, collection_name="worker_jobs_full", result_policy=RESULT_POLICY_FULL
+    )
     await adapter.ensure_indexes()
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    await adapter.complete(job.id, "worker-1", execution_version=job.execution_version,
-                          result={"answer": 42})
+    await adapter.complete(
+        job.id, "worker-1", execution_version=job.execution_version, result={"answer": 42}
+    )
     stored = await adapter.get(job_id)
     assert stored is not None
     assert stored.result == {"answer": 42}
@@ -609,14 +610,19 @@ async def test_full_policy_stores_the_result(
 async def test_full_policy_clamps_an_oversized_result(
     queue_db: AsyncIOMotorDatabase[dict[str, Any]],
 ) -> None:
-    adapter = MongoQueueAdapter(queue_db, collection_name="worker_jobs_clamp",
-                               result_policy=RESULT_POLICY_FULL, max_result_bytes=128)
+    adapter = MongoQueueAdapter(
+        queue_db,
+        collection_name="worker_jobs_clamp",
+        result_policy=RESULT_POLICY_FULL,
+        max_result_bytes=128,
+    )
     await adapter.ensure_indexes()
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    await adapter.complete(job.id, "worker-1", execution_version=job.execution_version,
-                          result={"blob": "x" * 4096})
+    await adapter.complete(
+        job.id, "worker-1", execution_version=job.execution_version, result={"blob": "x" * 4096}
+    )
     stored = await adapter.get(job_id)
     assert stored is not None
     assert stored.result["__truncated__"] is True
@@ -626,8 +632,9 @@ async def test_full_policy_clamps_an_oversized_result(
 async def test_unknown_result_policy_is_rejected(
     queue_db: AsyncIOMotorDatabase[dict[str, Any]],
 ) -> None:
-    adapter = MongoQueueAdapter(queue_db, collection_name="worker_jobs_bad_policy",
-                               result_policy="everything")
+    adapter = MongoQueueAdapter(
+        queue_db, collection_name="worker_jobs_bad_policy", result_policy="everything"
+    )
     with pytest.raises(QueueError):
         await _enqueue(adapter)
 
@@ -642,8 +649,13 @@ async def test_fail_without_retry_dead_letters_immediately(adapter: MongoQueueAd
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    status = await adapter.fail(job.id, "worker-1", execution_version=job.execution_version,
-                                error="ValueError: boom", retry=False)
+    status = await adapter.fail(
+        job.id,
+        "worker-1",
+        execution_version=job.execution_version,
+        error="ValueError: boom",
+        retry=False,
+    )
     assert status == STATUS_DEAD
     stored = await adapter.get(job_id)
     assert stored is not None
@@ -656,8 +668,9 @@ async def test_fail_with_retry_schedules_backoff(adapter: MongoQueueAdapter) -> 
     job_id = await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    status = await adapter.fail(job.id, "worker-1", execution_version=job.execution_version,
-                                error="transient", retry=True)
+    status = await adapter.fail(
+        job.id, "worker-1", execution_version=job.execution_version, error="transient", retry=True
+    )
     assert status == "retry_pending"
     stored = await adapter.get(job_id)
     assert stored is not None
@@ -673,8 +686,9 @@ async def test_retry_backoff_follows_the_configured_table(adapter: MongoQueueAda
     for _ in range(3):
         job = await adapter.claim("worker-1")
         assert job is not None
-        await adapter.fail(job.id, "worker-1", execution_version=job.execution_version,
-                           error="x", retry=True)
+        await adapter.fail(
+            job.id, "worker-1", execution_version=job.execution_version, error="x", retry=True
+        )
         stored = await adapter.get(job_id)
         assert stored is not None
         observed.append((stored.run_at - utcnow()).total_seconds())
@@ -691,8 +705,9 @@ async def test_retry_dead_letters_when_the_budget_is_spent(adapter: MongoQueueAd
         job = await adapter.claim("worker-1")
         assert job is not None
         assert job.job_try == expected
-        await adapter.fail(job.id, "worker-1", execution_version=job.execution_version,
-                           error="x", retry=True)
+        await adapter.fail(
+            job.id, "worker-1", execution_version=job.execution_version, error="x", retry=True
+        )
         await adapter.queue.collection.update_one(
             {"_id": job_id}, {"$set": {"run_at": utcnow() - timedelta(seconds=1)}}
         )
@@ -720,8 +735,13 @@ async def test_fail_is_refused_for_a_fenced_worker_and_leaves_the_row_alone(
     fresh = await adapter.claim("worker-2")
     assert fresh is not None
 
-    status = await adapter.fail(job_id, "worker-1", execution_version=stale.execution_version,
-                                error="stale worker died", retry=False)
+    status = await adapter.fail(
+        job_id,
+        "worker-1",
+        execution_version=stale.execution_version,
+        error="stale worker died",
+        retry=False,
+    )
     assert status == "not_owned"
     stored = await adapter.get(job_id)
     assert stored is not None
@@ -737,8 +757,12 @@ async def test_fail_is_refused_for_a_different_worker(adapter: MongoQueueAdapter
     await _enqueue(adapter)
     job = await adapter.claim("worker-1")
     assert job is not None
-    assert await adapter.fail(job.id, "worker-2", execution_version=job.execution_version,
-                              error="x", retry=False) == "not_owned"
+    assert (
+        await adapter.fail(
+            job.id, "worker-2", execution_version=job.execution_version, error="x", retry=False
+        )
+        == "not_owned"
+    )
 
 
 # ----------------------------------------------------------------------
@@ -800,8 +824,13 @@ async def test_claim_returns_the_owner_tenant_not_a_payload_tenant(
     await _enqueue(
         adapter,
         function="send_email",
-        payload={"to": "a@b.c", "subject": "s", "text": "t", "html": "<p>h</p>",
-                 "tenant_id": "tenant-evil"},
+        payload={
+            "to": "a@b.c",
+            "subject": "s",
+            "text": "t",
+            "html": "<p>h</p>",
+            "tenant_id": "tenant-evil",
+        },
     )
     job = await adapter.claim("worker-1")
     assert job is not None

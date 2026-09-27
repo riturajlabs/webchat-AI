@@ -97,9 +97,9 @@ terminal — a second worker's in-flight job silently dead-lettered.
 
 ```python
 fence = self._owner_filter(job_id, worker_id, execution_version)
-job = await self.get(job_id, fence)          # read under the fence
+job = await self.get(job_id, fence)  # read under the fence
 ...
-result = await self._collection.update_one(fence, update)   # write under the same fence
+result = await self._collection.update_one(fence, update)  # write under the same fence
 return target if result.matched_count == 1 else "not_owned"
 ```
 

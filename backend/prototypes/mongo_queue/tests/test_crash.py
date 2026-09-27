@@ -106,9 +106,12 @@ async def test_crash_point_matrix(queue: MongoQueue) -> None:
             assert recovered.attempts == (1 if state == "never_claimed" else 2)
             # Recovery re-runs the handler (the at-least-once behaviour).
             await send_email_handler(PAYLOAD, _ctx(recovered, "worker-b"), provider=provider)
-            assert await queue.complete_job(
-                recovered.id, "worker-b", execution_version=recovered.execution_version
-            ) is True
+            assert (
+                await queue.complete_job(
+                    recovered.id, "worker-b", execution_version=recovered.execution_version
+                )
+                is True
+            )
 
         # 3) Duplicate risk: only the 'sent-then-crashed' states duplicate.
         assert provider.sent_count == EXPECTED_SENDS[state], point
@@ -129,9 +132,10 @@ async def test_never_claimed_job_is_recoverable_and_terminal_once(queue: MongoQu
     recovered = await queue.claim("worker-b", now=base + timedelta(seconds=5))
     assert recovered is not None and recovered.id == job_id
     await send_email_handler(PAYLOAD, _ctx(recovered, "worker-b"), provider=provider)
-    assert await queue.complete_job(
-        job_id, "worker-b", execution_version=recovered.execution_version
-    ) is True
+    assert (
+        await queue.complete_job(job_id, "worker-b", execution_version=recovered.execution_version)
+        is True
+    )
     assert provider.sent_count == 1
     final = await queue.get(job_id)
     assert final is not None and final.status == STATUS_COMPLETED

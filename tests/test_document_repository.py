@@ -100,9 +100,7 @@ def test_cas_filter_matches_source_identity_and_blocks_state_rewind() -> None:
     ]
 
     # A ready write may re-record the same success, so it carries no $nor guard.
-    ready = knowledge_cas_filter(
-        doc, expected_checksum="abc123", status=KNOWLEDGE_STATUS_READY
-    )
+    ready = knowledge_cas_filter(doc, expected_checksum="abc123", status=KNOWLEDGE_STATUS_READY)
     assert "$nor" not in ready
     assert ready["checksum"] == "abc123"
 

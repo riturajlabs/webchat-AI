@@ -874,7 +874,7 @@ def test_mongo_queue_poll_schedule_accepts_json_array() -> None:
         _env_file=None,
         queue_backend="mongo",
         mongo_queue_enabled=True,
-        mongo_queue_poll_schedule='[1, 2.5, 10]',
+        mongo_queue_poll_schedule="[1, 2.5, 10]",
     )
     assert settings.mongo_queue_poll_schedule == [1.0, 2.5, 10.0]
 

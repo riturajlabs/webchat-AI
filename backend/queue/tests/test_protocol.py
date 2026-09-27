@@ -163,8 +163,9 @@ def recording_arq(monkeypatch: pytest.MonkeyPatch) -> tuple[ArqQueueAdapter, _Re
 async def test_arq_enqueue_reproduces_crawl_call_shape(recording_arq: Any) -> None:
     """`enqueue_crawl_website` today: ("crawl_website", id, _job_id="crawl:<id>")."""
     adapter, recorder = recording_arq
-    job_id = await adapter.enqueue("crawl_website", payload={"crawl_job_id": "cj-1"},
-                                   job_id="crawl:cj-1")
+    job_id = await adapter.enqueue(
+        "crawl_website", payload={"crawl_job_id": "cj-1"}, job_id="crawl:cj-1"
+    )
     assert job_id == "arq-job-1"
     assert recorder.calls == [("crawl_website", ("cj-1",), {"_job_id": "crawl:cj-1"})]
 
@@ -182,9 +183,7 @@ async def test_arq_enqueue_reproduces_deferred_call_shape(recording_arq: Any) ->
     await adapter.enqueue(
         "process_document", payload={"document_id": "d1", "run_id": "r1"}, defer_by=30
     )
-    assert recorder.calls == [
-        ("process_document", ("d1", "r1"), {"_defer_by": 30})
-    ]
+    assert recorder.calls == [("process_document", ("d1", "r1"), {"_defer_by": 30})]
 
 
 async def test_arq_enqueue_omits_zero_defer(recording_arq: Any) -> None:
@@ -196,8 +195,9 @@ async def test_arq_enqueue_omits_zero_defer(recording_arq: Any) -> None:
 
 async def test_arq_enqueue_namespaces_a_bare_dedup_key(recording_arq: Any) -> None:
     adapter, recorder = recording_arq
-    await adapter.enqueue("process_document", payload={"document_id": "d1", "run_id": None},
-                          dedup_key="d1")
+    await adapter.enqueue(
+        "process_document", payload={"document_id": "d1", "run_id": None}, dedup_key="d1"
+    )
     assert recorder.calls[0][2] == {"_job_id": "process_document:d1"}
 
 
@@ -227,8 +227,9 @@ async def test_arq_enqueue_reports_arq_own_deduplication(monkeypatch: pytest.Mon
     from backend.queue.errors import DuplicateJobError
 
     with pytest.raises(DuplicateJobError):
-        await adapter.enqueue("crawl_website", payload={"crawl_job_id": "cj-1"},
-                              job_id="crawl:cj-1")
+        await adapter.enqueue(
+            "crawl_website", payload={"crawl_job_id": "cj-1"}, job_id="crawl:cj-1"
+        )
 
 
 def test_arq_adapter_uses_a_pooled_redis_client() -> None:

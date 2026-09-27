@@ -19,7 +19,9 @@ from backend.prototypes.mongo_queue.queue import MongoQueue
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 
-def _claim_filter(now: Any, ) -> dict[str, Any]:
+def _claim_filter(
+    now: Any,
+) -> dict[str, Any]:
     return {
         "$expr": {"$lt": ["$attempts", "$max_tries"]},
         "$or": [
@@ -45,9 +47,7 @@ def _flatten_plan(node: dict[str, Any], acc: list[dict[str, Any]]) -> None:
 
 
 @pytest.mark.parametrize("branch", ["pending", "expired_running"])
-async def test_claim_query_uses_a_status_compound_index(
-    queue: MongoQueue, branch: str
-) -> None:
+async def test_claim_query_uses_a_status_compound_index(queue: MongoQueue, branch: str) -> None:
     now = datetime.now(UTC)
     col: AsyncIOMotorCollection[dict[str, Any]] = queue.collection
     if branch == "pending":

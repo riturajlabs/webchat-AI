@@ -89,7 +89,6 @@ def _index_key(key: Any) -> tuple[tuple[str, Any], ...]:
     return tuple((field, direction) for field, direction in key or ())
 
 
-
 class MissingTenantError(QueueError):
     """Raised when a Mongo job is submitted without a tenant identity.
 
@@ -98,7 +97,6 @@ class MissingTenantError(QueueError):
     ever see, which is how orphaned work accumulates silently - so it is
     rejected at the producer boundary instead.
     """
-
 
 
 class MongoQueueAdapter:

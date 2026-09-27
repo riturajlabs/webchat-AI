@@ -100,9 +100,7 @@ async def test_stale_worker_completion_rejected_by_fencing_token(queue: MongoQue
     assert reclaimed.attempts == 2
     # Worker-a (stale) cannot complete OR fail the new execution.
     assert (
-        await queue.complete_job(
-            job_id, "worker-a", execution_version=first.execution_version
-        )
+        await queue.complete_job(job_id, "worker-a", execution_version=first.execution_version)
         is False
     )
     assert (
@@ -111,9 +109,7 @@ async def test_stale_worker_completion_rejected_by_fencing_token(queue: MongoQue
     )
     # Worker-b owns it now and completes.
     assert (
-        await queue.complete_job(
-            job_id, "worker-b", execution_version=reclaimed.execution_version
-        )
+        await queue.complete_job(job_id, "worker-b", execution_version=reclaimed.execution_version)
         is True
     )
 

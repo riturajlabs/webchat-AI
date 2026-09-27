@@ -837,9 +837,7 @@ async def _measure_idle_polling(ctx: RunContext, *, seconds: float) -> dict[str,
         "schedule_s": list(ctx.queue.config.poll_schedule),
         "steady_state_interval_s": cap,
         "idle_claim_ops_per_day_per_worker": round(per_worker_per_day, 1),
-        "for_workers": {
-            str(n): round(per_worker_per_day * n, 1) for n in (1, 2, 3)
-        },
+        "for_workers": {str(n): round(per_worker_per_day * n, 1) for n in (1, 2, 3)},
         "policy_reached_cap_after_iterations": simulated_iterations,
         "live_probe": {
             "elapsed_s": round(elapsed, 2),
@@ -853,6 +851,7 @@ async def _measure_idle_polling(ctx: RunContext, *, seconds: float) -> dict[str,
 
 async def _measure_connections(ctx: RunContext) -> dict[str, Any]:
     """Server-side connection count before/after, plus this client's pool view."""
+
     async def server_connections() -> dict[str, int]:
         # MongoDB 8 reports `connections.current`; there is no `total` field.
         status = await ctx.client.admin.command("serverStatus")

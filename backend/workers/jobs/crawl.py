@@ -795,8 +795,7 @@ async def _run_crawl_job_impl(
                 # FIND-03: the row is already terminal (a duplicate attempt's
                 # retry write). Nothing to persist and nothing to gate on.
                 logger.debug(
-                    "crawl_update_rejected job_id=%s tenant_id=%s "
-                    "reason=not_active try=%s/%s",
+                    "crawl_update_rejected job_id=%s tenant_id=%s reason=not_active try=%s/%s",
                     job.id,
                     job.tenant_id,
                     job_try,

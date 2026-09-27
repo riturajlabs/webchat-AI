@@ -116,8 +116,7 @@ def validate_payload(function: str, payload: dict[str, Any]) -> None:
     validate_function(function)
     if not isinstance(payload, dict):
         raise InvalidPayloadError(
-            f"Queue payload must be a dict for {function!r} (received "
-            f"{type(payload).__name__})."
+            f"Queue payload must be a dict for {function!r} (received {type(payload).__name__})."
         )
     if function == "ping":
         if payload:

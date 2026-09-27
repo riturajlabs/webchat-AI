@@ -172,6 +172,7 @@ def test_unknown_backend_setting_fails_fast() -> None:
     with pytest.raises(ValueError, match="QUEUE_BACKEND"):
         Settings(_env_file=None, queue_backend="kafka")  # type: ignore[call-arg]
 
+
 def test_redis_consumers_remain_intact() -> None:
     """§28.23: Redis stays in use - cache, rate limiting, health, ARQ broker."""
     from backend.core.redis import get_redis  # noqa: F401 - must import cleanly

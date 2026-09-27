@@ -106,7 +106,6 @@ def test_registry_contains_no_dynamic_import_concatenation() -> None:
 def test_job_arguments_match_production_signatures() -> None:
     import inspect
 
-
     expected = {
         "ping": (),
         "send_email": ("payload",),

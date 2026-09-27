@@ -37,9 +37,7 @@ async def test_loop_claims_dispatches_completes(adapter: MongoQueueAdapter) -> N
     job_id = await adapter.enqueue(
         "crawl_website", payload={"crawl_job_id": "c-1"}, tenant_id=_TENANT
     )
-    loop = MongoWorkerLoop(
-        adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a"
-    )
+    loop = MongoWorkerLoop(adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a")
     outcome = await loop.work_once()
     assert outcome is not None
     assert outcome.status == STATUS_COMPLETED
@@ -57,9 +55,7 @@ async def test_status_policy_discards_the_returned_result(adapter: MongoQueueAda
     job_id = await adapter.enqueue(
         "crawl_website", payload={"crawl_job_id": "c-1"}, tenant_id=_TENANT
     )
-    loop = MongoWorkerLoop(
-        adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a"
-    )
+    loop = MongoWorkerLoop(adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a")
     assert await loop.work_once() is not None
     job = await adapter.get(job_id)
     assert job is not None
@@ -74,9 +70,7 @@ async def test_full_policy_stores_the_returned_result(queue_db: Any) -> None:
     job_id = await adapter.enqueue(
         "crawl_website", payload={"crawl_job_id": "c-1"}, tenant_id=_TENANT
     )
-    loop = MongoWorkerLoop(
-        adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a"
-    )
+    loop = MongoWorkerLoop(adapter, handlers={"crawl_website": _crawl_ok}, worker_id="worker-a")
     assert await loop.work_once() is not None
     job = await adapter.get(job_id)
     assert job is not None
@@ -97,9 +91,7 @@ async def test_handler_receives_arq_shaped_context(adapter: MongoQueueAdapter) -
         captured["arg"] = crawl_job_id
         return {"ok": True}
 
-    await adapter.enqueue(
-        "crawl_website", payload={"crawl_job_id": "c-2"}, tenant_id="t9"
-    )
+    await adapter.enqueue("crawl_website", payload={"crawl_job_id": "c-2"}, tenant_id="t9")
     loop = MongoWorkerLoop(adapter, handlers={"crawl_website": capture}, worker_id="w")
     await loop.work_once()
 
@@ -126,9 +118,7 @@ async def test_context_does_not_carry_the_queue_row_tenant(adapter: MongoQueueAd
         captured["ctx"] = dict(ctx)
         return {"ok": True}
 
-    await adapter.enqueue(
-        "crawl_website", payload={"crawl_job_id": "c-2"}, tenant_id="t9"
-    )
+    await adapter.enqueue("crawl_website", payload={"crawl_job_id": "c-2"}, tenant_id="t9")
     loop = MongoWorkerLoop(adapter, handlers={"crawl_website": capture}, worker_id="w")
     await loop.work_once()
     assert "tenant_id" not in captured["ctx"]
@@ -223,9 +213,7 @@ async def test_heartbeat_keeps_the_lease_alive(adapter: MongoQueueAdapter) -> No
         await asyncio.sleep(0.35)
         return {"ok": True}
 
-    await adapter.enqueue(
-        "crawl_website", payload={"crawl_job_id": "c-5"}, tenant_id=_TENANT
-    )
+    await adapter.enqueue("crawl_website", payload={"crawl_job_id": "c-5"}, tenant_id=_TENANT)
     loop = MongoWorkerLoop(
         adapter,
         handlers={"crawl_website": slow},
@@ -288,9 +276,7 @@ async def test_dual_execution_and_stale_completion_is_fenced(
 
 
 async def test_run_processes_the_queue_then_stops(adapter: MongoQueueAdapter) -> None:
-    await adapter.enqueue(
-        "crawl_website", payload={"crawl_job_id": "c-7"}, tenant_id=_TENANT
-    )
+    await adapter.enqueue("crawl_website", payload={"crawl_job_id": "c-7"}, tenant_id=_TENANT)
     loop = MongoWorkerLoop(
         adapter, handlers={"crawl_website": _crawl_ok}, worker_id="w", sleep=_no_sleep
     )

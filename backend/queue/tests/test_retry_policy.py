@@ -152,8 +152,12 @@ async def test_retry_backoff_is_the_configured_schedule_not_an_arq_one(
         assert job is not None
         base = utcnow()
         await adapter.fail(
-            job.id, "w", execution_version=job.execution_version, error="x",
-            retry=True, now=base,
+            job.id,
+            "w",
+            execution_version=job.execution_version,
+            error="x",
+            retry=True,
+            now=base,
         )
         stored = await adapter.get(job_id)
         assert stored is not None
@@ -225,7 +229,8 @@ async def test_arq_worker_agrees_with_the_mongo_mapping() -> None:
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         str(script),
-        "--redis-url", _ARQ_REDIS,
+        "--redis-url",
+        _ARQ_REDIS,
         "--json",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

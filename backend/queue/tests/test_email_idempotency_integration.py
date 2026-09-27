@@ -91,9 +91,7 @@ class FakeResend:
         #: inject a hard provider rejection
         self.reject_next = False
 
-    def send(
-        self, params: dict[str, Any], options: dict[str, Any] | None = None
-    ) -> dict[str, str]:
+    def send(self, params: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, str]:
         options = options or {}
         key = options.get("idempotency_key")
         self.calls.append({"params": dict(params), "options": dict(options)})
@@ -1105,12 +1103,8 @@ async def test_a_user_asking_twice_for_a_reset_receives_two_emails(
     )
     assert len(redis.jobs) == 1, "registration enqueued its verification email"
 
-    await env.service.forgot_password(
-        email="alice@example.com", ip_address=None, user_agent=None
-    )
-    await env.service.forgot_password(
-        email="alice@example.com", ip_address=None, user_agent=None
-    )
+    await env.service.forgot_password(email="alice@example.com", ip_address=None, user_agent=None)
+    await env.service.forgot_password(email="alice@example.com", ip_address=None, user_agent=None)
     assert len(redis.jobs) == 3, "each request enqueued one email"
 
     # Run every enqueued job through the real worker task.
@@ -1149,9 +1143,7 @@ async def test_one_password_reset_redelivered_twice_is_still_one_email(
         ip_address=None,
         user_agent=None,
     )
-    await env.service.forgot_password(
-        email="alice@example.com", ip_address=None, user_agent=None
-    )
+    await env.service.forgot_password(email="alice@example.com", ip_address=None, user_agent=None)
     _function, payload = redis.jobs[-1]
 
     # The queue delivers the same payload three times (at-least-once).
@@ -1247,9 +1239,7 @@ async def test_the_fake_escalates_a_crashed_attempt_past_the_key_window(
     now = datetime.now(UTC)
     await _claim_directly(deliveries, "d1", token="t1", now=now)
 
-    inside = await _claim_directly(
-        deliveries, "d1", token="t2", now=now + timedelta(seconds=121)
-    )
+    inside = await _claim_directly(deliveries, "d1", token="t2", now=now + timedelta(seconds=121))
     assert inside.refusal is None, "a crashed attempt inside the window is reclaimable"
 
     past = await _claim_directly(deliveries, "d1", token="t3", now=now + timedelta(hours=25))

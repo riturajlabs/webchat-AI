@@ -44,9 +44,7 @@ def _ctx(job_id: str, worker_id: str, execution_version: int, attempts: int) -> 
 
 def test_deterministic_key_same_logical_email_same_key() -> None:
     """Same tenant + same rendered message must collide on every retry."""
-    assert email_idempotency_key(_TENANT, _MESSAGE) == email_idempotency_key(
-        _TENANT, _MESSAGE
-    )
+    assert email_idempotency_key(_TENANT, _MESSAGE) == email_idempotency_key(_TENANT, _MESSAGE)
     assert email_idempotency_key(_TENANT, _MESSAGE) == email_idempotency_key(
         _TENANT, dict(_MESSAGE)
     )
@@ -57,9 +55,7 @@ def test_deterministic_key_changes_when_identity_changes() -> None:
         _TENANT, {**_MESSAGE, "to": "other@example.com"}
     )
     # Content hash only: different tenant namespace => different key.
-    assert email_idempotency_key("tenant-b", _MESSAGE) != email_idempotency_key(
-        _TENANT, _MESSAGE
-    )
+    assert email_idempotency_key("tenant-b", _MESSAGE) != email_idempotency_key(_TENANT, _MESSAGE)
 
 
 def test_key_shape_and_resend_limits() -> None:
@@ -97,9 +93,7 @@ async def test_100_concurrent_sends_duplicate_when_provider_ignores() -> None:
 async def test_crash_after_send_single_delivery_with_key(queue: MongoQueue) -> None:
     """Crash matrix case 2/7: worker sends then dies before completing."""
     provider = MockMailProvider(honors_idempotency=True)
-    job_id = await queue.enqueue(
-        function="send_email", payload=_MESSAGE, tenant_id=_TENANT
-    )
+    job_id = await queue.enqueue(function="send_email", payload=_MESSAGE, tenant_id=_TENANT)
     base = utcnow()
     first = await queue.claim("worker-a", now=base)
     assert first is not None
@@ -109,9 +103,7 @@ async def test_crash_after_send_single_delivery_with_key(queue: MongoQueue) -> N
         provider=provider,
     )
     # worker-a crashes here: no complete_job. Lease expires; worker-b reclaims.
-    reclaimed = await queue.claim(
-        "worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1)
-    )
+    reclaimed = await queue.claim("worker-b", now=base + timedelta(seconds=queue.lease_seconds + 1))
     assert reclaimed is not None and reclaimed.execution_version == first.execution_version + 1
     r2 = await execute_email_job(
         reclaimed.payload,
@@ -122,9 +114,7 @@ async def test_crash_after_send_single_delivery_with_key(queue: MongoQueue) -> N
     assert r2["message_id"] == r1["message_id"]
     assert provider.sent_count == 1
     assert (
-        await queue.complete_job(
-            job_id, "worker-b", execution_version=reclaimed.execution_version
-        )
+        await queue.complete_job(job_id, "worker-b", execution_version=reclaimed.execution_version)
         is True
     )
 
@@ -134,9 +124,7 @@ async def test_response_loss_retry_same_message_id_when_provider_honours(
 ) -> None:
     """Crash matrix case 4/5: provider accepted; response lost (timeout)."""
     provider = LostResponseMailProvider(honors_idempotency=True)
-    job_id = await queue.enqueue(
-        function="send_email", payload=_MESSAGE, tenant_id=_TENANT
-    )
+    job_id = await queue.enqueue(function="send_email", payload=_MESSAGE, tenant_id=_TENANT)
     base = utcnow()
     claimed = await queue.claim("worker-a", now=base)
     assert claimed is not None
@@ -148,8 +136,11 @@ async def test_response_loss_retry_same_message_id_when_provider_honours(
         )
     assert provider.sent_count == 1  # provider accepted despite the timeout
     outcome = await queue.fail_job(
-        job_id, "worker-a", "TimeoutError: response lost",
-        execution_version=claimed.execution_version, now=base,
+        job_id,
+        "worker-a",
+        "TimeoutError: response lost",
+        execution_version=claimed.execution_version,
+        now=base,
     )
     assert outcome == STATUS_RETRY_PENDING
     retry = await queue.claim("worker-b", now=base + timedelta(seconds=600))
@@ -172,9 +163,7 @@ async def test_response_loss_duplicates_without_provider_idempotency(
 ) -> None:
     """Crash matrix case 4/5: without provider idempotency the retry re-sends."""
     provider = LostResponseMailProvider(honors_idempotency=False)
-    job_id = await queue.enqueue(
-        function="send_email", payload=_MESSAGE, tenant_id=_TENANT
-    )
+    job_id = await queue.enqueue(function="send_email", payload=_MESSAGE, tenant_id=_TENANT)
     base = utcnow()
     claimed = await queue.claim("worker-a", now=base)
     assert claimed is not None
@@ -186,8 +175,11 @@ async def test_response_loss_duplicates_without_provider_idempotency(
         )
     assert provider.sent_count == 1
     await queue.fail_job(
-        job_id, "worker-a", "TimeoutError: response lost",
-        execution_version=claimed.execution_version, now=base,
+        job_id,
+        "worker-a",
+        "TimeoutError: response lost",
+        execution_version=claimed.execution_version,
+        now=base,
     )
     retry = await queue.claim("worker-b", now=base + timedelta(seconds=600))
     assert retry is not None
@@ -235,9 +227,7 @@ async def test_stale_email_worker_blocked_by_fencing_and_dedup_protects_delivery
     )
     # The stale worker cannot complete the reclaimed execution.
     assert (
-        await q.complete_job(
-            job_id, "worker-a", execution_version=worker_a.execution_version
-        )
+        await q.complete_job(job_id, "worker-a", execution_version=worker_a.execution_version)
         is False
     )
     finished = await q.get(job_id)

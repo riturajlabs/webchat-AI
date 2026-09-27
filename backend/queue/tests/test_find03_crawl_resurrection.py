@@ -184,9 +184,7 @@ async def test_the_winners_terminal_fields_are_not_rewound(
 
 
 @pytest.mark.parametrize("kind", REPOSITORIES)
-@pytest.mark.parametrize(
-    "status", sorted(CRAWL_ACTIVE_STATUSES)
-)
+@pytest.mark.parametrize("status", sorted(CRAWL_ACTIVE_STATUSES))
 async def test_a_valid_active_crawl_can_still_be_updated(
     repos: dict[str, FakeCrawlJobRepository | MongoCrawlJobRepository], kind: str, status: str
 ) -> None:
@@ -301,9 +299,7 @@ async def test_a_terminal_row_cannot_be_reopened_by_a_foreign_tenant(
     intruder.status = CRAWL_STATUS_RUNNING
     assert await repo.update(intruder) is False
     # A foreign terminator is refused too.
-    assert not await repo.finish_if_active(
-        job.id, "tenant-b", terminal_status=CRAWL_STATUS_FAILED
-    )
+    assert not await repo.finish_if_active(job.id, "tenant-b", terminal_status=CRAWL_STATUS_FAILED)
 
     stored = await repo.find_by_id_any(job.id)
     assert stored is not None

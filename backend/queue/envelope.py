@@ -286,9 +286,7 @@ EXPLAINED_DIVERGENCES: Final[dict[tuple[str, str], str]] = {
 }
 
 
-def _explain(
-    function: str, field_name: str, arq_value: Any, mongo_value: Any
-) -> str | None:
+def _explain(function: str, field_name: str, arq_value: Any, mongo_value: Any) -> str | None:
     """Return the reason a difference on ``field_name`` is expected, if any.
 
     A written reason is necessary but not sufficient: it must also apply to the
@@ -341,9 +339,7 @@ class RecordingArqRedis:
     def __init__(self) -> None:
         self.calls: list[RecordedEnqueue] = []
 
-    async def enqueue_job(
-        self, function: str, *args: Any, **kwargs: Any
-    ) -> _RecordedJob:
+    async def enqueue_job(self, function: str, *args: Any, **kwargs: Any) -> _RecordedJob:
         job_id = kwargs.get("_job_id")
         defer_by = kwargs.get("_defer_by")
         self.calls.append(
@@ -572,9 +568,7 @@ def job_timeout_for_mongo(function: str) -> int:
     return job_timeout_seconds(function)
 
 
-async def _read_row(
-    queue: MongoQueueAdapter, job_id: str, function: str
-) -> dict[str, Any] | None:
+async def _read_row(queue: MongoQueueAdapter, job_id: str, function: str) -> dict[str, Any] | None:
     """Read a persisted queue row back, by the adapter's own accessor."""
     getter = getattr(queue, "get", None)
     if getter is None:  # pragma: no cover - WorkerQueue requires it
@@ -612,9 +606,7 @@ async def _read_row(
 _ARQ_ABSENT_FIELDS: Final[frozenset[str]] = frozenset({"tenant_id", "request_id"})
 
 
-def compare_envelopes(
-    arq: NormalizedJobEnvelope, mongo: NormalizedJobEnvelope
-) -> EnvelopeParity:
+def compare_envelopes(arq: NormalizedJobEnvelope, mongo: NormalizedJobEnvelope) -> EnvelopeParity:
     """Field-by-field comparison with a reason for every difference.
 
     A difference that :data:`EXPLAINED_DIVERGENCES` already accounts for is

@@ -31,9 +31,7 @@ import sys
 import time
 from typing import Any
 
-DEFAULT_MONGO_URI = os.environ.get(
-    "PROTOTYPE_MONGO_URI", "mongodb://127.0.0.1:27019"
-)
+DEFAULT_MONGO_URI = os.environ.get("PROTOTYPE_MONGO_URI", "mongodb://127.0.0.1:27019")
 
 #: Production worker shape, kept identical to backend/workers/app.py.
 ARQ_POLL_DELAY_SECONDS = 0.5
@@ -61,9 +59,7 @@ async def _measure_claim_latency(adapter: Any, count: int) -> dict[str, float]:
         job = await adapter.claim("perf-worker")
         samples.append((time.perf_counter() - start) * 1000)
         assert job is not None
-        await adapter.complete(
-            job.id, "perf-worker", execution_version=job.execution_version
-        )
+        await adapter.complete(job.id, "perf-worker", execution_version=job.execution_version)
     return {
         "samples": len(samples),
         "p50_ms": round(_percentile(samples, 0.50), 3),
@@ -99,9 +95,7 @@ async def _measure_claim_concurrency(adapter: Any, total: int, workers: int) -> 
                 if job.id in claimed:
                     duplicates["n"] += 1
                 claimed.append(job.id)
-            await adapter.complete(
-                job.id, name, execution_version=job.execution_version
-            )
+            await adapter.complete(job.id, name, execution_version=job.execution_version)
 
     start = time.perf_counter()
     await asyncio.gather(*(worker(f"perf-w{i}") for i in range(workers)))
@@ -177,9 +171,7 @@ async def run(mongo_uri: str, claims: int, total: int, workers: int) -> dict[str
     try:
         await client.admin.command("ping")
         database = client["queue_perf_probe"]
-        adapter = MongoQueueAdapter(
-            database, collection_name="worker_jobs", max_tries=MAX_TRIES
-        )
+        adapter = MongoQueueAdapter(database, collection_name="worker_jobs", max_tries=MAX_TRIES)
         await adapter.ensure_indexes()
         await adapter.delete_all()
         try:
@@ -230,10 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         f"vs Mongo {idle['mongo_claim_ops_per_day_per_worker']} ops "
         f"({idle['reduction_factor']}x lower)"
     )
-    print(
-        f"  stored document: pending={size['pending_bytes']}B "
-        f"running={size['running_bytes']}B"
-    )
+    print(f"  stored document: pending={size['pending_bytes']}B running={size['running_bytes']}B")
     return 0
 
 

@@ -170,9 +170,7 @@ async def _send_untracked(message: EmailMessage, payload: dict[str, str]) -> Non
 
 async def _claim(message: EmailMessage, payload: dict[str, str]) -> EmailDeliveryClaim:
     """Take durable ownership of this delivery for one attempt."""
-    provider_key = message.idempotency_key or key_for_delivery(
-        _scope(message), message.delivery_id
-    )
+    provider_key = message.idempotency_key or key_for_delivery(_scope(message), message.delivery_id)
     provider_window, stale_after = _windows()
     return await delivery_repository().begin_attempt(
         message.delivery_id,

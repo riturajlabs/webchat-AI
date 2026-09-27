@@ -38,9 +38,7 @@ persistence boundary rather than by caller convention.
 
 ```python
 # BEFORE
-await self._collection.replace_one(
-    {"_id": job.id, "tenant_id": job.tenant_id}, job.to_doc()
-)
+await self._collection.replace_one({"_id": job.id, "tenant_id": job.tenant_id}, job.to_doc())
 ```
 
 The filter asserted identity and tenancy but never the lifecycle state. Sequence:

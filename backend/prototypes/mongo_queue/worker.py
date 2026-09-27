@@ -156,9 +156,7 @@ class PrototypeWorker:
             claimed_at=job.started_at or utcnow(),
         )
         lease_lost = asyncio.Event()
-        heartbeat = asyncio.create_task(
-            self._heartbeat_loop(job.id, ctx, lease_lost, sleep=sleep)
-        )
+        heartbeat = asyncio.create_task(self._heartbeat_loop(job.id, ctx, lease_lost, sleep=sleep))
         try:
             result = await handler(job.payload, ctx)
         except Exception as exc:  # noqa: BLE001 - prototype records and retries
@@ -181,7 +179,10 @@ class PrototypeWorker:
         if not completed:
             logger.warning(
                 "completion_rejected function=%s job=%s worker=%s version=%s",
-                job.function, job.id, self._worker_id, ctx.execution_version,
+                job.function,
+                job.id,
+                self._worker_id,
+                ctx.execution_version,
             )
         return WorkOutcome(
             job.id,
@@ -209,5 +210,7 @@ class PrototypeWorker:
             if not renewed:
                 logger.warning(
                     "lease_renewal_rejected job=%s worker=%s version=%s",
-                    job_id, self._worker_id, ctx.execution_version,
+                    job_id,
+                    self._worker_id,
+                    ctx.execution_version,
                 )

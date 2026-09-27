@@ -165,9 +165,7 @@ class ResendProvider:
         return MailSendResult(provider_message_id=email_id)
 
     @staticmethod
-    def _log_failure(
-        exc: Exception, *, message: EmailMessage, sender: str, key_hint: str
-    ) -> None:
+    def _log_failure(exc: Exception, *, message: EmailMessage, sender: str, key_hint: str) -> None:
         logger.exception(
             "Resend email delivery FAILED: to=%s, from=%s, subject_hash=%s, "
             "provider=resend, idempotency_key=%s, error_type=%s",

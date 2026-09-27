@@ -834,8 +834,7 @@ class Settings(BaseSettings):
             # A heartbeat at or beyond the lease length can never renew in time,
             # so every long job would be reclaimed while it still runs.
             raise ValueError(
-                "MONGO_QUEUE_HEARTBEAT_SECONDS must be shorter than "
-                "MONGO_QUEUE_LEASE_SECONDS."
+                "MONGO_QUEUE_HEARTBEAT_SECONDS must be shorter than MONGO_QUEUE_LEASE_SECONDS."
             )
         if not self.mongo_queue_poll_schedule:
             raise ValueError("MONGO_QUEUE_POLL_SCHEDULE must not be empty.")

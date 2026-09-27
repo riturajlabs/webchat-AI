@@ -41,9 +41,7 @@ def test_loopback_needs_no_consent() -> None:
 
 def test_local_refuses_a_remote_host_even_when_it_is_named() -> None:
     """--local means loopback. Naming the host does not widen the mode."""
-    verdict = check_endpoint(
-        "mongodb://10.0.0.5:27017", mode="local", allow_hosts=("10.0.0.5",)
-    )
+    verdict = check_endpoint("mongodb://10.0.0.5:27017", mode="local", allow_hosts=("10.0.0.5",))
     assert verdict.allowed is False
     assert any("loopback" in reason for reason in verdict.reasons)
 

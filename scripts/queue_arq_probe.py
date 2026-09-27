@@ -161,10 +161,7 @@ async def _sweep_residue(redis_url: str) -> int:
     removed = 0
     try:
         keys = [key async for key in client.scan_iter(match=f"{PROBE_PREFIX}*")]
-        keys += [
-            key
-            async for key in client.scan_iter(match=f"arq:*{PROBE_PREFIX.strip(':')}*")
-        ]
+        keys += [key async for key in client.scan_iter(match=f"arq:*{PROBE_PREFIX.strip(':')}*")]
         if keys:
             await client.delete(*set(keys))
             removed = len(set(keys))
