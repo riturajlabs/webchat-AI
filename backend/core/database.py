@@ -453,6 +453,16 @@ class MongoDB:
         )
         await _ensure_crawl_job_active_index(db)
         await db["crawl_jobs"].create_index("created_at", expireAfterSeconds=_CRAWL_JOB_TTL_SECONDS)
+        # Phase 17B.1: the durable email delivery store. `_id` is the delivery
+        # identity and is unique by default, so these are the two operational
+        # access paths - "all deliveries for this tenant" and "deliveries that
+        # never reached a terminal state, oldest first".
+        await db["email_deliveries"].create_index("tenant_id")
+        await db["email_deliveries"].create_index(
+            [("state", 1), ("last_attempt_at", 1)],
+            name="email_deliveries_open_by_state",
+            partialFilterExpression={"state": {"$in": ["sending", "unknown"]}},
+        )
         await db["documents"].create_index(
             [("tenant_id", 1), ("website_id", 1), ("url", 1)], unique=True
         )

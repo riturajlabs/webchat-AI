@@ -48,4 +48,21 @@ def safe_query_meta(text: str) -> dict[str, object]:
     return {"query_hash": content_hash(text), "query_length": len(text)}
 
 
-__all__ = ["content_hash", "mask_email", "safe_query_meta"]
+def redact_secret_key(key: str, *, keep: int = 8) -> str:
+    """Return a log-safe rendering of a colon-delimited secret key.
+
+    Used for provider idempotency keys, which embed a tenant id and are
+    therefore credential-like for that tenant. The leading segment (the key's
+    namespace, e.g. ``email``) and a short digest tail survive for correlation;
+    every identifying middle segment is replaced.
+
+    Lives here rather than in the queue package so the mail provider can redact
+    without depending on the queue layer.
+    """
+    prefix, _, tail = key.rpartition(":")
+    if not prefix or not tail:
+        return "<redacted>"
+    return f"{prefix.split(':')[0]}:<redacted>:…{tail[-keep:]}"
+
+
+__all__ = ["content_hash", "mask_email", "redact_secret_key", "safe_query_meta"]

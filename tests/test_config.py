@@ -825,3 +825,100 @@ def test_chat_output_budget_settings_default_and_parse() -> None:
     assert empty.chat_simple_max_output_tokens == 0
     assert empty.chat_complex_max_output_tokens == 0
     assert empty.chat_max_output_tokens > 0
+
+
+# --- Phase 17A: worker queue backend configuration ---
+
+
+def test_queue_backend_defaults_to_arq() -> None:
+    """ARQ is the zero-config production default (Phase 17A, no cutover)."""
+    settings = Settings(_env_file=None)
+    assert settings.queue_backend == "arq"
+    assert settings.mongo_queue_enabled is False
+
+
+def test_mongo_queue_requires_explicit_enable() -> None:
+    """QUEUE_BACKEND=mongo without MONGO_QUEUE_ENABLED=true must fail fast."""
+    with pytest.raises(ValueError, match="MONGO_QUEUE_ENABLED"):
+        Settings(_env_file=None, queue_backend="mongo")
+
+
+def test_mongo_queue_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="QUEUE_BACKEND"):
+        Settings(_env_file=None, queue_backend="kafka")
+
+
+def test_mongo_queue_opt_in_dev_defaults() -> None:
+    settings = Settings(_env_file=None, queue_backend="mongo", mongo_queue_enabled=True)
+    assert settings.mongo_queue_database == ""
+    assert settings.mongo_queue_collection == "worker_jobs"
+    assert settings.mongo_queue_max_tries == 3
+    assert settings.mongo_queue_lease_seconds == 120.0
+    assert settings.mongo_queue_retention_days == 0.0
+    assert settings.mongo_queue_backoff_seconds == [5.0, 30.0, 180.0]
+    assert settings.mongo_queue_poll_schedule == [1.0, 2.0, 5.0, 10.0, 30.0]
+
+
+def test_mongo_queue_backoff_accepts_comma_separated_string() -> None:
+    settings = Settings(
+        _env_file=None,
+        queue_backend="mongo",
+        mongo_queue_enabled=True,
+        mongo_queue_backoff_seconds="5, 30, 180",
+    )
+    assert settings.mongo_queue_backoff_seconds == [5.0, 30.0, 180.0]
+
+
+def test_mongo_queue_poll_schedule_accepts_json_array() -> None:
+    settings = Settings(
+        _env_file=None,
+        queue_backend="mongo",
+        mongo_queue_enabled=True,
+        mongo_queue_poll_schedule='[1, 2.5, 10]',
+    )
+    assert settings.mongo_queue_poll_schedule == [1.0, 2.5, 10.0]
+
+
+def test_production_requires_explicit_mongo_queue_database() -> None:
+    """Enabling the Mongo queue in production needs an explicit DB name."""
+    with pytest.raises(ValueError, match="MONGO_QUEUE_DATABASE"):
+        Settings(**_prod(queue_backend="mongo", mongo_queue_enabled=True))
+
+
+def test_production_accepts_explicit_mongo_queue_database() -> None:
+    settings = Settings(
+        **_prod(
+            queue_backend="mongo",
+            mongo_queue_enabled=True,
+            mongo_queue_database="webchat_ai_queue_prod",
+        )
+    )
+    assert settings.queue_backend == "mongo"
+    assert settings.mongo_queue_database == "webchat_ai_queue_prod"
+
+
+def test_production_arq_ignores_missing_mongo_queue_database() -> None:
+    """ARQ stays production-safe even when Mongo queue config is absent."""
+    settings = Settings(**_prod())
+    assert settings.queue_backend == "arq"
+    assert settings.mongo_queue_database == ""
+
+
+def test_negative_retention_rejected() -> None:
+    with pytest.raises(ValueError, match="RETENTION"):
+        Settings(
+            _env_file=None,
+            queue_backend="mongo",
+            mongo_queue_enabled=True,
+            mongo_queue_retention_days=-1.0,
+        )
+
+
+def test_zero_max_tries_rejected() -> None:
+    with pytest.raises(ValueError, match="MAX_TRIES"):
+        Settings(
+            _env_file=None,
+            queue_backend="mongo",
+            mongo_queue_enabled=True,
+            mongo_queue_max_tries=0,
+        )

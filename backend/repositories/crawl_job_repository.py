@@ -30,7 +30,7 @@ class CrawlJobRepository(Protocol):
 
     async def find_active_for_website(self, tenant_id: str, website_id: str) -> CrawlJob | None: ...
 
-    async def update(self, job: CrawlJob) -> None: ...
+    async def update(self, job: CrawlJob) -> bool: ...
 
     async def finish_if_active(
         self,
@@ -99,10 +99,45 @@ class MongoCrawlJobRepository:
         )
         return CrawlJob.from_doc(doc) if doc else None
 
-    async def update(self, job: CrawlJob) -> None:
-        await self._collection.replace_one(
-            {"_id": job.id, "tenant_id": job.tenant_id}, job.to_doc()
+    async def update(self, job: CrawlJob) -> bool:
+        """Persist a non-terminal crawl-job state change, if still active.
+
+        FIND-03: this used to be an unconditional ``replace_one`` scoped only by
+        `(_id, tenant_id)`. A duplicate delivery (a redelivery, or a reclaim
+        after a queue lease expiry) that is still mid-crawl holds a stale
+        in-memory `CrawlJob` whose status is active. When the winning attempt
+        had already transitioned the row to a terminal state, that stale write
+        rolled the row back to active, and a subsequent `finish_if_active` then
+        succeeded a second time - re-running every winner-gated side effect
+        (document purge, website write, audit row, `crawl_pages` accounting,
+        knowledge fan-out). Queue `execution_version` fencing does not help:
+        it guards the queue row, not this collection, and the domain write
+        happens before the worker tries to close the queue row.
+
+        The write is therefore fenced on `status in CRAWL_ACTIVE_STATUSES`, so
+        terminal states are monotonic at the persistence boundary rather than by
+        caller convention. The filter stays scoped by `_id` AND `tenant_id`, so
+        cross-tenant writes remain impossible.
+
+        Note the fence constrains the *stored* row, not the incoming object, so
+        an active row may still be transitioned to a terminal status here; only
+        a row that is ALREADY terminal is immutable through this method. All
+        winner-gated terminal transitions must still go through
+        `finish_if_active`, which is the atomic ownership token.
+
+        Returns `True` when the write was applied and `False` when it was
+        rejected because the row is no longer active, so a caller can tell that
+        it lost the race instead of silently believing it succeeded.
+        """
+        result = await self._collection.replace_one(
+            {
+                "_id": job.id,
+                "tenant_id": job.tenant_id,
+                "status": {"$in": sorted(CRAWL_ACTIVE_STATUSES)},
+            },
+            job.to_doc(),
         )
+        return result.matched_count > 0
 
     async def finish_if_active(
         self,

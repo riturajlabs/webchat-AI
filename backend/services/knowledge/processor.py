@@ -242,7 +242,12 @@ class KnowledgeProcessor:
 
         document.knowledge_status = KNOWLEDGE_STATUS_PROCESSING
         document.knowledge_last_attempt_at = utcnow()
-        await self._documents.upsert(document)
+        # Phase 17B.1: knowledge writes are CAS-guarded, not whole-document
+        # replaces. The document was read earlier in this same call, so
+        # `document.checksum` is the source identity this pass is computing
+        # from; a refusal means the row moved on underneath us.
+        if not await self._record_knowledge(document):
+            return {"status": "superseded"}
 
         if len(document.content.strip()) < self._min_content_chars:
             # Nothing meaningful to embed: drop stale chunks and record a
@@ -439,7 +444,7 @@ class KnowledgeProcessor:
             count=len(chunks),
         )
 
-        await self._record_document(
+        recorded = await self._record_document(
             document,
             status=KNOWLEDGE_STATUS_READY,
             checksum=document.checksum,
@@ -453,6 +458,11 @@ class KnowledgeProcessor:
         # answers cached from the previous corpus while this document was
         # re-processing, so stale entries cannot survive a completed reindex.
         await self._invalidate_retrieval_cache(document.tenant_id, document.website_id)
+        if not recorded:
+            # The chunks are stored, but a newer execution owns the document's
+            # knowledge bookkeeping. Report it rather than claiming a plain
+            # success, so the queue's completion reflects what was recorded.
+            return {"status": "superseded", "chunks": len(chunks)}
         return {"status": "processed", "chunks": len(chunks)}
 
     async def _resolve_embedder(self, website: Website) -> EmbeddingClient:
@@ -591,7 +601,7 @@ class KnowledgeProcessor:
         status: str,
         checksum: str | None,
         chunks: int,
-    ) -> None:
+    ) -> bool:
         document.knowledge_status = status
         document.knowledge_checksum = checksum
         document.knowledge_chunks = chunks
@@ -601,8 +611,31 @@ class KnowledgeProcessor:
             document.knowledge_failure_reason = None
             document.knowledge_retry_count = 0
         document.updated_at = utcnow()
-        # Persist knowledge state on the shared document (upsert is idempotent).
-        await self._documents.upsert(document)
+        # Persist knowledge state. CAS-guarded (Phase 17B.1): a superseded
+        # execution is refused instead of rolling back newer authoritative
+        # state. The embedded chunks are already stored, so a refusal costs a
+        # repeated pass, not correctness.
+        return await self._record_knowledge(document)
+
+    async def _record_knowledge(self, document: Document) -> bool:
+        """Write knowledge state under the stale-write fence.
+
+        Returns ``False`` when the write was refused, which the callers surface
+        as a superseded result rather than treating as success.
+        """
+        applied: bool = await self._documents.update_knowledge_if_current(
+            document, expected_checksum=document.checksum
+        )
+        if not applied:
+            logger.info(
+                "Superseded knowledge write refused: document=%s tenant=%s "
+                "expected_checksum=%s attempted_status=%s",
+                document.id,
+                document.tenant_id,
+                document.checksum,
+                document.knowledge_status,
+            )
+        return applied
 
     async def _record_failure(
         self,
@@ -615,7 +648,7 @@ class KnowledgeProcessor:
         permanent: bool,
         audit: bool,
         status: str | None = None,
-    ) -> None:
+    ) -> bool:
         """Record a failed embedding pass on the document.
 
         `permanent=True` keeps the current retry count (the document will not
@@ -631,13 +664,17 @@ class KnowledgeProcessor:
         document.knowledge_failure_reason = f"{error_type}: {error_message}"
         document.knowledge_checksum = document.knowledge_checksum or document.checksum
         document.updated_at = utcnow()
-        await self._documents.upsert(document)
+        # A failure record must never overwrite a completed embed of the same
+        # source (Phase 17B.1 CAS). A refusal means a newer run already stored
+        # the chunks, so the dashboard will show that success, not this failure.
+        applied = await self._record_knowledge(document)
         await self._refresh_website(website)
         if audit:
             await self._audit.create(
                 AuditLog.new(action=AUDIT_KNOWLEDGE_FAILED, tenant_id=document.tenant_id)
             )
         self._log_failure(document, stage=stage, error_type=error_type, error_message=error_message)
+        return applied
 
     @staticmethod
     def _log_failure(

@@ -1,8 +1,10 @@
 """In-memory fakes for repositories and mail delivery used in auth tests."""
 
 import asyncio
-from datetime import datetime
-from typing import Literal
+from collections.abc import Mapping
+from dataclasses import replace
+from datetime import datetime, timedelta
+from typing import Literal, cast
 
 from backend.ai.gemini import GenerationUsage
 from backend.core.errors import CrawlConflictError, StorageFileNotFoundError
@@ -19,7 +21,7 @@ from backend.models.crawl_job import (
 )
 from backend.models.document import Document
 from backend.models.feedback import Feedback
-from backend.models.knowledge_chunk import KnowledgeChunk
+from backend.models.knowledge_chunk import KNOWLEDGE_STATUS_READY, KnowledgeChunk
 from backend.models.member import Member
 from backend.models.refresh_token import RefreshToken
 from backend.models.subscription import (
@@ -52,6 +54,14 @@ from backend.repositories.analytics_repository import (
     TopWebsiteRow,
 )
 from backend.repositories.chat_message_repository import MessageSummary
+from backend.repositories.document_repository import KNOWLEDGE_WRITE_FIELDS
+from backend.repositories.email_delivery_repository import (
+    EmailDeliveryClaim,
+    EmailDeliveryRecord,
+    EmailDeliveryRefusal,
+    EmailDeliveryState,
+    key_window_open,
+)
 from backend.repositories.feedback_repository import FeedbackSummary
 from backend.repositories.usage_event_repository import UsageEventTotals
 from backend.repositories.usage_record_repository import TenantUsageSummary
@@ -62,7 +72,7 @@ from backend.services.billing.payments.base import (
     PaymentVerification,
     WebhookEvent,
 )
-from backend.services.knowledge.embedding import EmbeddingIdentity
+from backend.services.knowledge.embedding import EmbeddingIdentity, EmbeddingUsage
 from backend.services.mail.base import EmailMessage
 from backend.utils.analytics_stats import response_time_statistics
 
@@ -805,8 +815,27 @@ class FakeCrawlJobRepository:
             None,
         )
 
-    async def update(self, job: CrawlJob) -> None:
-        self._jobs[job.id] = job
+    async def update(self, job: CrawlJob) -> bool:
+        """FIND-03 parity: mirror the status-fenced Mongo `update`.
+
+        The stored row must still be active for the write to land, exactly like
+        the production `replace_one` filter on `status in CRAWL_ACTIVE_STATUSES`
+        (scoped by `_id` + `tenant_id`). A stale active snapshot can therefore
+        NOT overwrite a terminal row, and the caller learns it lost the race
+        from the `False` return. Do not weaken this to a bare assignment: the
+        crawl staging and FIND-03 tests rely on the fake being at least as
+        strict as production.
+        """
+        current = self._jobs.get(job.id)
+        if current is None or current.tenant_id != job.tenant_id:
+            return False
+        if current.status not in CRAWL_ACTIVE_STATUSES:
+            return False
+        # Mirror Mongo's whole-document replace: the stored row becomes a copy
+        # of the incoming snapshot, and mutation of the caller's object must not
+        # leak back (as with `create`/`finish_if_active`).
+        self._jobs[job.id] = job.model_copy(deep=True)
+        return True
 
     async def finish_if_active(
         self,
@@ -901,6 +930,43 @@ class FakeDocumentRepository:
                 del self._documents[existing_id]
                 break
         self._documents[document.id] = document
+
+    async def update_knowledge_if_current(
+        self, document: Document, *, expected_checksum: str
+    ) -> bool:
+        """Mirror the Mongo CAS exactly - same guards, same knowledge-only write.
+
+        The guards are evaluated against the *stored* document, and only the
+        knowledge fields are copied onto it. The fake must not be stronger than
+        Mongo: a test that passes here because the fake rejected something the
+        database would have accepted (or the reverse) proves nothing about
+        production, so both sides evaluate
+        ``knowledge_cas_filter``'s conditions literally.
+        """
+        stored = self._find_by_identity(document)
+        if stored is None:
+            return False
+        if stored.checksum != expected_checksum:
+            return False
+        if document.knowledge_status != KNOWLEDGE_STATUS_READY and (
+            stored.knowledge_status == KNOWLEDGE_STATUS_READY
+            and stored.knowledge_checksum == expected_checksum
+        ):
+            return False
+        # Knowledge fields only: a knowledge write never rewrites the source.
+        for field_name in KNOWLEDGE_WRITE_FIELDS:
+            setattr(stored, field_name, getattr(document, field_name, None))
+        return True
+
+    def _find_by_identity(self, document: Document) -> Document | None:
+        for existing in self._documents.values():
+            if (
+                existing.tenant_id == document.tenant_id
+                and existing.website_id == document.website_id
+                and existing.url == document.url
+            ):
+                return existing
+        return None
 
     async def count_by_website(
         self, tenant_id: str, website_id: str, *, source_type: str | None = None
@@ -1034,8 +1100,16 @@ class FakeDocumentRepository:
 class FakeEmbeddingClient:
     """Deterministic embedding client: vector i is derived from text[i]."""
 
+    name = "fake"
+
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self._usage = EmbeddingUsage()
+
+    @property
+    def usage(self) -> EmbeddingUsage:
+        """Aggregate usage, as the protocol requires (Phase 9 token capture)."""
+        return self._usage
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity:
@@ -1052,7 +1126,16 @@ class FakeEmbeddingClient:
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         self.calls.append(texts)
+        self._usage = replace(
+            self._usage,
+            calls=self._usage.calls + 1,
+            characters=self._usage.characters + sum(len(text) for text in texts),
+        )
         return [self._vector(text) for text in texts]
+
+    async def health(self) -> bool:
+        """The fake is always usable, and never makes a paid request."""
+        return True
 
     @staticmethod
     def _vector(text: str) -> list[float]:
@@ -1655,7 +1738,7 @@ class FakeUsageRecordRepository:
         tenant_id: str,
         website_id: str,
         date: str,
-        counters: dict[str, int],
+        counters: Mapping[str, int],
     ) -> None:
         key = (tenant_id, website_id, date)
         record = self._records.get(key)
@@ -2551,3 +2634,160 @@ class WriteFailureCacheStore(FakeCacheStore):
         ttl: int | None = None,
     ) -> None:
         raise ConnectionError("Redis write failed")
+
+
+class FakeEmailDeliveryRepository:
+    """In-memory email delivery store mirroring the Mongo CAS (Phase 17B.1).
+
+    The claim conditions are evaluated with the same helpers the Mongo
+    implementation's filter expresses, and outcome writes are gated on the
+    attempt token, so a fake/Mongo divergence shows up as a failing test rather
+    than as production behaviour the suite never exercised. In particular the
+    fake must NOT be stricter than Mongo: refusing more than the database would
+    make the durability guarantees look better here than they are in production.
+
+    What this fake structurally *cannot* check, and why the real-Mongo tests in
+    ``tests/test_email_delivery_repository.py`` are not optional: records live
+    in a dict keyed by ``delivery_id``, so a lookup can never wander onto another
+    delivery's row. The Mongo implementation expresses the same scoping as a
+    query predicate, and an unscoped predicate matches *any* retryable row. That
+    divergence is invisible here by construction, which is exactly why the
+    scoping guarantee is asserted against the database.
+    """
+
+    def __init__(self) -> None:
+        self.records: dict[str, EmailDeliveryRecord] = {}
+
+    async def begin_attempt(
+        self,
+        delivery_id: str,
+        *,
+        tenant_id: str,
+        provider_key: str,
+        content_hash: str,
+        attempt_token: str,
+        now: datetime,
+        provider_window: timedelta,
+        stale_after: timedelta,
+    ) -> EmailDeliveryClaim:
+        existing = self.records.get(delivery_id)
+        if existing is not None and (
+            # The stored key is part of the row's identity, exactly as the
+            # Mongo filter requires. A payload that disagrees is refused rather
+            # than allowed to re-point the row at a different send.
+            existing.provider_key != provider_key
+            or not _claimable(existing, now, stale_after)
+        ):
+            return EmailDeliveryClaim(
+                record=existing,
+                attempt_token=attempt_token,
+                previous_state=existing.state,
+                refusal=(
+                    "inflight"
+                    if existing.provider_key != provider_key
+                    else _refusal_for(existing, now)
+                ),
+            )
+        previous_state = existing.state if existing else "pending"
+        record = EmailDeliveryRecord(
+            delivery_id=delivery_id,
+            state="sending",
+            tenant_id=existing.tenant_id if existing else tenant_id,
+            provider_key=existing.provider_key if existing else provider_key,
+            content_hash=existing.content_hash if existing else content_hash,
+            attempts=(existing.attempts if existing else 0) + 1,
+            attempt_token=attempt_token,
+            created_at=existing.created_at if existing else now,
+            last_attempt_at=now,
+            # Anchored to the first attempt, never renewed: mirrors Mongo, where
+            # the claim update does not restate this field.
+            provider_key_expires_at=(
+                existing.provider_key_expires_at
+                if existing and existing.provider_key_expires_at is not None
+                else now + provider_window
+            ),
+        )
+        self.records[delivery_id] = record
+        return EmailDeliveryClaim(
+            record=record, attempt_token=attempt_token, previous_state=previous_state
+        )
+
+    async def mark_accepted(
+        self,
+        delivery_id: str,
+        attempt_token: str,
+        provider_message_id: str | None,
+        *,
+        now: datetime,
+    ) -> bool:
+        return self._transition(
+            delivery_id, attempt_token, "accepted", now, provider_message_id=provider_message_id
+        )
+
+    async def mark_failed(
+        self,
+        delivery_id: str,
+        attempt_token: str,
+        error_hash: str | None,
+        *,
+        now: datetime,
+    ) -> bool:
+        return self._transition(
+            delivery_id, attempt_token, "failed", now, last_error_hash=error_hash
+        )
+
+    async def mark_unknown(self, delivery_id: str, attempt_token: str, *, now: datetime) -> bool:
+        return self._transition(
+            delivery_id, attempt_token, "unknown", now, last_error_hash="indeterminate"
+        )
+
+    async def get(self, delivery_id: str) -> EmailDeliveryRecord | None:
+        return self.records.get(delivery_id)
+
+    def _transition(
+        self,
+        delivery_id: str,
+        attempt_token: str,
+        state: str,
+        now: datetime,
+        *,
+        provider_message_id: str | None = None,
+        last_error_hash: str | None = None,
+    ) -> bool:
+        """Apply an outcome only for the attempt that currently owns the record."""
+        record = self.records.get(delivery_id)
+        if record is None or record.state != "sending" or record.attempt_token != attempt_token:
+            return False
+        self.records[delivery_id] = replace(
+            record,
+            state=cast("EmailDeliveryState", state),
+            provider_message_id=provider_message_id,
+            accepted_at=now if state == "accepted" else record.accepted_at,
+            last_error_hash=last_error_hash,
+        )
+        return True
+
+
+def _claimable(record: EmailDeliveryRecord, now: datetime, stale_after: timedelta) -> bool:
+    """Whether ``begin_attempt`` may claim this record - the Mongo filter, in Python."""
+    if record.state in ("pending", "failed"):
+        return True
+    if record.state == "unknown":
+        return key_window_open(record, now)
+    if record.state == "sending":
+        # Mirrors Mongo: a crashed attempt is reclaimable only while the
+        # provider will still collapse the retry onto the original send.
+        return (
+            record.last_attempt_at is not None
+            and record.last_attempt_at < now - stale_after
+            and key_window_open(record, now)
+        )
+    return False
+
+
+def _refusal_for(record: EmailDeliveryRecord, now: datetime) -> EmailDeliveryRefusal:
+    if record.state == "accepted":
+        return "accepted"
+    if record.state in ("unknown", "sending") and not key_window_open(record, now):
+        return "unknown_expired"
+    return "inflight"

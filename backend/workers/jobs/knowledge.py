@@ -22,6 +22,7 @@ from backend.core.config import get_settings
 from backend.core.database import MongoDB
 from backend.core.redis import get_redis
 from backend.models.website import Website
+from backend.queue.child import resolve_child_queue, resolve_child_tenant
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoDocumentRepository,
@@ -41,14 +42,74 @@ _pool: ConnectionPool | None = None
 
 
 def _arq_redis() -> ArqRedis:
+    """The ARQ/Redis client, for API-process enqueues only.
+
+    Phase 17B: a job that is *executing* on a queue must enqueue its children
+    through :mod:`backend.queue.child` so they follow the parent's backend. This
+    helper has no job context, so it is only correct for the API process (where
+    ARQ is the production default). The worker tasks below no longer call it.
+    """
     global _pool
     if _pool is None:
         _pool = ConnectionPool.from_url(get_settings().redis_url, decode_responses=True)
     return ArqRedis(connection_pool=_pool)
 
 
+def _child_enqueue(ctx: dict[str, Any]) -> Any:
+    """Build the ``(document_id, run_id) -> None`` enqueue callback for a job.
+
+    The callback the processor receives now routes through the queue the parent
+    is executing on. Under ARQ (production today) this resolves to
+    :class:`ArqQueueAdapter` and reproduces today's call exactly; under the
+    Mongo loop it enqueues onto Mongo.
+    """
+    queue = resolve_child_queue(ctx)
+    tenant_id = resolve_child_tenant(ctx)
+
+    # `run_id` defaults to None because `KnowledgeProcessor._enqueue_document`
+    # deliberately calls the callback with ONE argument when there is no run
+    # (it also tolerates 1-arg test doubles via a TypeError fallback). A
+    # required second parameter here would turn a no-run fan-out into a crash.
+    async def enqueue(document_id: str, run_id: str | None = None) -> None:
+        await queue.enqueue(
+            "process_document",
+            payload={"document_id": document_id, "run_id": run_id},
+            tenant_id=tenant_id,
+        )
+
+    return enqueue
+
+
+def _child_enqueue_deferred(ctx: dict[str, Any]) -> Any:
+    """Deferred (backoff) variant of :func:`_child_enqueue`, same backend rule.
+
+    ARQ expresses the delay with ``_defer_by``; the Mongo adapter maps the same
+    value onto its own ``run_at``. A retry therefore stays on the parent's
+    backend under either consumer.
+    """
+    queue = resolve_child_queue(ctx)
+    tenant_id = resolve_child_tenant(ctx)
+
+    async def enqueue(
+        document_id: str, delay_seconds: float, run_id: str | None = None
+    ) -> None:
+        await queue.enqueue(
+            "process_document",
+            payload={"document_id": document_id, "run_id": run_id},
+            tenant_id=tenant_id,
+            defer_by=delay_seconds,
+        )
+
+    return enqueue
+
+
 async def enqueue_process_document(document_id: str, run_id: str | None = None) -> None:
-    """Enqueue a per-document embedding job (ADR-002 task registry)."""
+    """Enqueue a per-document embedding job (ADR-002 task registry).
+
+    API-process entry point: no job context, so this is ARQ, exactly as before
+    Phase 17B. Jobs that fan out from inside the worker use
+    :func:`_child_enqueue` instead.
+    """
     await _arq_redis().enqueue_job("process_document", document_id, run_id)
 
 
@@ -143,12 +204,13 @@ async def process_document(
     try:
         processor = _processor(ctx, _embedder(ctx))
 
+        enqueue_retry = _child_enqueue_deferred(ctx)
+
         async def retry(document: str, delay: float, retry_run_id: str | None = run_id) -> None:
             # Full jitter avoids a quota-recovery thundering herd while retaining
-            # the same fenced run/provider identity for every retry.
-            await enqueue_process_document_deferred(
-                document, random.uniform(0, delay), retry_run_id
-            )
+            # the same fenced run/provider identity for every retry. Phase 17B:
+            # the retry is enqueued through the parent's queue, not Redis.
+            await enqueue_retry(document, random.uniform(0, delay), retry_run_id)
 
         return await _run_process_document(
             ctx, document_id, processor, on_retry=retry, run_id=run_id
@@ -182,7 +244,11 @@ async def process_website_documents(ctx: dict[str, Any], website_id: str) -> dic
 async def _run_process_website(
     ctx: dict[str, Any], website_id: str, processor: KnowledgeProcessor
 ) -> dict[str, Any]:
-    return await processor.process_website_documents(website_id, enqueue=enqueue_process_document)
+    # Phase 17B: children follow the parent's backend. Under ARQ this is the
+    # identical `enqueue_process_document` call production makes today.
+    return await processor.process_website_documents(
+        website_id, enqueue=_child_enqueue(ctx)
+    )
 
 
 __all__ = [

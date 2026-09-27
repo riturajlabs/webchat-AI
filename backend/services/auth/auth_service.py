@@ -427,7 +427,7 @@ class AuthService:
                     "reset_password",
                     name=user.name,
                     reset_url=reset_url,
-                )
+                ).for_tenant(user.tenant_id)
             )
             logger.info(
                 "Password reset email dispatched for user %s (email_masked=%s)",
@@ -599,7 +599,7 @@ class AuthService:
                     "verify_email",
                     name=user.name,
                     verification_url=verify_url,
-                )
+                ).for_tenant(user.tenant_id)
             )
             logger.info(
                 "Verification email dispatched successfully: recipient=%s, user_id=%s",
@@ -638,5 +638,5 @@ class AuthService:
                     "Security alert: session reuse detected",
                     "security_alert",
                     name=user.name,
-                )
+                ).for_tenant(user.tenant_id)
             )

@@ -253,8 +253,12 @@ async def test_crawl_purge_ordering_only_winner_executes_purge(patch_dns: None) 
         async def find_by_id_any(self, jid: str) -> CrawlJob | None:
             return await self._real.find_by_id_any(jid)
 
-        async def update(self, j: CrawlJob) -> None:
-            await self._real.update(j)
+        async def update(self, j: CrawlJob) -> bool:
+            # Must honour the Protocol's `-> bool` (FIND-03): the worker now
+            # treats a falsy result as "lost the race" and bails out early, so a
+            # wrapper returning None would short-circuit this test before it
+            # ever reaches the terminator it is meant to exercise.
+            return await self._real.update(j)
 
         async def finish_if_active(self, *args: object, **kwargs: object) -> bool:
             self.calls.append("finish_if_active")

@@ -163,6 +163,47 @@ class Settings(BaseSettings):
     # deployment so the cache/broker is never unauthenticated.
     redis_password: str | None = None
 
+    # Worker queue backend (Phase 17A). ARQ (Redis) stays the production
+    # default; the Mongo queue is an explicit opt-in behind the same
+    # WorkerQueue interface. `queue_backend` selects which adapter the
+    # application builds, and the Mongo path additionally requires
+    # MONGO_QUEUE_ENABLED=true so a stray QUEUE_BACKEND=mongo can never
+    # silently redirect jobs without an explicit enable flag.
+    queue_backend: str = "arq"
+    mongo_queue_enabled: bool = False
+    # Mongo queue database name. Empty in development resolves to
+    # `webchat_ai_queue` (never the application database); production requires
+    # an explicit MONGO_QUEUE_DATABASE so queue rows can never land in the app
+    # database by accident.
+    mongo_queue_database: str = ""
+    mongo_queue_collection: str = "worker_jobs"
+    # Lease/heartbeat shape, matching the validated Phase 15/16 prototype:
+    # a claim owns the job for `lease_seconds` and renews every
+    # `heartbeat_seconds`; expired leases are reclaimable (at-least-once).
+    mongo_queue_lease_seconds: float = 120.0
+    mongo_queue_heartbeat_seconds: float = 30.0
+    mongo_queue_max_tries: int = 3
+    # Retry backoff schedule (seconds) when a retryable failure occurs:
+    # attempt 1 -> 5 s, attempt 2 -> 30 s, attempt 3 -> 180 s.
+    mongo_queue_backoff_seconds: Annotated[list[float], NoDecode] = [5.0, 30.0, 180.0]
+    # Adaptive idle polling schedule (seconds): 1, 2, 5, 10, 30 s growth so an
+    # idle worker issues almost no DB commands (versus ARQ's 0.5 s fixed poll).
+    mongo_queue_poll_schedule: Annotated[list[float], NoDecode] = [1.0, 2.0, 5.0, 10.0, 30.0]
+    # Cap on a stored job result so queue documents stay small (M0-class
+    # storage). Exceeding results are recorded as a truncation marker.
+    mongo_queue_max_result_bytes: int = 16_384
+    # Optional Mongo queue retention (UNDECIDED per Phase 17A); 0 = no TTL
+    # (terminal rows retained like ARQ's default keep_result behaviour);
+    # > 0 = TTL index keys terminal rows off `finished_at`. Never set an
+    # aggressive production TTL without explicit configuration.
+    mongo_queue_retention_days: float = 0.0
+    # Result-storage policy for the Mongo queue collection. Phase 16 left the
+    # result policy UNDECIDED; Phase 17A measured that nothing in the repository
+    # reads an ARQ job result, so the default keeps status/reference semantics
+    # and stores no result body. `full` stores the (size-clamped) result for
+    # parity with ARQ's `keep_result`; neither value is written to a log.
+    mongo_queue_result_policy: str = "status"
+
     # CORS / public URLs. Local dev sites commonly serve the widget embed from
     # Live Server (port 5500); production origins are set via CORS_ORIGINS.
     cors_origins: list[str] = [
@@ -225,6 +266,26 @@ class Settings(BaseSettings):
     resend_api_key: str | None = None
     email_from: str = "WebChat AI <no-reply@webchatai.example>"
     mailpit_api_url: str = "http://localhost:8025"
+    # Phase 17B: send a deterministic provider idempotency key with every email
+    # so a re-delivery (crash after provider accept, lost response, reclaimed
+    # lease) collapses to one delivery inside Resend's 24 h window. Disable to
+    # restore exact pre-Phase-17B behaviour; the flag exists so the decision can
+    # be reversed without a code change or a deploy.
+    mail_idempotency_enabled: bool = True
+    # Phase 17B.1: how long Resend honours a given Idempotency-Key (24 h,
+    # VERIFIED against the Resend API reference in Phase 16). The delivery
+    # record stores the resulting deadline, and it is what decides whether an
+    # `unknown` outcome may still be retried: inside the window a resend with
+    # the same key is deduplicated by the provider, outside it the send could
+    # duplicate a mail the user already received, so the record stops there and
+    # the case is surfaced for a human instead.
+    mail_provider_idempotency_window_seconds: int = 24 * 60 * 60
+    # Phase 17B.1: how long a `sending` record with no outcome may look live
+    # before another execution is allowed to take the delivery over. Must exceed
+    # the longest plausible provider call (so a slow but healthy send is never
+    # duplicated) and stay well under the queue lease, so a crashed execution is
+    # recovered rather than retried forever.
+    mail_delivery_attempt_stale_seconds: int = 120
 
     # AI (Phase 4-6)
     gemini_api_key: str | None = None
@@ -703,6 +764,84 @@ class Settings(BaseSettings):
                     ) from None
             return [path.strip() for path in value.split(",") if path.strip()]
         return value
+
+    @field_validator("mongo_queue_backoff_seconds", "mongo_queue_poll_schedule", mode="before")
+    @classmethod
+    def _parse_mongo_queue_float_list(cls, value: object) -> object:
+        """Accept a comma-separated string or a JSON array for queue tuning.
+
+        Mirrors ``_parse_allowed_hosts`` so a plain comma-separated
+        `MONGO_QUEUE_BACKOFF_SECONDS` / `MONGO_QUEUE_POLL_SCHEDULE` works.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                try:
+                    return json.loads(stripped)
+                except json.JSONDecodeError:
+                    raise ValueError(
+                        "Mongo queue settings must be a JSON array or comma-separated "
+                        f"list of floats, got: {value!r}"
+                    ) from None
+            parts = value.split(",")
+            try:
+                return [float(part.strip()) for part in parts if part.strip()]
+            except ValueError:
+                raise ValueError(
+                    "Mongo queue settings must be a JSON array or comma-separated "
+                    f"list of floats, got: {value!r}"
+                ) from None
+        return value
+
+    @model_validator(mode="after")
+    def _validate_queue_backend(self) -> "Settings":
+        """Fail fast on an incoherent worker-queue configuration (Phase 17A).
+
+        ARQ is the production default and the only zero-config posture. The
+        Mongo queue is an explicit opt-in: ``queue_backend=mongo`` without
+        ``MONGO_QUEUE_ENABLED=true`` is a configuration error, and enabling it
+        in production requires an explicit ``MONGO_QUEUE_DATABASE`` so queue
+        rows can never land in the application database by accident.
+        """
+        backend = self.queue_backend.strip().lower()
+        if backend not in {"arq", "mongo"}:
+            raise ValueError("QUEUE_BACKEND must be 'arq' or 'mongo'.")
+        if backend == "mongo" and not self.mongo_queue_enabled:
+            raise ValueError(
+                "QUEUE_BACKEND=mongo requires MONGO_QUEUE_ENABLED=true: the "
+                "Mongo queue is an explicit opt-in and ARQ remains the default."
+            )
+        if (
+            backend == "mongo"
+            and self.environment.lower() == "production"
+            and not (self.mongo_queue_database or "").strip()
+        ):
+            raise ValueError(
+                "MONGO_QUEUE_DATABASE must be set to an explicit production "
+                "database when the Mongo queue backend is enabled."
+            )
+        if self.mongo_queue_retention_days < 0:
+            raise ValueError("MONGO_QUEUE_RETENTION_DAYS must be >= 0.")
+        if self.mongo_queue_max_tries < 1:
+            raise ValueError("MONGO_QUEUE_MAX_TRIES must be >= 1.")
+        if self.mongo_queue_result_policy.strip() not in {"status", "full"}:
+            raise ValueError("MONGO_QUEUE_RESULT_POLICY must be 'status' or 'full'.")
+        if self.mongo_queue_lease_seconds <= 0:
+            raise ValueError("MONGO_QUEUE_LEASE_SECONDS must be > 0.")
+        if self.mongo_queue_heartbeat_seconds <= 0:
+            raise ValueError("MONGO_QUEUE_HEARTBEAT_SECONDS must be > 0.")
+        if self.mongo_queue_heartbeat_seconds >= self.mongo_queue_lease_seconds:
+            # A heartbeat at or beyond the lease length can never renew in time,
+            # so every long job would be reclaimed while it still runs.
+            raise ValueError(
+                "MONGO_QUEUE_HEARTBEAT_SECONDS must be shorter than "
+                "MONGO_QUEUE_LEASE_SECONDS."
+            )
+        if not self.mongo_queue_poll_schedule:
+            raise ValueError("MONGO_QUEUE_POLL_SCHEDULE must not be empty.")
+        if any(d <= 0 for d in self.mongo_queue_poll_schedule):
+            raise ValueError("MONGO_QUEUE_POLL_SCHEDULE entries must be positive.")
+        return self
 
     @field_validator("redis_url")
     @classmethod

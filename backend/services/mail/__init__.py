@@ -5,7 +5,12 @@ from functools import lru_cache
 from jinja2 import Environment, PackageLoader, select_autoescape
 
 from backend.core.config import get_settings
-from backend.services.mail.base import EmailMessage, MailService
+from backend.services.mail.base import (
+    EmailMessage,
+    MailDeliveryIndeterminate,
+    MailSendResult,
+    MailService,
+)
 from backend.services.mail.providers import MailpitProvider, ResendProvider
 
 _html_env = Environment(
@@ -61,4 +66,12 @@ def get_mail_service() -> MailService:
     return ResendProvider(settings.resend_api_key)
 
 
-__all__ = ["EmailMessage", "MailService", "build_email", "get_mail_service", "render_email"]
+__all__ = [
+    "EmailMessage",
+    "MailDeliveryIndeterminate",
+    "MailSendResult",
+    "MailService",
+    "build_email",
+    "get_mail_service",
+    "render_email",
+]

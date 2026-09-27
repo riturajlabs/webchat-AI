@@ -36,6 +36,7 @@ from backend.models.crawl_job import (
 from backend.models.usage_event import USAGE_EVENT_CRAWL_PAGES, UsageEvent
 from backend.models.usage_record import USAGE_COUNTER_CRAWL_PAGES, usage_date_key
 from backend.models.website import WEBSITE_STATUS_FAILED, WEBSITE_STATUS_READY
+from backend.queue.child import resolve_child_queue, resolve_child_tenant
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoCrawlJobRepository,
@@ -59,7 +60,6 @@ from backend.services.ingestion.crawl_failure import (
     safe_url_parts,
     user_facing_reason,
 )
-from backend.workers.jobs.knowledge import enqueue_process_website_documents
 
 logger = logging.getLogger("webchat_ai")
 
@@ -131,6 +131,35 @@ async def enqueue_crawl_website(crawl_job_id: str) -> None:
     )
 
 
+def _child_enqueue_knowledge(ctx: dict[str, Any]) -> Any:
+    """Build the winner-gated knowledge fan-out for this execution.
+
+    Phase 17B: the crawl's knowledge fan-out is a child enqueue, so it must use
+    the queue the crawl is executing on. Under ARQ (production today) this
+    resolves to :class:`ArqQueueAdapter` and reproduces the existing
+    ``enqueue_job("process_website_documents", website_id)`` call exactly; under
+    the Mongo loop the fan-out lands on Mongo.
+    """
+    queue = resolve_child_queue(ctx)
+    inherited = resolve_child_tenant(ctx)
+
+    async def enqueue_knowledge(website_id: str) -> None:
+        # The 1-argument signature is the existing injection contract shared
+        # with the crawl staging harness, and is unchanged. The child's queue
+        # row inherits the PARENT queue row's tenant: the Mongo adapter refuses
+        # an empty tenant, and a Mongo-executed crawl always has one, so the
+        # inherited value is the tenant that owns this crawl. It is
+        # attributability only - the child job re-derives its authoritative
+        # tenant from its own domain row when it runs.
+        await queue.enqueue(
+            "process_website_documents",
+            payload={"website_id": website_id},
+            tenant_id=inherited,
+        )
+
+    return enqueue_knowledge
+
+
 async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any]:
     """Worker task: run one crawl job and record the outcome on the website."""
     db = MongoDB.db()
@@ -145,7 +174,7 @@ async def crawl_website(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any
         audit=MongoAuditLogRepository(db),
         usage=MongoUsageRecordRepository(db),
         events=MongoUsageEventRepository(db),
-        enqueue_knowledge=enqueue_process_website_documents,
+        enqueue_knowledge=_child_enqueue_knowledge(ctx),
         cache=cache,
     )
 
@@ -252,7 +281,18 @@ async def _run_crawl_job_impl(
     job.status = CRAWL_STATUS_RUNNING
     job.started_at = job.started_at or utcnow()
     job.updated_at = utcnow()
-    await crawl_jobs.update(job)
+    if not await crawl_jobs.update(job):
+        # FIND-03: the row is no longer active, so this attempt is a duplicate
+        # that lost the race for the terminal transition. It must not keep
+        # crawling and must not re-enter the winner-gated block below.
+        logger.warning(
+            "crawl_update_rejected job_id=%s tenant_id=%s website_id=%s "
+            "status=running reason=not_active",
+            job.id,
+            job.tenant_id,
+            job.website_id,
+        )
+        return {"status": job.status}
     await crawl_events.publish_started(job.id)
     record_crawl_started()
     logger.info(
@@ -266,7 +306,15 @@ async def _run_crawl_job_impl(
         job.pages_completed = completed
         job.pages_total = total
         job.updated_at = utcnow()
-        await crawl_jobs.update(job)
+        if not await crawl_jobs.update(job):
+            # FIND-03: a duplicate attempt whose row already went terminal. The
+            # progress write is dropped; the winner's counters are authoritative.
+            logger.debug(
+                "crawl_progress_write_dropped job_id=%s tenant_id=%s reason=not_active",
+                job.id,
+                job.tenant_id,
+            )
+            return
         await crawl_events.publish_progress(
             job.id,
             pages_completed=completed,
@@ -302,7 +350,18 @@ async def _run_crawl_job_impl(
     try:
         job.status = CRAWL_STATUS_PROCESSING
         job.updated_at = utcnow()
-        await crawl_jobs.update(job)
+        if not await crawl_jobs.update(job):
+            # FIND-03: same reasoning as the `running` transition above - this
+            # attempt is a duplicate and must stop before it can reach the
+            # winner-gated completion block.
+            logger.warning(
+                "crawl_update_rejected job_id=%s tenant_id=%s website_id=%s "
+                "status=processing reason=not_active",
+                job.id,
+                job.tenant_id,
+                job.website_id,
+            )
+            return {"status": job.status}
 
         # Bounds how many browser sessions may hold a Chromium context at once
         # (memory safety): `max_jobs` allows many jobs in flight, but only
@@ -324,6 +383,15 @@ async def _run_crawl_job_impl(
             else:
                 error_message = "No pages were fetched."
                 failure_reason = "no_pages"
+            # FIND-03: resolve the user-facing message BEFORE the terminator.
+            # The `... knowledge base is still available` suffix depends on the
+            # surviving page count, and it must be part of the single atomic
+            # terminal write. Writing it afterwards needs a second `update()`
+            # against an already-terminal row, which the status fence now
+            # (correctly) refuses -- the suffix silently never reached Mongo.
+            existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
+            if existing_pages > 0:
+                error_message = f"{error_message} Your existing knowledge base is still available."
             # FIND-02 single-terminator: only the attempt that wins the terminal
             # transition may emit side effects (audit, metrics, website write).
             completed_at = utcnow()
@@ -351,7 +419,6 @@ async def _run_crawl_job_impl(
             job.updated_at = completed_at
             await crawl_events.publish_failed(job.id, error=job.error_message)
 
-            existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
             if existing_pages == 0:
                 website.status = WEBSITE_STATUS_FAILED
                 website.pages_indexed = 0
@@ -360,11 +427,7 @@ async def _run_crawl_job_impl(
                 website.pages_indexed = existing_pages
                 # Surface that the previous knowledge base survives a blocked
                 # refresh (existing documents are never deleted by a zero-page
-                # recrawl).
-                job.error_message = (
-                    f"{job.error_message} Your existing knowledge base is still available."
-                )
-                error_message = job.error_message
+                # recrawl). The message itself is already in the terminal row.
             website.updated_at = utcnow()
             owned = await websites.update_if_crawl_owner(
                 job.tenant_id, job.website_id, job.id, website
@@ -550,7 +613,8 @@ async def _run_crawl_job_impl(
             # Phase 5 handoff: fan the freshly crawled documents out as
             # per-document embedding jobs (ADR-002 task registry). The website
             # is marked `ready` here; `knowledge_chunks` is updated as each
-            # document's embedding lands.
+            # document's embedding lands. Phase 17B: routed through the queue
+            # this crawl is executing on, never straight to Redis.
             await enqueue_knowledge(job.website_id)
         # Invalidate retrieval cache for this website so stale search results
         # from the previous crawl are not served.  Best-effort: cache outage
@@ -727,7 +791,17 @@ async def _run_crawl_job_impl(
                 )
         else:
             job.updated_at = utcnow()
-            await crawl_jobs.update(job)
+            if not await crawl_jobs.update(job):
+                # FIND-03: the row is already terminal (a duplicate attempt's
+                # retry write). Nothing to persist and nothing to gate on.
+                logger.debug(
+                    "crawl_update_rejected job_id=%s tenant_id=%s "
+                    "reason=not_active try=%s/%s",
+                    job.id,
+                    job.tenant_id,
+                    job_try,
+                    max_tries,
+                )
         if isinstance(exc, CrawlMemoryGuardError):
             # FIND-01: surface memory-guard aborts distinctly in metrics and
             # logs so a deployment without a measurable budget is not mistaken
@@ -794,6 +868,12 @@ async def _finalize_crawl_cancelled(
         error_message = (
             f"Crawl timed out after {timeout_seconds} seconds; pages stored={pages_stored}"
         )
+        # FIND-03: same ordering rule as the zero-page path -- resolve the
+        # message before the terminator so it lands in the single atomic
+        # terminal write instead of needing a post-terminal `update()`.
+        existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
+        if existing_pages > 0:
+            error_message = f"{error_message} Your existing knowledge base is still available."
         completed_at = utcnow()
         won = await crawl_jobs.finish_if_active(
             job.id,
@@ -821,16 +901,13 @@ async def _finalize_crawl_cancelled(
         job.updated_at = completed_at
         await crawl_events.publish_failed(job.id, error=error_message)
 
-        existing_pages = await documents.count_by_website(job.tenant_id, job.website_id)
         if existing_pages == 0:
             website.status = WEBSITE_STATUS_FAILED
             website.pages_indexed = 0
         else:
             website.status = WEBSITE_STATUS_READY
             website.pages_indexed = existing_pages
-            # Surface that the previous knowledge base survives a timed-out
-            # refresh (existing documents are never deleted).
-            job.error_message = f"{error_message} Your existing knowledge base is still available."
+            # The knowledge-base-survives suffix is already in the terminal row.
         website.updated_at = utcnow()
         owned = await websites.update_if_crawl_owner(job.tenant_id, job.website_id, job.id, website)
         if not owned:
