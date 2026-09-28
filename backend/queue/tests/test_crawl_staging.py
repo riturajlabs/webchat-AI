@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +42,8 @@ from backend.models.audit_log import AUDIT_CRAWL_COMPLETED, AUDIT_CRAWL_FAILED
 from backend.models.crawl_job import CRAWL_STATUS_COMPLETED, CRAWL_STATUS_RUNNING, CrawlJob
 from backend.models.usage_record import usage_date_key
 from backend.models.website import Website
+from backend.queue.mongo.ids import utcnow
+from backend.queue.mongo.models import STATUS_RUNNING
 from backend.queue.mongo_adapter import MongoQueueAdapter
 from backend.queue.registry import resolve
 from backend.queue.worker import MongoWorkerLoop
@@ -163,6 +166,25 @@ async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
 
 
+async def _await_lease_expiry(queue: MongoQueueAdapter) -> None:
+    """Wait until the claimed row's lease has *actually* expired.
+
+    The lease is deliberately short (0.4s) to keep this suite fast, so the
+    "wait for the lease to lapse" step cannot be a fixed sleep: that is a race
+    that passes on an idle box and fails under load. Read the real deadline
+    instead, and fail loudly if it never lapses.
+    """
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        running = await queue.list_jobs(status=STATUS_RUNNING)
+        if not running or all(
+            job.lease_expires_at is None or utcnow() >= job.lease_expires_at for job in running
+        ):
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("the claimed lease never expired")
+
+
 @pytest.fixture
 async def staging(
     queue_db: AsyncIOMotorDatabase[dict[str, object]],
@@ -249,7 +271,7 @@ async def test_lease_expiry_lets_worker_b_reclaim_while_a_is_still_running(
     first = await staging.queue.claim("worker-A")
     assert first is not None
 
-    await _sleep(LEASE_SECONDS + 0.1)  # A's lease expires with no heartbeat
+    await _await_lease_expiry(staging.queue)  # A's lease expires with no heartbeat
 
     second = await staging.queue.claim("worker-B")
     assert second is not None, "an expired lease must be reclaimable"
@@ -300,7 +322,7 @@ async def test_stale_a_cannot_finish_after_b_won(staging: CrawlStaging) -> None:
     assert claimed_a is not None
 
     # B reclaims (A's lease expired) and wins the crawl terminator.
-    await _sleep(LEASE_SECONDS + 0.1)
+    await _await_lease_expiry(staging.queue)
     claimed_b = await staging.queue.claim("worker-B")
     assert claimed_b is not None
     assert (await staging.crawl())["status"] == "completed"
@@ -339,7 +361,7 @@ async def test_stale_completion_returns_a_safe_no_op(staging: CrawlStaging) -> N
 
     async def handler(ctx: dict[str, Any], crawl_job_id: str) -> dict[str, Any]:
         # A's lease expires while the job runs, and B takes the row over.
-        await _sleep(LEASE_SECONDS + 0.1)
+        await _await_lease_expiry(staging.queue)
         assert await staging.queue.claim("worker-B") is not None
         seen.append(crawl_job_id)
         return {"status": "completed"}
@@ -828,7 +850,7 @@ async def test_find03_a_reclaimed_attempt_cannot_duplicate_any_winner_effect(
     assert snapshot_a.active is True
 
     # A's lease expires and B reclaims the row.
-    await _sleep(LEASE_SECONDS + 0.1)
+    await _await_lease_expiry(staging.queue)
     claimed_b = await staging.queue.claim("worker-B")
     assert claimed_b is not None
     assert claimed_b.execution_version > claimed_a.execution_version
@@ -922,7 +944,7 @@ async def test_find03_accounting_is_exactly_once_under_a_reclaim(
     snapshot_a = await staging.jobs.find_by_id_any(staging.job.id)
     assert snapshot_a is not None
 
-    await _sleep(LEASE_SECONDS + 0.1)
+    await _await_lease_expiry(staging.queue)
     assert await staging.queue.claim("worker-B") is not None
 
     # B: the single accounting event.

@@ -13,7 +13,15 @@ PROTOTYPE_PKG = "backend.prototypes"
 
 
 async def test_production_workers_do_not_import_prototype() -> None:
-    """No production worker/API/service source may reference the prototype."""
+    """No production worker/API/service source may reference the prototype.
+
+    The check is on the prototype's *import path* (``prototypes``), not on the
+    bare substring ``mongo_queue``: since Phase 18A production legitimately
+    names the Mongo backend everywhere (``MONGO_QUEUE_*`` settings,
+    ``backend.queue.mongo_adapter``, ``backend.workers.mongo``), so matching
+    that substring would fail on correct production code while still proving
+    nothing. Any import of the prototype necessarily mentions ``prototypes``.
+    """
     roots = (
         pathlib.Path("backend/workers"),
         pathlib.Path("backend/api"),
@@ -25,7 +33,7 @@ async def test_production_workers_do_not_import_prototype() -> None:
     for root in roots:
         for source in root.rglob("*.py"):
             text = source.read_text()
-            if "prototypes" in text or "mongo_queue" in text:
+            if "prototypes" in text:
                 offenders.append(str(source))
     assert offenders == [], f"production modules import the prototype: {offenders}"
 

@@ -9,6 +9,7 @@ fakes; the fence semantics mirror the real Mongo repository.
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from backend.core.errors import CrawlConflictError
@@ -28,9 +29,10 @@ from backend.models.website import (
     WEBSITE_STATUS_READY,
     Website,
 )
+from backend.queue.arq_adapter import ArqQueueAdapter
+from backend.queue.runtime import reset_worker_queue
 from backend.services.crawl import CrawlService
 from backend.services.ingestion import SsrFGuard
-from backend.workers.jobs import crawl as crawl_module
 from backend.workers.jobs.crawl import _run_crawl_job, enqueue_crawl_website
 
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher, build_crawl_env
@@ -312,11 +314,16 @@ async def test_finish_if_active_is_tenant_scoped() -> None:
 
 
 class _FakeArqRedis:
-    """Mirrors ARQ's `_job_id` deduplication (`WATCH`/`MULTI` on the job key)."""
+    """Mirrors ARQ's `_job_id` deduplication (`WATCH`/`MULTI` on the job key).
+
+    ``enqueue_job`` returns an object carrying ``job_id`` because that is what
+    real ARQ hands back (:class:`backend.queue.arq_adapter.ArqQueueAdapter` reads
+    ``job.job_id`` and raises ``DuplicateJobError`` when it gets ``None``).
+    """
 
     def __init__(self) -> None:
         self.job_ids: set[str] = set()
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
 
     async def enqueue_job(
         self,
@@ -324,19 +331,30 @@ class _FakeArqRedis:
         *args: object,
         _job_id: str | None = None,
         **kwargs: object,
-    ) -> str | None:
+    ) -> object | None:
         key = _job_id or uuid.uuid4().hex
         if key in self.job_ids:
             return None
         self.job_ids.add(key)
         self.calls.append((function, str(args[0]), _job_id))
-        return key
+        return SimpleNamespace(job_id=key)
+
+
+def _patch_arq(monkeypatch, fake: _FakeArqRedis) -> None:
+    """Point the process worker queue at ``fake`` through the ARQ adapter.
+
+    Phase 18A: ``enqueue_crawl_website`` routes through
+    :func:`backend.queue.runtime.enqueue_worker_job`, so the patch point is the
+    adapter's own Redis handle - exactly the surface production ARQ uses.
+    """
+    monkeypatch.setattr(ArqQueueAdapter, "_arq_redis", lambda self: fake)
+    reset_worker_queue()
 
 
 async def test_enqueue_job_id_is_job_scoped(monkeypatch) -> None:
     """ARQ dedup key is `crawl:{crawl_job_id}`, never a static website key."""
     fake = _FakeArqRedis()
-    monkeypatch.setattr(crawl_module, "_arq_redis", lambda: fake)
+    _patch_arq(monkeypatch, fake)
 
     await enqueue_crawl_website("job-123")
     await enqueue_crawl_website("job-456")
@@ -349,7 +367,7 @@ async def test_enqueue_job_id_is_job_scoped(monkeypatch) -> None:
 
 async def test_reenqueue_same_job_id_is_deduplicated(monkeypatch) -> None:
     fake = _FakeArqRedis()
-    monkeypatch.setattr(crawl_module, "_arq_redis", lambda: fake)
+    _patch_arq(monkeypatch, fake)
 
     await enqueue_crawl_website("job-123")
     await enqueue_crawl_website("job-123")
@@ -362,7 +380,7 @@ async def test_new_job_after_completion_still_enqueues(monkeypatch) -> None:
     """ARQ `keep_result` (1 h) suppresses only the SAME job id, so a manual
     re-crawl (a new job id) always enqueues within the window."""
     fake = _FakeArqRedis()
-    monkeypatch.setattr(crawl_module, "_arq_redis", lambda: fake)
+    _patch_arq(monkeypatch, fake)
 
     await enqueue_crawl_website("job-123")
     # Simulate ARQ's keep_result window: the same id is swallowed.

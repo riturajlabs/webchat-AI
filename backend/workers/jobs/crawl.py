@@ -37,6 +37,8 @@ from backend.models.usage_event import USAGE_EVENT_CRAWL_PAGES, UsageEvent
 from backend.models.usage_record import USAGE_COUNTER_CRAWL_PAGES, usage_date_key
 from backend.models.website import WEBSITE_STATUS_FAILED, WEBSITE_STATUS_READY
 from backend.queue.child import resolve_child_queue, resolve_child_tenant
+from backend.queue.errors import UnresolvedTenantError
+from backend.queue.runtime import enqueue_worker_job, producer_tenant
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoCrawlJobRepository,
@@ -91,6 +93,11 @@ def _make_page_fetcher(ctx: dict[str, Any], guard: SsrFGuard) -> PageFetcher:
 
 
 def _arq_redis() -> ArqRedis:
+    """Legacy direct-ARQ client, kept importable for tests and ops tooling.
+
+    Phase 18A: :func:`enqueue_crawl_website` routes through the configured
+    ``WorkerQueue`` (:func:`backend.queue.runtime.enqueue_worker_job`).
+    """
     global _pool
     if _pool is None:
         _pool = ConnectionPool.from_url(get_settings().redis_url, decode_responses=True)
@@ -116,18 +123,48 @@ def _build_cache() -> CacheStore | None:
         return None
 
 
+async def _resolve_crawl_tenant(crawl_job_id: str) -> str:
+    """Resolve the authoritative tenant for a crawl job's queue submission.
+
+    Mongo mode requires a tenant at the producer boundary (the Mongo adapter
+    rejects empty-tenant rows), and the authoritative source is the crawl job
+    row ``CrawlService`` just created. A missing row or missing tenant is
+    fail-loud (`UnresolvedTenantError`), never a fallback to ARQ and never a
+    fabricated scope.
+    """
+    job = await MongoCrawlJobRepository(MongoDB.db()).find_by_id_any(crawl_job_id)
+    if job is None:
+        raise UnresolvedTenantError(
+            f"Crawl job {crawl_job_id!r} was not found; cannot resolve its tenant "
+            "for Mongo queue submission."
+        )
+    tenant = (job.tenant_id or "").strip()
+    if not tenant:
+        raise UnresolvedTenantError(
+            f"Crawl job {crawl_job_id!r} carries no tenant; refusing to enqueue "
+            "an unattributed job in Mongo mode."
+        )
+    return tenant
+
+
 async def enqueue_crawl_website(crawl_job_id: str) -> None:
-    """Enqueue a crawl job for the ARQ worker (ADR-002 task registry).
+    """Enqueue a crawl job for the configured worker (ADR-002 task registry).
 
     The `_job_id` is JOB-scoped (`crawl:{crawl_job_id}`), never a static
     per-website key: ARQ's `keep_result` (1 h) deduplication window then only
     ever suppresses the *same* job id, so a legitimate new manual crawl (a new
     job id) always enqueues (FIND-02).
+
+    Phase 18A: routed through the configured ``WorkerQueue`` (ARQ in
+    production, Mongo when explicitly enabled). Mongo mode resolves the tenant
+    from the crawl job row so the submission is attributed to its owner.
     """
-    await _arq_redis().enqueue_job(
+    tenant_id = await producer_tenant(lambda: _resolve_crawl_tenant(crawl_job_id))
+    await enqueue_worker_job(
         "crawl_website",
-        crawl_job_id,
-        _job_id=f"crawl:{crawl_job_id}",
+        payload={"crawl_job_id": crawl_job_id},
+        tenant_id=tenant_id,
+        job_id=f"crawl:{crawl_job_id}",
     )
 
 

@@ -227,6 +227,23 @@ async def test_heartbeat_keeps_the_lease_alive(adapter: MongoQueueAdapter) -> No
     assert ticks["count"] >= 2
 
 
+async def _wait_for_lease_expiry(adapter: MongoQueueAdapter, job_id: str) -> None:
+    """Block until the claimed row's lease has actually lapsed.
+
+    The store reclaims on ``lease_expires_at <= now`` with the same clock this
+    test reads, so observing the lapse is proof - not a guess - that worker-b's
+    next claim is eligible. That replaces the old fixed ``asyncio.sleep`` race
+    without weakening the assertion.
+    """
+    async with asyncio.timeout(5.0):
+        while True:
+            job = await adapter.get(job_id)
+            assert job is not None, "the queued row vanished"
+            if job.lease_expires_at is not None and job.lease_expires_at <= utcnow():
+                return
+            await asyncio.sleep(0.01)
+
+
 async def test_dual_execution_and_stale_completion_is_fenced(
     short_lease_adapter: MongoQueueAdapter,
 ) -> None:
@@ -235,14 +252,23 @@ async def test_dual_execution_and_stale_completion_is_fenced(
     worker-a claims and starts a slow job, its lease lapses, worker-b reclaims
     and completes, and worker-a's late completion is rejected by the
     ``execution_version`` fence. Exactly the situation a crawl can hit.
+
+    Deterministic by construction: worker-a's handler is gated on events, not on
+    wall-clock sleeps, and the reclaim only happens once the lease is observed
+    to have lapsed. No timing assumption, no retry, no weakened assertion.
     """
     adapter = short_lease_adapter
     job_id = await adapter.enqueue(
         "crawl_website", payload={"crawl_job_id": "c-6"}, tenant_id=_TENANT
     )
 
+    started = asyncio.Event()
+    release = asyncio.Event()
+
     async def slow(_ctx: dict[str, Any], *_: Any) -> Any:
-        await asyncio.sleep(1.0)
+        started.set()
+        # Bounded so a broken fence fails the assertions instead of hanging.
+        await asyncio.wait_for(release.wait(), timeout=10.0)
         return {"winner": "a"}
 
     async def fast(_ctx: dict[str, Any], *_: Any) -> dict[str, Any]:
@@ -255,11 +281,17 @@ async def test_dual_execution_and_stale_completion_is_fenced(
         adapter, handlers={"crawl_website": fast}, worker_id="worker-b", heartbeat_seconds=30
     )
     task_a = asyncio.create_task(loop_a.work_once())
-    await asyncio.sleep(0.25)  # worker-a is mid-execution
-    await asyncio.sleep(0.6)  # the 0.5 s lease has lapsed
+    # worker-a has claimed and is mid-execution.
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+    claimed = await adapter.get(job_id)
+    assert claimed is not None and claimed.locked_by == "worker-a"
+    # The 0.5 s lease lapses with no renewal (heartbeat is 30 s away).
+    await _wait_for_lease_expiry(adapter, job_id)
 
     outcome_b = await loop_b.work_once()
-    outcome_a = await task_a
+    # Only now may worker-a finish; its completion is fenced out.
+    release.set()
+    outcome_a = await asyncio.wait_for(task_a, timeout=10.0)
 
     assert outcome_b is not None and outcome_b.status == STATUS_COMPLETED
     assert outcome_a is not None and outcome_a.status == "not_owned"

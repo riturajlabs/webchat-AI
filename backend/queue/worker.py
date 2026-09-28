@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,6 +86,7 @@ class MongoWorkerLoop:
         poll_schedule: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 30.0),
         heartbeat_seconds: float = 30.0,
         sleep: SleepFn | None = None,
+        app_context: Mapping[str, Any] | None = None,
     ) -> None:
         self._queue = queue
         self._worker_id = worker_id if worker_id is not None else new_worker_id()
@@ -93,6 +94,10 @@ class MongoWorkerLoop:
         self._poller = AdaptivePoller(poll_schedule)
         self._heartbeat_seconds = heartbeat_seconds
         self._sleep = sleep if sleep is not None else asyncio.sleep
+        # Shared process-level services (embedding client, provider health, ...)
+        # injected once per worker so jobs do not rebuild them per execution.
+        # They sit UNDER the job context: job-sourced keys always win.
+        self._app_context = dict(app_context or {})
 
     @property
     def worker_id(self) -> str:
@@ -172,15 +177,18 @@ class MongoWorkerLoop:
 
         args = args_from_payload(job.function, dict(job.payload))
         timeout = job_timeout_seconds(job.function)
-        ctx = job_context(
-            job,
-            timeout=timeout,
-            queue_name=getattr(self._queue, "queue_name", "arq:queue"),
-            # Phase 17B: hand the job the very queue it is executing on, so any
-            # child it enqueues is routed back onto this backend instead of a
-            # hard-wired ARQ/Redis call (split-brain guard).
-            queue=self._queue,
-        )
+        ctx = {
+            **self._app_context,
+            **job_context(
+                job,
+                timeout=timeout,
+                queue_name=getattr(self._queue, "queue_name", "arq:queue"),
+                # Phase 17B: hand the job the very queue it is executing on, so any
+                # child it enqueues is routed back onto this backend instead of a
+                # hard-wired ARQ/Redis call (split-brain guard).
+                queue=self._queue,
+            ),
+        }
 
         lease_lost = asyncio.Event()
         heartbeat = asyncio.create_task(

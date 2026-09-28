@@ -83,6 +83,44 @@ def test_mongo_opt_in_selects_the_mongo_adapter(monkeypatch: pytest.MonkeyPatch)
     assert get_settings is not None
 
 
+class _FakeCollection:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeDb:
+    name = "webchat_ai_queue_optin"
+
+    def __getitem__(self, item: str) -> _FakeCollection:
+        return _FakeCollection(item)
+
+
+def test_the_factory_matches_the_backend_name_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mixed-case ``QUEUE_BACKEND`` must not quietly become ARQ.
+
+    ``Settings`` validates the name case-insensitively, so ``MONGO`` is a valid
+    Mongo opt-in; the factory compared the raw string and would have served the
+    ARQ adapter to a process that believes it opted in - the exact silent
+    fallback §17 forbids.
+    """
+    from backend.queue.arq_adapter import ArqQueueAdapter
+    from backend.queue.factory import get_queue
+    from backend.queue.mongo_adapter import MongoQueueAdapter
+
+    settings = _settings(
+        queue_backend="MONGO",
+        mongo_queue_enabled=True,
+        mongo_queue_database="webchat_ai_queue_optin",
+    )
+    monkeypatch.setattr("backend.queue.factory.get_settings", lambda: settings)
+
+    # A fake database handle so nothing connects during the test.
+    assert isinstance(get_queue(_FakeDb()), MongoQueueAdapter)  # type: ignore[arg-type]
+    assert not isinstance(get_queue(_FakeDb()), ArqQueueAdapter)  # type: ignore[arg-type]
+
+
 def test_the_arq_default_path_never_imports_the_prototype_package(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

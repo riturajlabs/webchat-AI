@@ -14,15 +14,29 @@ suite) if the runner must use a different isolated instance.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
 from backend.prototypes.mongo_queue.config import DEFAULT_MONGO_URI
 from backend.queue.mongo_adapter import MongoQueueAdapter
+from backend.queue.runtime import reset_worker_queue
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 _TEST_DB = "webchat_ai_queue_test"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_worker_queue() -> Iterator[None]:
+    """Drop the process worker-queue singleton around every test.
+
+    Phase 18A: the API producers enqueue through a cached process
+    ``WorkerQueue``. Without this, an adapter built by one test (pointing at that
+    test's fake Redis or Mongo database) would leak into the next one.
+    """
+    reset_worker_queue()
+    yield
+    reset_worker_queue()
 
 
 def _prototype_uri() -> str:

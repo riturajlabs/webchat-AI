@@ -23,6 +23,8 @@ from backend.core.database import MongoDB
 from backend.core.redis import get_redis
 from backend.models.website import Website
 from backend.queue.child import resolve_child_queue, resolve_child_tenant
+from backend.queue.errors import UnresolvedTenantError
+from backend.queue.runtime import enqueue_worker_job, producer_tenant
 from backend.repositories import (
     MongoAuditLogRepository,
     MongoDocumentRepository,
@@ -42,12 +44,13 @@ _pool: ConnectionPool | None = None
 
 
 def _arq_redis() -> ArqRedis:
-    """The ARQ/Redis client, for API-process enqueues only.
+    """Legacy direct-ARQ client, kept importable for tests and ops tooling.
 
     Phase 17B: a job that is *executing* on a queue must enqueue its children
-    through :mod:`backend.queue.child` so they follow the parent's backend. This
-    helper has no job context, so it is only correct for the API process (where
-    ARQ is the production default). The worker tasks below no longer call it.
+    through :mod:`backend.queue.child` so they follow the parent's backend.
+    Phase 18A: the API-process producers route through the configured
+    ``WorkerQueue`` (:func:`backend.queue.runtime.enqueue_worker_job`) as well,
+    so nothing in this module calls this helper any more.
     """
     global _pool
     if _pool is None:
@@ -101,14 +104,58 @@ def _child_enqueue_deferred(ctx: dict[str, Any]) -> Any:
     return enqueue
 
 
+async def _resolve_document_tenant(document_id: str) -> str:
+    """Resolve the authoritative tenant for a document's queue submission.
+
+    Mongo mode requires a tenant at the producer boundary and the authoritative
+    source is the document row itself. A missing row or missing tenant is
+    fail-loud (`UnresolvedTenantError`), never a fallback to ARQ.
+    """
+    document = await MongoDocumentRepository(MongoDB.db()).find_by_id_any(document_id)
+    if document is None:
+        raise UnresolvedTenantError(
+            f"Document {document_id!r} was not found; cannot resolve its tenant "
+            "for Mongo queue submission."
+        )
+    tenant = (document.tenant_id or "").strip()
+    if not tenant:
+        raise UnresolvedTenantError(
+            f"Document {document_id!r} carries no tenant; refusing to enqueue "
+            "an unattributed job in Mongo mode."
+        )
+    return tenant
+
+
+async def _resolve_website_tenant(website_id: str) -> str:
+    """Resolve the authoritative tenant for a website's queue submission."""
+    website = await MongoWebsiteRepository(MongoDB.db()).find_by_id_any(website_id)
+    if website is None:
+        raise UnresolvedTenantError(
+            f"Website {website_id!r} was not found; cannot resolve its tenant "
+            "for Mongo queue submission."
+        )
+    tenant = (website.tenant_id or "").strip()
+    if not tenant:
+        raise UnresolvedTenantError(
+            f"Website {website_id!r} carries no tenant; refusing to enqueue "
+            "an unattributed job in Mongo mode."
+        )
+    return tenant
+
+
 async def enqueue_process_document(document_id: str, run_id: str | None = None) -> None:
     """Enqueue a per-document embedding job (ADR-002 task registry).
 
-    API-process entry point: no job context, so this is ARQ, exactly as before
-    Phase 17B. Jobs that fan out from inside the worker use
-    :func:`_child_enqueue` instead.
+    API-process entry point: routed through the configured ``WorkerQueue`` (ARQ
+    in production, Mongo when explicitly enabled). Jobs that fan out from inside
+    the worker use :func:`_child_enqueue` instead.
     """
-    await _arq_redis().enqueue_job("process_document", document_id, run_id)
+    tenant_id = await producer_tenant(lambda: _resolve_document_tenant(document_id))
+    await enqueue_worker_job(
+        "process_document",
+        payload={"document_id": document_id, "run_id": run_id},
+        tenant_id=tenant_id,
+    )
 
 
 async def enqueue_process_document_deferred(
@@ -119,13 +166,25 @@ async def enqueue_process_document_deferred(
     ARQ deferred jobs live in a Redis zset and only become runnable after
     `_defer_by` seconds, so the exponential document-level retry schedule
     survives worker restarts and never blocks a worker slot while sleeping.
+    Mongo mode expresses the same delay with its own ``run_at``.
     """
-    await _arq_redis().enqueue_job("process_document", document_id, run_id, _defer_by=delay_seconds)
+    tenant_id = await producer_tenant(lambda: _resolve_document_tenant(document_id))
+    await enqueue_worker_job(
+        "process_document",
+        payload={"document_id": document_id, "run_id": run_id},
+        tenant_id=tenant_id,
+        defer_by=delay_seconds,
+    )
 
 
 async def enqueue_process_website_documents(website_id: str) -> None:
     """Enqueue a whole-website knowledge pass."""
-    await _arq_redis().enqueue_job("process_website_documents", website_id)
+    tenant_id = await producer_tenant(lambda: _resolve_website_tenant(website_id))
+    await enqueue_worker_job(
+        "process_website_documents",
+        payload={"website_id": website_id},
+        tenant_id=tenant_id,
+    )
 
 
 def _build_cache() -> Any:

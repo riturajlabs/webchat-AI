@@ -53,6 +53,18 @@ class JobTimeoutError(QueueError):
     """
 
 
+class UnresolvedTenantError(QueueError):
+    """The authoritative tenant for a Mongo queue job could not be resolved.
+
+    The Mongo adapter rejects empty-tenant jobs at the producer boundary, and
+    the producers normally resolve the tenant from the authoritative domain row
+    (crawl job / document / website). When that row is missing or carries no
+    tenant in Mongo mode, the submission would be unowned work nobody can
+    observe or cancel, so it fails loud instead of falling back to ARQ or to a
+    fabricated scope.
+    """
+
+
 __all__ = [
     "BackendNotSupportedError",
     "DuplicateJobError",
@@ -61,4 +73,5 @@ __all__ = [
     "MongoQueueNotEnabledError",
     "QueueError",
     "UnknownFunctionError",
+    "UnresolvedTenantError",
 ]

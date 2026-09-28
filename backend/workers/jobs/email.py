@@ -55,6 +55,7 @@ from backend.queue.mail_idempotency import (
     new_delivery_id,
     redact_key,
 )
+from backend.queue.runtime import enqueue_worker_job
 from backend.repositories.email_delivery_repository import (
     EmailDeliveryClaim,
     EmailDeliveryRepository,
@@ -71,6 +72,12 @@ _repository: EmailDeliveryRepository | None = None
 
 
 def _arq_redis() -> ArqRedis:
+    """Legacy direct-ARQ client, kept importable for tests and ops tooling.
+
+    Phase 18A: :func:`enqueue_email` routes through the configured
+    ``WorkerQueue`` (:func:`backend.queue.runtime.enqueue_worker_job`) instead
+    of this helper.
+    """
     global _pool
     if _pool is None:
         _pool = ConnectionPool.from_url(get_settings().redis_url, decode_responses=True)
@@ -303,6 +310,11 @@ async def enqueue_email(message: EmailMessage) -> None:
 
     ``message.tenant_id`` should be set by the caller (``message.for_tenant``)
     so the delivery is scoped to the owning tenant.
+
+    Phase 18A: routed through the configured :class:`WorkerQueue` (ARQ in
+    production, Mongo when explicitly enabled). The tenant rides in the payload
+    for the worker and is handed to the queue separately in Mongo mode, where
+    the adapter requires it for attributability.
     """
     delivery_id, key = resolve_delivery_identity(message)
     if key is None:
@@ -312,4 +324,6 @@ async def enqueue_email(message: EmailMessage) -> None:
             content_hash(message.subject),
         )
     outgoing = message.with_delivery_identity(delivery_id=delivery_id, idempotency_key=key)
-    await _arq_redis().enqueue_job("send_email", outgoing.to_payload())
+    await enqueue_worker_job(
+        "send_email", payload=outgoing.to_payload(), tenant_id=outgoing.tenant_id
+    )

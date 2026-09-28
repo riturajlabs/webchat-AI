@@ -81,10 +81,11 @@ async def mongo_queue() -> AsyncGenerator[MongoQueueAdapter]:
 def _patch_arq(monkeypatch: pytest.MonkeyPatch) -> None:
     """Intercept every ARQ client, so no test can reach a real Redis.
 
-    Two interception points are needed, because two different paths build an ARQ
-    client: the worker modules' private ``_arq_redis()`` helpers (still used by
-    the API-process entry points) and ``ArqQueueAdapter._arq_redis()`` (used by
-    the ctx-resolved adapter, i.e. every in-worker child enqueue).
+    ``ArqQueueAdapter._arq_redis()`` is the single interception point that
+    matters: since Phase 18A it backs every producer AND every in-worker child
+    enqueue (the ctx-resolved adapter). The worker modules' private
+    ``_arq_redis()`` helpers are still patched defensively - they remain
+    importable for tests and ops tooling, but no producer calls them any more.
     """
     from backend.queue.arq_adapter import ArqQueueAdapter
     from backend.workers.jobs import crawl as crawl_module

@@ -60,9 +60,13 @@ def get_queue(db: AsyncIOMotorDatabase[Any] | None = None) -> WorkerQueue:
     ``db`` is honoured only by the Mongo backend and only for tests / embedded
     callers that must point at an isolated database; the default path builds the
     queue database from the shared ``MongoDB`` client.
+
+    ``queue_backend`` is normalized to lower case (matching ``Settings``' own
+    case-insensitive validation) so a value like ``"MONGO"`` cannot silently
+    build an ARQ adapter.
     """
     settings = get_settings()
-    if settings.queue_backend != "mongo":
+    if settings.queue_backend.strip().lower() != "mongo":
         return ArqQueueAdapter(settings.redis_url)
     if not settings.mongo_queue_enabled:
         raise MongoQueueNotEnabledError(

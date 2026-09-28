@@ -31,12 +31,16 @@ See ``test_residual_duplicate_risk_beyond_the_provider_window``.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from backend.queue.arq_adapter import ArqQueueAdapter
 from backend.queue.mongo_adapter import MongoQueueAdapter
+from backend.queue.runtime import reset_worker_queue
 from backend.queue.worker import MongoWorkerLoop
 from backend.repositories.email_delivery_repository import (
     EmailDeliveryClaim,
@@ -1060,13 +1064,30 @@ async def test_one_hundred_concurrent_sequential_claims(
 
 
 class _RecordingRedis:
-    """Stands in for ARQ at the enqueue boundary only."""
+    """Stands in for ARQ at the enqueue boundary only.
+
+    Mirrors the two behaviours :class:`backend.queue.arq_adapter.ArqQueueAdapter`
+    depends on: ``enqueue_job`` returns an object carrying ``job_id`` (never
+    ``None`` unless a duplicate was suppressed), and the payload arrives as the
+    single positional argument of ``send_email``.
+    """
 
     def __init__(self) -> None:
         self.jobs: list[tuple[str, dict[str, str]]] = []
 
-    async def enqueue_job(self, function: str, payload: dict[str, str]) -> None:
-        self.jobs.append((function, payload))
+    async def enqueue_job(self, function: str, *args: object, **kwargs: object) -> SimpleNamespace:
+        self.jobs.append((function, args[0]))  # type: ignore[arg-type]
+        return SimpleNamespace(job_id=uuid.uuid4().hex)
+
+
+def _patch_arq(monkeypatch: pytest.MonkeyPatch, redis: _RecordingRedis) -> None:
+    """Route the API-process ``enqueue_email`` at this recorder.
+
+    Phase 18A: the producer enqueues through the process worker queue
+    (:class:`ArqQueueAdapter`), so that is the patch point.
+    """
+    monkeypatch.setattr(ArqQueueAdapter, "_arq_redis", lambda self: redis)
+    reset_worker_queue()
 
 
 async def test_a_user_asking_twice_for_a_reset_receives_two_emails(
@@ -1089,7 +1110,7 @@ async def test_a_user_asking_twice_for_a_reset_receives_two_emails(
     from tests.auth_helpers import VALID_PASSWORD, build_auth_env
 
     redis = _RecordingRedis()
-    monkeypatch.setattr(email_mod, "_arq_redis", lambda: redis)
+    _patch_arq(monkeypatch, redis)
 
     env = build_auth_env()
     # The real enqueue path, in place of the recording dispatcher.
@@ -1131,7 +1152,7 @@ async def test_one_password_reset_redelivered_twice_is_still_one_email(
     from tests.auth_helpers import VALID_PASSWORD, build_auth_env
 
     redis = _RecordingRedis()
-    monkeypatch.setattr(email_mod, "_arq_redis", lambda: redis)
+    _patch_arq(monkeypatch, redis)
 
     env = build_auth_env()
     # The real enqueue path, in place of the recording dispatcher.

@@ -82,6 +82,35 @@ def test_lifespan_fails_fast_on_vector_dimension_mismatch(
             pass
 
 
+def test_lifespan_closes_the_worker_queue_before_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API process owns a worker queue now (Phase 18A).
+
+    Its ARQ adapter holds a Redis connection pool, so it must be released before
+    the shared Redis client - closing in the wrong order can drop a pooled
+    connection on the floor at shutdown.
+    """
+    order: list[str] = []
+
+    def _closer(name: str) -> AsyncMock:
+        async def _close() -> None:
+            order.append(name)
+
+        return AsyncMock(side_effect=_close)
+
+    monkeypatch.setattr("backend.core.database.MongoDB.init_indexes", _record())
+    monkeypatch.setattr("backend.main._validate_vector_dimensions", _record())
+    monkeypatch.setattr("backend.main.close_worker_queue", _closer("queue"))
+    monkeypatch.setattr("backend.core.database.MongoDB.close", _closer("mongo"))
+    monkeypatch.setattr("backend.main.close_redis", _closer("redis"))
+
+    with TestClient(create_app()):
+        pass
+
+    assert order == ["queue", "mongo", "redis"]
+
+
 def test_lifespan_shutdown_survives_cleanup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

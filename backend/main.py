@@ -41,6 +41,7 @@ from backend.core.errors import AppError
 from backend.core.logging import attach_sensitive_data_filter, configure_logging
 from backend.core.metrics import attach_metrics_log_collector
 from backend.core.redis import close_redis
+from backend.queue.runtime import close_worker_queue
 
 logger = logging.getLogger("webchat_ai")
 
@@ -136,7 +137,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
     # Close each resource independently so a failure in one never prevents the
     # others from being released (mirrors the worker's resilient shutdown).
+    # The worker queue is closed FIRST: the ARQ adapter owns a Redis connection
+    # pool that must be released before the shared Redis client is closed.
     for resource, closer in (
+        ("worker queue", close_worker_queue),
         ("MongoDB client", MongoDB.close),
         ("Redis client", close_redis),
     ):
