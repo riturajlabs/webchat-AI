@@ -21,6 +21,28 @@ jobs:
         working-directory: .
     permissions:
       contents: read
+    # The queue-shadow and Mongo-backed repository suites need a real mongod.
+    # They resolve the isolated prototype endpoint (27019, from
+    # backend/prototypes/mongo_queue/config.py DEFAULT_MONGO_URI), which used to
+    # be satisfied only by a hand-started daemon on a developer machine, so CI
+    # instead saw 7 hard failures plus 118 silently skipped tests. Declared here
+    # as an ephemeral, loopback-only, no-auth service container; the tests use
+    # their own databases and drop them, so nothing outlives the job.
+    #
+    # The port map is 27019:27017 on purpose: the image listens on 27017 inside
+    # the container, so publishing 27019:27019 would bind a host port that
+    # nothing answers on and the suite would fail with "Connection reset by
+    # peer" rather than "Connection refused".
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27019:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\").ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v5
 
