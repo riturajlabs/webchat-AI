@@ -451,22 +451,70 @@ class CrawlSession:
         ``crawl_robots_fail_open`` is the operator escape hatch restoring the
         legacy allow-all behaviour. Only the safe hostname/path is logged
         (FIND-03): query strings, credentials and tokens never reach the log.
+
+        FIND-08: when fail-closed denies every path, the BFS robots gate
+        ``continue``s without recording anything, so the crawl ended with
+        ``stored == 0`` AND an empty ``errors`` list, surfacing only the
+        undiagnosable "No pages were fetched." A denial now records exactly one
+        bounded ``CrawlJobError`` naming the robots outage (see
+        ``_record_robots_denial``).
         """
         parsed = urlparse(seed)
         robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
         try:
             page = await self._fetcher.fetch(robots_url)
-        except InvalidUrlError:
+        except InvalidUrlError as exc:
             self._warn_robots_unavailable(robots_url, "invalid_url")
+            self._record_robots_denial(robots_url, "invalid_url", exc)
             return self._robots_failure_outcome()
         except FetchError as exc:
             if exc.status_code in (404, 410) or exc.classification == (
                 CrawlFailureClassification.TARGET_NOT_FOUND.value
             ):
                 return RobotsTxt.allow_all()
-            self._warn_robots_unavailable(robots_url, exc.classification or "fetch_error")
+            reason = exc.classification or "fetch_error"
+            self._warn_robots_unavailable(robots_url, reason)
+            self._record_robots_denial(robots_url, reason, exc)
             return self._robots_failure_outcome()
         return RobotsTxt.parse(page.html)
+
+    def _record_robots_denial(
+        self,
+        robots_url: str,
+        reason: str,
+        failed_fetch: Exception | None = None,
+    ) -> None:
+        """Record ONE bounded ``CrawlJobError`` for a fail-closed robots denial.
+
+        FIND-08 (observability only - the denial policy itself is unchanged).
+        ``RobotsTxt.deny_all()`` blocks every path, so the BFS skips the seed
+        and every discovered URL at the robots gate without recording anything.
+        The worker therefore saw zero pages AND zero errors and could not tell
+        a robots-mediated denial apart from a site that simply returned nothing.
+
+        Exactly one error is recorded, at the root cause, and never one per
+        skipped URL. Because ``deny_all()`` denies everything, a recorded denial
+        always implies zero stored pages, so a successful crawl can never carry
+        it. No-op when fail-open is configured: the crawl then proceeds and the
+        robots outage is not what withheld the pages.
+
+        A normal ``Disallow`` match is honoured policy, not a crawl failure, and
+        is deliberately NOT recorded here. The recorded message is a static
+        sentence, so no URL, query string, token or credential from the failing
+        response can leak into ``CrawlJobError.url``/``message`` (FIND-03);
+        ``failed_fetch`` is passed through only for its low-cardinality
+        classification/status metadata.
+        """
+        if self._settings.crawl_robots_fail_open:
+            return
+        self._record_error(
+            robots_url,
+            (
+                "robots.txt could not be fetched, so the crawl was denied every "
+                f"path (crawl_robots_fail_open=false, reason={reason})."
+            ),
+            failed_fetch=failed_fetch,
+        )
 
     def _robots_failure_outcome(self) -> RobotsTxt:
         """Small default: fail CLOSED unless the operator opted back in."""

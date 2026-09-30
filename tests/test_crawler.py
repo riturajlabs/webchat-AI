@@ -3,6 +3,7 @@
 import hashlib
 
 import pytest
+from backend.core.errors import InvalidUrlError
 from backend.services.ingestion import CrawlSession, FetchError, SsrFGuard
 
 from tests.crawl_helpers import SAMPLE_ABOUT, SAMPLE_HTML, FakePageFetcher
@@ -177,6 +178,17 @@ async def _fail_robots(fetcher: FakePageFetcher, error: FetchError) -> None:
     fetcher.fail(ROBOTS_URL, error)
 
 
+def _robots_errors(session: CrawlSession) -> list:
+    """Only the robots-outage records, ignoring per-page content errors.
+
+    ``SAMPLE_HTML`` is deliberately thin, so any crawl that actually stores a
+    page also records an "Insufficient content" error (the page is still
+    counted as stored). FIND-08 is about robots records, so these tests filter
+    on the robots URL rather than asserting the whole buffer is empty.
+    """
+    return [e for e in session.errors if e.url.endswith("/robots.txt")]
+
+
 async def test_robots_404_allows_unrestricted_crawl(guard) -> None:
     """A. An absent robots.txt (404) is "no policy": the crawl proceeds."""
     fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
@@ -212,7 +224,11 @@ async def test_robots_5xx_fails_closed_by_default(guard, caplog) -> None:
     session = _session(fetcher, guard)
     stored = await session.run()
     assert stored == 0
-    assert session.errors == []
+    # FIND-08: the denial is now observable - exactly one root-cause error, and
+    # the reason names the robots outage rather than the blocked pages.
+    assert len(session.errors) == 1
+    assert session.errors[0].url == "https://acme.example/robots.txt"
+    assert "robots.txt could not be fetched" in session.errors[0].message
     # The structured warning names only the safe hostname/path.
     assert "hostname=acme.example path=/robots.txt" in caplog.text
     assert "https://acme.example/robots.txt" not in caplog.text
@@ -229,7 +245,9 @@ async def test_robots_timeout_fails_closed_by_default(guard, caplog) -> None:
     session = _session(fetcher, guard)
     stored = await session.run()
     assert stored == 0
-    assert session.errors == []
+    # FIND-08: classification metadata is preserved from the original error.
+    assert len(session.errors) == 1
+    assert session.errors[0].classification == "retryable_network_error"
     assert "reason=retryable_network_error" in caplog.text
     assert "hostname=acme.example path=/robots.txt" in caplog.text
 
@@ -242,6 +260,9 @@ async def test_robots_fail_open_flag_restores_allow_all(guard, caplog) -> None:
     stored = await session.run()
     assert stored == 2
     assert "fail_open=True" in caplog.text
+    # FIND-08: the crawl proceeds under fail-open, so the robots outage is not
+    # what withheld the pages and must NOT be recorded as a crawl error.
+    assert _robots_errors(session) == []
 
 
 async def test_robots_generic_fetch_error_is_not_allow_all(guard, caplog) -> None:
@@ -251,7 +272,8 @@ async def test_robots_generic_fetch_error_is_not_allow_all(guard, caplog) -> Non
     session = _session(fetcher, guard)
     stored = await session.run()
     assert stored == 0
-    assert session.errors == []
+    assert len(session.errors) == 1
+    assert session.errors[0].url == "https://acme.example/robots.txt"
     assert "reason=fetch_error" in caplog.text
 
 
@@ -266,6 +288,171 @@ async def test_robots_warning_logs_only_safe_url_parts(guard, caplog) -> None:
     # The scheme/authority and any tokens never reach the structured log.
     assert "https://acme.example/robots.txt" not in caplog.text
     assert "token=" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FIND-08: a fail-closed robots denial is observable in exactly one error
+# ---------------------------------------------------------------------------
+
+
+async def test_robots_denial_records_exactly_one_error_for_many_urls(guard) -> None:
+    """A denial records one root-cause error, never one per skipped URL.
+
+    ``deny_all()`` blocks the seed *and* every discovered link at the BFS robots
+    gate, so a site with dozens of internal URLs must still yield a single
+    ``CrawlJobError`` for the robots outage.
+    """
+    pages = {
+        SEED: (
+            "<html><body><main><h1>Home</h1><p>Home.</p>"
+            + "".join(f'<a href="/p{i}">p{i}</a>' for i in range(25))
+            + "</main></body></html>"
+        ),
+    }
+    pages.update({f"https://acme.example/p{i}": SAMPLE_ABOUT for i in range(25)})
+    fetcher = FakePageFetcher(pages)
+    await _fail_robots(fetcher, FetchError("HTTP 503", status_code=503))
+    session = _session(fetcher, guard)
+    stored = await session.run()
+
+    assert stored == 0
+    assert len(session.errors) == 1
+    assert session.errors[0].url == ROBOTS_URL
+    assert session.dropped_errors == 0
+
+
+async def test_robots_denial_preserves_status_and_method_metadata(guard) -> None:
+    """The recorded error carries the original fetch's low-cardinality metadata."""
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML})
+    await _fail_robots(
+        fetcher,
+        FetchError(
+            "HTTP 403 for robots.txt",
+            recoverable=False,
+            classification="target_blocked",
+            status_code=403,
+            method="http",
+            attempt=1,
+        ),
+    )
+    session = _session(fetcher, guard)
+    stored = await session.run()
+
+    assert stored == 0
+    assert len(session.errors) == 1
+    error = session.errors[0]
+    assert error.classification == "target_blocked"
+    assert error.status_code == 403
+    assert error.method == "http"
+    assert error.attempt == 1
+
+
+async def test_robots_denial_records_unsupported_content_and_redirect_failures(guard) -> None:
+    """Non-HTTP robots failures keep their own classification in the record."""
+    for classification, message in (
+        ("unsupported_content", "Unsupported content type application/pdf"),
+        ("unknown_failure", "Too many redirects for robots.txt"),
+        ("crawl_timeout", "Timed out loading robots.txt"),
+    ):
+        fetcher = FakePageFetcher({SEED: SAMPLE_HTML})
+        await _fail_robots(
+            fetcher,
+            FetchError(message, recoverable=False, classification=classification),
+        )
+        session = _session(fetcher, guard)
+        assert await session.run() == 0
+        assert len(session.errors) == 1
+        assert session.errors[0].classification == classification
+
+
+async def test_robots_invalid_url_records_invalid_url_classification(guard) -> None:
+    """An InvalidUrlError robots failure records ``invalid_url`` safely."""
+
+    class _InvalidUrlRobotsFetcher(FakePageFetcher):
+        async def fetch(self, url: str):
+            if url.endswith("/robots.txt"):
+                # Carries a token in its text: the recorded message must be the
+                # static one, never this string.
+                raise InvalidUrlError(f"Blocked: private IP for {url}?token=supersecret")
+            return await super().fetch(url)
+
+    fetcher = _InvalidUrlRobotsFetcher({SEED: SAMPLE_HTML})
+    session = _session(fetcher, guard)
+    stored = await session.run()
+
+    assert stored == 0
+    assert len(session.errors) == 1
+    error = session.errors[0]
+    assert error.classification == "invalid_url"
+    assert error.url == ROBOTS_URL
+    assert "token=" not in error.message
+    assert "supersecret" not in error.message
+
+
+async def test_robots_error_url_carries_no_query_or_token(guard, caplog) -> None:
+    """The persisted robots error never leaks a query string or credential.
+
+    The dashboard renders ``CrawlJobError.url`` verbatim, so the recorded value
+    must stay the bare ``scheme://host/robots.txt`` the session builds itself.
+    """
+    fetcher = FakePageFetcher({SEED: SAMPLE_HTML})
+    await _fail_robots(
+        fetcher,
+        FetchError("boom?token=supersecret", classification="unknown_failure"),
+    )
+    session = _session(fetcher, guard)
+    await session.run()
+
+    assert len(session.errors) == 1
+    error = session.errors[0]
+    assert error.url == "https://acme.example/robots.txt"
+    assert "?" not in error.url
+    assert "token=" not in error.url
+    assert "token=" not in error.message
+    assert "supersecret" not in error.url + error.message
+
+
+async def test_absent_robots_records_no_error(guard) -> None:
+    """404/410 mean "no policy", so the crawl proceeds and records nothing."""
+    for status in (404, 410):
+        fetcher = FakePageFetcher({SEED: SAMPLE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+        await _fail_robots(
+            fetcher,
+            FetchError(f"HTTP {status}", status_code=status, classification="target_not_found"),
+        )
+        session = _session(fetcher, guard)
+        assert await session.run() == 2
+        assert _robots_errors(session) == []
+
+
+async def test_successful_crawl_with_disallow_records_no_robots_error(guard) -> None:
+    """Honouring a normal ``Disallow`` is policy, not a crawl error.
+
+    The store/skip path is unchanged by FIND-08: a readable robots.txt that
+    disallows part of the site still stores every allowed page and records no
+    error, so a successful job never carries a robots error.
+    """
+    robots = "User-agent: *\nDisallow: /private\nAllow: /\n"
+    fetcher = FakePageFetcher(
+        {
+            SEED: (
+                "<html><body><main><h1>Home</h1><p>Home.</p>"
+                '<a href="/private/secret">Secret</a>'
+                '<a href="/about">About</a></main></body></html>'
+            ),
+            ROBOTS_URL: robots,
+            "https://acme.example/private/secret": "<html><body>hidden</body></html>",
+            "https://acme.example/about": SAMPLE_ABOUT,
+        }
+    )
+    session = _session(fetcher, guard)
+    stored = await session.run()
+
+    assert stored == 2
+    # The store/skip path is unchanged by FIND-08: a readable robots.txt that
+    # disallows part of the site still stores every allowed page and records no
+    # robots error, so a successful job never carries one.
+    assert _robots_errors(session) == []
 
 
 async def test_records_fetch_failures_and_continues(guard) -> None:

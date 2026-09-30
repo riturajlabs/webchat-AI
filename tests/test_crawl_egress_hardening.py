@@ -675,6 +675,163 @@ async def test_worker_zero_page_non_blocked_keeps_generic_message(patch_dns, cap
     assert "crawl_target_blocked" not in caplog.text
 
 
+# ---------------------------------------------------------------------------
+# FIND-08: a fail-closed robots denial is observable on the worker record
+# ---------------------------------------------------------------------------
+
+
+async def test_worker_zero_page_robots_403_reports_target_blocked(patch_dns) -> None:
+    """robots.txt rejected with 403 surfaces the existing blocked message.
+
+    The classification is taken from the original fetch error, so the zero-page
+    branch resolves its user-facing sentence exactly as it does for a page
+    blocked at 403 - no new vocabulary and no new dashboard label.
+    """
+    job, jobs, documents, websites, audit, usage = await _worker_env()
+    fetcher = FakePageFetcher({})
+    fetcher.fail(
+        "https://acme.example/robots.txt",
+        FetchError(
+            "HTTP 403 for https://acme.example/robots.txt.",
+            recoverable=False,
+            classification="target_blocked",
+            status_code=403,
+            method="http",
+            attempt=1,
+        ),
+    )
+    result = await _run_crawl_job(
+        {"crawler_fetcher": fetcher, "job_try": 1, "max_tries": 3},
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result == {"status": "failed", "pages": 0}
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    assert stored.error_message == "The website rejected automated crawling (HTTP 403)."
+    first = stored.errors[0]
+    assert first.url == "https://acme.example/robots.txt"
+    assert first.classification == "target_blocked"
+    assert first.status_code == 403
+    assert first.method == "http"
+
+
+async def test_worker_zero_page_robots_unavailable_populates_errors(patch_dns) -> None:
+    """Regression for the Indira University incident: errors is no longer empty.
+
+    An unreachable robots.txt under fail-closed denies every path. Before
+    FIND-08 the job persisted ``errors=[]`` and the generic message, so the
+    dashboard could not distinguish this from a site that simply served
+    nothing. The record must now carry one robots error naming the outage.
+    """
+    job, jobs, documents, websites, audit, usage = await _worker_env()
+    fetcher = FakePageFetcher({})
+    fetcher.fail(
+        "https://acme.example/robots.txt",
+        FetchError(
+            "HTTP 503", recoverable=False, classification="target_server_error", status_code=503
+        ),
+    )
+    result = await _run_crawl_job(
+        {"crawler_fetcher": fetcher, "job_try": 1, "max_tries": 3},
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result == {"status": "failed", "pages": 0}
+    stored = jobs.jobs[job.id]
+    assert stored.status == CRAWL_STATUS_FAILED
+    # 503 is not a safe user-facing reason, so the generic sentence is retained.
+    assert stored.error_message == "No pages were fetched."
+    # ...but the cause is no longer invisible.
+    assert len(stored.errors) == 1
+    first = stored.errors[0]
+    assert first.url == "https://acme.example/robots.txt"
+    assert first.classification == "target_server_error"
+    assert first.status_code == 503
+    assert "robots.txt could not be fetched" in first.message
+    assert stored.pages_completed == 0
+
+
+async def test_worker_robots_denied_refresh_preserves_knowledge_base(patch_dns) -> None:
+    """A robots denial never deletes an existing knowledge base."""
+    job, jobs, documents, websites, audit, usage = await _worker_env()
+    existing = Document.new(
+        tenant_id="tenant-a",
+        website_id=job.website_id,
+        url=SEED,
+        title="Existing home",
+        content="Existing indexed content",
+        checksum="c" * 64,
+    )
+    await documents.upsert(existing)
+    website = websites.websites[job.website_id]
+    website.status = WEBSITE_STATUS_READY
+    website.pages_indexed = 1
+    await websites.update(website)
+    fetcher = FakePageFetcher({})
+    fetcher.fail(
+        "https://acme.example/robots.txt",
+        FetchError(
+            "HTTP 503", recoverable=False, classification="target_server_error", status_code=503
+        ),
+    )
+    result = await _run_crawl_job(
+        {"crawler_fetcher": fetcher, "job_try": 1, "max_tries": 3},
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result == {"status": "failed", "pages": 0}
+    stored = jobs.jobs[job.id]
+    assert stored.error_message == (
+        "No pages were fetched. Your existing knowledge base is still available."
+    )
+    assert len(stored.errors) == 1
+    assert stored.errors[0].url == "https://acme.example/robots.txt"
+    assert await documents.count_by_website("tenant-a", job.website_id) == 1
+    assert websites.websites[job.website_id].status == WEBSITE_STATUS_READY
+
+
+async def test_worker_robots_404_still_completes_crawl(patch_dns) -> None:
+    """An absent robots.txt is still "no policy" and records no robots error."""
+    job, jobs, documents, websites, audit, usage = await _worker_env()
+    fetcher = FakePageFetcher({SEED: GUIDE_HTML, "https://acme.example/about": SAMPLE_ABOUT})
+    fetcher.fail(
+        "https://acme.example/robots.txt",
+        FetchError(
+            "HTTP 404", recoverable=False, classification="target_not_found", status_code=404
+        ),
+    )
+    result = await _run_crawl_job(
+        {"crawler_fetcher": fetcher, "job_try": 1, "max_tries": 3},
+        job.id,
+        crawl_jobs=jobs,
+        documents=documents,
+        websites=websites,
+        audit=audit,
+        usage=usage,
+    )
+
+    assert result["status"] == "completed"
+    stored = jobs.jobs[job.id]
+    assert stored.error_message is None
+    assert [e for e in stored.errors if e.url.endswith("/robots.txt")] == []
+
+
 async def test_worker_blocked_refresh_preserves_knowledge_base(patch_dns) -> None:
     job, jobs, documents, websites, audit, usage = await _worker_env()
     existing = Document.new(

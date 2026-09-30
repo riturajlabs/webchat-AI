@@ -174,3 +174,54 @@ classification; zero-page blocked new website → `failed`; blocked refresh
 preserves old documents; secrets absent from structured logs; no
 high-cardinality metric labels; cleanup after browser failure and cancellation;
 `CRAWL_MAX_CONCURRENT=1` respected; existing Portfolio-style crawl unchanged.
+
+robots.txt policy and the fail-closed denial record are covered in
+`tests/test_crawler.py` (`test_robots_*`, `test_absent_robots_records_no_error`,
+`test_successful_crawl_with_disallow_records_no_robots_error`) and, at worker
+level, in `tests/test_crawl_egress_hardening.py`
+(`test_worker_zero_page_robots_403_reports_target_blocked`,
+`test_worker_zero_page_robots_unavailable_populates_errors`,
+`test_worker_robots_denied_refresh_preserves_knowledge_base`,
+`test_worker_robots_404_still_completes_crawl`).
+
+## 9. robots.txt fetch failures — fail-closed, and now observable
+
+The **policy is unchanged**: `CRAWL_ROBOTS_FAIL_OPEN=false` remains the default,
+and this change does not touch it.
+
+| robots.txt outcome                                                                  | Posture                                                                        |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Fetched (2xx)                                                                       | Rules enforced per path                                                        |
+| `404`/`410` / `target_not_found`                                                    | “No policy” — unrestricted (RFC 9309 §2.3.1.3)                                 |
+| Anything else (5xx, timeout, network/TLS/DNS, redirect failure, unclassified error) | **Fail CLOSED** to `deny_all()` (RFC 9309 §2.3.1.4 requires complete disallow) |
+
+- **Fail-closed is deliberate, not a bug.** RFC 9309 §2.3.1.4: when robots.txt is
+  unreachable “the crawler MUST assume complete disallow”. `CRAWL_ROBOTS_FAIL_OPEN=true`
+  is the operator escape hatch only; see `config.py` (FIND-07) and
+  `.env.production.example`.
+- **A normal `Disallow` match is not an error.** Honoured policy is expected
+  behaviour. The BFS robots gate skips the URL silently and records nothing, and
+  a crawl that stores pages never carries a robots error.
+- **A fetch _failure_ records exactly one bounded `CrawlJobError`** (FIND-08).
+  `deny_all()` denies every path, so the gate skipped the seed _and_ every
+  discovered URL. The record is written once, at the root cause, in
+  `CrawlSession._fetch_robots` → `_record_robots_denial` — never one per skipped
+  URL. It carries the failing fetch's existing `classification` / `status_code` /
+  `method` / `attempt` metadata, and the recorded `url` is always the bare
+  `scheme://host/robots.txt` the session builds itself, so no query string or
+  token can reach the dashboard (FIND-03).
+- **Why it is recorded at all:** before FIND-08 a robots-mediated denial
+  persisted `pages_completed=0` with an **empty** `errors` array, so the worker
+  could not distinguish it from a site that served nothing and emitted only the
+  generic “No pages were fetched.” The dashboard now reads that error:
+  `classification` selects the label (`target_blocked` → “Crawl blocked”,
+  `target_rate_limited` → “Crawl rate-limited”, otherwise “Crawl failed”) and
+  `errors[0]` is rendered as the reason line. No new vocabulary and no frontend
+  change were required — `CrawlJobError.classification` is already a free-form
+  string on both the API and the dashboard.
+- Because `deny_all()` implies zero stored pages, a recorded denial can never
+  pollute a successful job.
+
+**Out of scope here (separate tasks):** RFC 9309 §2.2.3 `*` / `$` wildcard and
+anchor support in `utils/robots.py`, the §2.2.2 allow-over-disallow tie-break,
+and any change to the 4xx/5xx split.
