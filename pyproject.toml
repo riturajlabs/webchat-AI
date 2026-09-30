@@ -16,7 +16,10 @@ dependencies = [
     "playwright>=1.49",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
-    "pyjwt>=2.9",
+    # 2.14.0 closed the GHSA batch (algorithm-confusion / JWKS redirect /
+    # recursion DoS) that Trivy's HIGH/CRITICAL gate flags against 2.13.0.
+    # Floor pinned so a fresh resolve cannot reintroduce a flagged version.
+    "pyjwt>=2.15.1",
     "redis>=5.2",
     "resend>=0.9",
     "uvicorn[standard]>=0.32",
