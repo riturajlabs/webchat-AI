@@ -116,7 +116,14 @@ class MongoWorkerLoop:
         stop_event: asyncio.Event | None = None,
         stop_after_seconds: float | None = None,
     ) -> None:
-        """Continuous adaptive-poll loop (no DB commands while idle)."""
+        """Continuous adaptive-poll loop (no DB commands while idle).
+
+        SIGINT/SIGTERM must end the *idle* wait promptly, so the poll interval is
+        raced against ``stop_event`` rather than slept through (Phase 18C). A
+        handler that is already executing is never touched by this: the stop
+        event is only observed between polls, so a claimed job still drains and
+        its heartbeat keeps renewing the lease while the platform grace runs.
+        """
         timer: asyncio.Task[None] | None = None
         if stop_after_seconds is not None:
             stop_event = stop_event or asyncio.Event()
@@ -130,10 +137,43 @@ class MongoWorkerLoop:
             while stop_event is None or not stop_event.is_set():
                 outcome = await self.work_once()
                 interval = self._poller.nick(outcome is not None)
-                await self._sleep(interval)
+                await self._sleep_or_stop(stop_event, interval)
         finally:
             if timer is not None:
                 timer.cancel()
+
+    async def _sleep_or_stop(self, stop_event: asyncio.Event | None, interval: float) -> None:
+        """Idle for ``interval`` seconds, returning early once ``stop_event`` is set.
+
+        ``self._sleep`` stays authoritative for the *duration*, so the production
+        cadence is byte-for-byte the pre-18C behaviour and tests can inject a
+        deterministic clock. ``stop_event`` can only ever shorten the wait, never
+        lengthen it, and it never cancels a handler: this is called only between
+        ``work_once`` calls, so no job is in flight here.
+
+        An exception raised by the sleep is re-raised rather than discarded - a
+        bare ``asyncio.wait`` would leave it sitting on the child task and
+        silently swallow it.
+        """
+        if stop_event is None:
+            await self._sleep(interval)
+            return
+        if stop_event.is_set():
+            return
+        sleeping = asyncio.ensure_future(self._sleep(interval))
+        stopping = asyncio.ensure_future(stop_event.wait())
+        try:
+            await asyncio.wait({sleeping, stopping}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (sleeping, stopping):
+                if not task.done():
+                    task.cancel()
+        # Surface a sleep failure; a cancelled sleep lost the race to the stop
+        # event on purpose and must stay silent.
+        if sleeping.done() and not sleeping.cancelled():
+            exc = sleeping.exception()
+            if exc is not None:
+                raise exc
 
     # ------------------------------------------------------------------
 

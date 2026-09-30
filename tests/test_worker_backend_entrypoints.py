@@ -213,6 +213,67 @@ def test_health_refuses_a_backend_that_is_not_a_mongo_queue(
     assert asyncio.run(health_module.check()) is False
 
 
+def test_health_fails_closed_when_the_mongo_probe_exceeds_its_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 18C: an unreachable Mongo must return a verdict, not hang.
+
+    Phase 18B measured ~30 s (the shared client's ``serverSelectionTimeoutMS``)
+    against Docker's 5 s probe timeout, so Docker SIGKILLed every probe.
+    """
+    closed: list[bool] = []
+
+    async def _close() -> None:
+        closed.append(True)
+
+    class _HangingQueue(MongoQueueAdapter):
+        def __init__(self) -> None:
+            self.cancelled = 0
+
+        async def ping(self) -> bool:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+            return True  # pragma: no cover - unreachable
+
+    adapter = _HangingQueue()
+    monkeypatch.setattr(health_module, "get_settings", _mongo_settings)
+    monkeypatch.setattr(health_module, "HEALTH_PROBE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("backend.queue.factory.get_queue", lambda: adapter)
+    monkeypatch.setattr(MongoDB, "close", _close)
+
+    assert asyncio.run(health_module.check()) is False
+    # Fails closed *and* still gives the probe's own client back.
+    assert adapter.cancelled == 1
+    assert closed == [True]
+
+
+def test_health_fails_closed_when_the_redis_probe_exceeds_its_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same bound for ARQ: ``ping_redis`` has no socket timeout to fall back on."""
+    import backend.core.redis as redis_module
+
+    async def _hangs() -> bool:
+        await asyncio.Event().wait()
+        return True  # pragma: no cover - unreachable
+
+    monkeypatch.setattr(health_module, "get_settings", _arq_settings)
+    monkeypatch.setattr(health_module, "HEALTH_PROBE_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(redis_module, "ping_redis", _hangs)
+
+    assert asyncio.run(health_module.check()) is False
+
+
+def test_the_probe_budget_leaves_room_under_the_docker_healthcheck_timeout() -> None:
+    """The probe must answer before Docker kills it, or the bound is pointless."""
+    dockerfile = pathlib.Path("docker/Dockerfile.worker").read_text()
+    assert "--timeout=5s" in dockerfile
+    assert 0 < health_module.HEALTH_PROBE_TIMEOUT_SECONDS < 5
+
+
 def test_health_exit_codes_follow_the_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _healthy() -> bool:
         return True

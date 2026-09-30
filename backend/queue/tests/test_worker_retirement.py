@@ -228,12 +228,25 @@ class _RecordingLoop:
 
     built: list[dict[str, Any]] = []
 
-    def __init__(self, queue: Any, *, heartbeat_seconds: float, app_context: Any) -> None:
+    def __init__(
+        self,
+        queue: Any,
+        *,
+        poll_schedule: tuple[float, ...],
+        heartbeat_seconds: float,
+        app_context: Any,
+    ) -> None:
         self.queue = queue
+        self.poll_schedule = poll_schedule
         self.heartbeat_seconds = heartbeat_seconds
         self.app_context = app_context
         _RecordingLoop.built.append(
-            {"queue": queue, "heartbeat_seconds": heartbeat_seconds, "app_context": app_context}
+            {
+                "queue": queue,
+                "poll_schedule": poll_schedule,
+                "heartbeat_seconds": heartbeat_seconds,
+                "app_context": app_context,
+            }
         )
 
     async def run(self, *, stop_event: asyncio.Event) -> None:
@@ -284,6 +297,8 @@ async def test_boot_recovers_a_crashed_job_before_serving_and_shuts_down(
     assert len(_RecordingLoop.built) == 1
     assert _RecordingLoop.built[0]["queue"] is adapter
     assert _RecordingLoop.built[0]["app_context"] == {"app_name": "test"}
+    # Phase 18C: the boot path forwards the configured cadence to the loop.
+    assert _RecordingLoop.built[0]["poll_schedule"] == tuple(_settings().mongo_queue_poll_schedule)
     # Every resource released, queue first.
     assert closed == ["browser", "mongo", "redis"]
 
@@ -296,8 +311,17 @@ class _IdleLoop:
     the sweep is wired into ``_run`` and not merely available beside it.
     """
 
-    def __init__(self, queue: Any, *, heartbeat_seconds: float, app_context: Any) -> None:
-        _ = (queue, heartbeat_seconds, app_context)
+    def __init__(
+        self,
+        queue: Any,
+        *,
+        poll_schedule: tuple[float, ...],
+        heartbeat_seconds: float,
+        app_context: Any,
+    ) -> None:
+        # ``poll_schedule`` is accepted because the production constructor passes
+        # it (Phase 18C); these tests are about the retire cadence, not polling.
+        _ = (queue, poll_schedule, heartbeat_seconds, app_context)
 
     async def run(self, *, stop_event: asyncio.Event) -> None:
         with contextlib.suppress(TimeoutError):

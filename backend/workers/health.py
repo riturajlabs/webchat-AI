@@ -26,6 +26,21 @@ from backend.core.config import get_settings
 
 logger = logging.getLogger("webchat_ai")
 
+#: Wall-clock budget for the whole probe (Phase 18C).
+#:
+#: ``docker/Dockerfile.worker`` declares ``HEALTHCHECK --timeout=5s``, so the
+#: probe has to return a verdict before Docker kills it. Phase 18B measured the
+#: Mongo branch taking ~30 s against an unreachable Mongo - the shared client's
+#: ``serverSelectionTimeoutMS`` - so Docker was force-killing every single probe
+#: and the verdict only appeared indirectly, via the strike counter.
+#:
+#: This bound is safe because it is **isolated to the probe**: the healthcheck is
+#: a separate ``exec`` process from the worker, it builds its own short-lived
+#: ``MongoDB`` client and closes it in the ``finally`` below. The worker process
+#: never sees this client, so the application Mongo timeout is untouched. The
+#: module-level name is a seam for tests, not a new setting.
+HEALTH_PROBE_TIMEOUT_SECONDS = 4.0
+
 
 async def check() -> bool:
     """Return whether the configured queue backend is reachable."""
@@ -45,14 +60,30 @@ async def check() -> bool:
                     type(queue).__name__,
                 )
                 return False
-            return await queue.ping()
+            async with asyncio.timeout(HEALTH_PROBE_TIMEOUT_SECONDS):
+                return await queue.ping()
+        except TimeoutError:
+            # Fails closed, and still releases the probe's own client.
+            logger.error(
+                "worker_health queue_backend=mongo healthy=0 reason=probe_timeout budget=%ss",
+                HEALTH_PROBE_TIMEOUT_SECONDS,
+            )
+            return False
         finally:
             # The probe opens the shared client; release it so the check exits.
             await MongoDB.close()
 
     from backend.core.redis import ping_redis
 
-    return await ping_redis()
+    try:
+        async with asyncio.timeout(HEALTH_PROBE_TIMEOUT_SECONDS):
+            return await ping_redis()
+    except TimeoutError:
+        logger.error(
+            "worker_health queue_backend=arq healthy=0 reason=probe_timeout budget=%ss",
+            HEALTH_PROBE_TIMEOUT_SECONDS,
+        )
+        return False
 
 
 def main() -> int:

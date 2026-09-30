@@ -111,21 +111,44 @@ async def _run() -> int:
 
         worker = MongoWorkerLoop(
             queue,
+            # Phase 18C: honour MONGO_QUEUE_POLL_SCHEDULE. Without this the loop
+            # silently used its own hardcoded default (1, 2, 5, 10, 30) and the
+            # configured cadence was ignored in production. `tuple(...)` matches
+            # the loop's `tuple[float, ...]` signature; AdaptivePoller validates
+            # the values itself, and Settings already rejects an empty or
+            # non-positive schedule, so there is still exactly one parser.
+            poll_schedule=tuple(settings.mongo_queue_poll_schedule),
             heartbeat_seconds=settings.mongo_queue_heartbeat_seconds,
             app_context=_build_app_context(),
         )
-        try:
-            await asyncio.gather(
-                worker.run(stop_event=stop_event),
-                _retire_loop(
-                    queue,
-                    interval=max(
-                        settings.mongo_queue_heartbeat_seconds, _RETIRE_INTERVAL_FLOOR_SECONDS
-                    ),
-                    stop_event=stop_event,
+        # Phase 18C: the two loops run as explicit tasks so a failure in one cannot
+        # orphan the other. A bare `asyncio.gather(...)` propagates the first
+        # exception immediately and leaves the sibling running, and on this error
+        # path nothing ever sets `stop_event` - so the retire loop kept issuing
+        # `retire_expired` against a MongoDB client that `_shutdown()` was
+        # concurrently closing. The `finally` below stops and awaits both tasks
+        # before anything is closed, and re-raises the original failure.
+        worker_task = asyncio.create_task(worker.run(stop_event=stop_event))
+        retire_task = asyncio.create_task(
+            _retire_loop(
+                queue,
+                interval=max(
+                    settings.mongo_queue_heartbeat_seconds, _RETIRE_INTERVAL_FLOOR_SECONDS
                 ),
+                stop_event=stop_event,
             )
+        )
+        try:
+            await asyncio.gather(worker_task, retire_task)
         finally:
+            stop_event.set()
+            for task in (worker_task, retire_task):
+                if not task.done():
+                    task.cancel()
+            # return_exceptions: the survivor is already being torn down, so its
+            # result is drained rather than discarded or re-raised over the
+            # failure that got us here.
+            await asyncio.gather(worker_task, retire_task, return_exceptions=True)
             await _shutdown()
     finally:
         for sig in installed:
